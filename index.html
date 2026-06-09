@@ -2692,213 +2692,334 @@ function confirmerSeuil(produit){
 }
 
 
-// ─── DÉTAIL TAUX DE MARGE BRUTE ───────────────────────────────────────────────
-function detailMarge(){
-  // Calculs globaux
-  const totalAchats = achats.reduce((s,a)=>s+a.quantite*a.prix_unitaire,0);
-  const totalVentes = ventes.reduce((s,v)=>s+v.quantite*v.prix_vente,0);
-  const margeGlobale = ventes.reduce((s,v)=>{
-    const c=coutMoyen(v.produit);
-    return c ? s+(v.prix_vente-c)*v.quantite : s;
-  },0);
-  const tauxGlobal = totalVentes ? Math.round(margeGlobale/totalVentes*100) : 0;
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE ANALYSE DE MARGE — Jour / Mois / Année + Par date
+// ════════════════════════════════════════════════════════════════════════════
 
-  // Frais terrain totaux
-  const fraisTerrain = achats.reduce((s,a)=>{
-    return s + (a.droit_terre||0) + (a.transport||0) + (a.droit_vente||0) + (a.charrette||0);
-  },0);
-  const margeNette = margeGlobale - fraisTerrain;
-  const tauxNet = totalVentes ? Math.round(margeNette/totalVentes*100) : 0;
+// ── Helpers calcul marge ─────────────────────────────────────────────────────
+function couleurMarge(t){ return t>=20?"#166534":t>=10?"#c2410c":"#dc2626"; }
+function bgMarge(t)     { return t>=20?"#f0fdf4":t>=10?"#fff7ed":"#fef2f2"; }
+function borderMarge(t) { return t>=20?"#bbf7d0":t>=10?"#fed7aa":"#fecaca"; }
 
-  // Par produit
-  const prodsVendus = [...new Set(ventes.map(v=>v.produit))];
-  const detailProds = prodsVendus.map(p=>{
-    const ca = ventes.filter(v=>v.produit===p).reduce((s,v)=>s+v.quantite*v.prix_vente,0);
-    const cm = coutMoyen(p);
-    const qteV = ventes.filter(v=>v.produit===p).reduce((s,v)=>s+v.quantite,0);
-    const margeP = cm ? ventes.filter(v=>v.produit===p).reduce((s,v)=>s+(v.prix_vente-cm)*v.quantite,0) : null;
-    const tauxP = ca&&margeP!==null ? Math.round(margeP/ca*100) : null;
-    const pxAchat = cm || 0;
-    const pxVenteMoy = qteV ? ca/qteV : 0;
-    return {p, ca, cm, margeP, tauxP, pxAchat, pxVenteMoy, qteV};
-  }).sort((a,b)=>(b.margeP||0)-(a.margeP||0));
+// Calcule marge brute + nette pour un ensemble de ventes/achats filtrés
+function calculerMarge(ventesF, achatsF) {
+  const ca      = ventesF.reduce((s,v)=>s+v.quantite*v.prix_vente, 0);
+  const coutAch = achatsF.reduce((s,a)=>s+a.quantite*a.prix_unitaire, 0);
+  const frais   = achatsF.reduce((s,a)=>s+(a.droit_terre||0)+(a.transport||0)+(a.droit_vente||0)+(a.charrette||0), 0);
 
-  // Par mois (6 derniers)
-  const parMois = {};
-  ventes.forEach(v=>{
-    const m=v.date?.slice(0,7);
-    if(!m) return;
-    if(!parMois[m]) parMois[m]={ca:0,marge:0};
-    parMois[m].ca += v.quantite*v.prix_vente;
-    const cm=coutMoyen(v.produit);
-    if(cm) parMois[m].marge += (v.prix_vente-cm)*v.quantite;
-  });
-  const moisTries = Object.keys(parMois).sort().reverse().slice(0,6);
+  // Marge brute = CA − coût des ventes (via coût moyen global)
+  const margeB  = ventesF.reduce((s,v)=>{ const cm=coutMoyen(v.produit); return cm?s+(v.prix_vente-cm)*v.quantite:s; },0);
+  const margeN  = margeB - frais;
+  const tauxB   = ca ? Math.round(margeB/ca*100) : 0;
+  const tauxN   = ca ? Math.round(margeN/ca*100) : 0;
+  return {ca, coutAch, frais, margeB, margeN, tauxB, tauxN};
+}
 
-  // Couleur selon taux
-  const couleur = t => t>=20?"#166534":t>=10?"#c2410c":"#dc2626";
-  const bg      = t => t>=20?"#f0fdf4":t>=10?"#fff7ed":"#fef2f2";
-  const border  = t => t>=20?"#bbf7d0":t>=10?"#fed7aa":"#fecaca";
-  const jauge   = t => {
-    const pct = Math.min(Math.max(t,0),100);
-    const a = pct/100*180;
-    const r = a*Math.PI/180;
-    const gx = 70+54*Math.cos(Math.PI-r);
-    const gy = 70-54*Math.sin(Math.PI-r);
-    const col = t>=20?"#22a356":t>=10?"#f47820":"#dc2626";
-    return `<svg viewBox="0 0 140 80" style="width:120px;height:60px;">
-      <path d="M15,70 A55,55 0 0,1 125,70" fill="none" stroke="#e2ece7" stroke-width="10" stroke-linecap="round"/>
-      <path d="M15,70 A55,55 0 0,1 ${gx.toFixed(1)},${gy.toFixed(1)}" fill="none" stroke="${col}" stroke-width="10" stroke-linecap="round"/>
-      <text x="70" y="62" text-anchor="middle" font-size="16" font-weight="900" fill="${col}">${t}%</text>
-    </svg>`;
-  };
+// Jauge demi-cercle SVG
+function jaugeMarge(t){
+  const pct=Math.min(Math.max(t,0),100);
+  const a=pct/100*180, r=a*Math.PI/180;
+  const gx=70+54*Math.cos(Math.PI-r), gy=70-54*Math.sin(Math.PI-r);
+  const col=t>=20?"#22a356":t>=10?"#f47820":"#dc2626";
+  return '<svg viewBox="0 0 140 80" style="width:100px;height:52px;">'
+    +'<path d="M15,70 A55,55 0 0,1 125,70" fill="none" stroke="#e2ece7" stroke-width="10" stroke-linecap="round"/>'
+    +'<path d="M15,70 A55,55 0 0,1 '+gx.toFixed(1)+','+gy.toFixed(1)+'" fill="none" stroke="'+col+'" stroke-width="10" stroke-linecap="round"/>'
+    +'<text x="70" y="62" text-anchor="middle" font-size="16" font-weight="900" fill="'+col+'">'+t+'%</text>'
+    +'</svg>';
+}
 
-  showModal(`
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
-      <div>
-        <div style="font-size:17px;font-weight:800;color:#0f1f16;">📊 Détail du taux de marge</div>
-        <div style="font-size:11px;color:#3d5c48;margin-top:2px;">Analyse complète · Toutes périodes</div>
-      </div>
-      <div style="display:flex;gap:8px;align-items:center;">
-        <button onclick="exportMargeCSV()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;border-radius:10px;padding:6px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">⬇ CSV</button>
-        <button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;color:#3d5c48;">✕</button>
-      </div>
-    </div>
+// Barre de progression
+function barreMarge(t){
+  const col=t>=20?"#22a356":t>=10?"#f47820":"#dc2626";
+  const pct=Math.min(Math.max(t,0),100);
+  return '<div style="height:6px;background:#e2ece7;border-radius:999px;overflow:hidden;margin-top:5px;">'
+    +'<div style="height:100%;background:'+col+';border-radius:999px;width:'+pct+'%;"></div></div>';
+}
 
-    <!-- KPI RÉSUMÉ -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px;">
-      <div style="background:${bg(tauxGlobal)};border:1.5px solid ${border(tauxGlobal)};border-radius:14px;padding:14px;text-align:center;">
-        ${jauge(tauxGlobal)}
-        <div style="font-size:12px;font-weight:700;color:#0f1f16;margin-top:4px;">Marge brute</div>
-        <div style="font-size:15px;font-weight:900;color:${couleur(tauxGlobal)};margin-top:2px;">${fmt(margeGlobale)}</div>
-        <div style="font-size:10px;color:#6b8c7a;margin-top:2px;">CA : ${fmt(totalVentes)}</div>
-      </div>
-      <div style="background:${bg(tauxNet)};border:1.5px solid ${border(tauxNet)};border-radius:14px;padding:14px;text-align:center;">
-        ${jauge(tauxNet)}
-        <div style="font-size:12px;font-weight:700;color:#0f1f16;margin-top:4px;">Marge nette</div>
-        <div style="font-size:15px;font-weight:900;color:${couleur(tauxNet)};margin-top:2px;">${fmt(margeNette)}</div>
-        <div style="font-size:10px;color:#6b8c7a;margin-top:2px;">Frais terrain : −${fmt(fraisTerrain)}</div>
-      </div>
-    </div>
+// Ligne de décomposition
+function ligneDecomp(lbl,val,col,sign,bold){
+  const s=bold?"font-weight:700;color:#0f1f16;":"";
+  const bs=bold?"border-top:2px solid #e2ece7;margin-top:4px;padding-top:10px;":"";
+  return '<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #e2ece7;'+bs+'">'
+    +'<span style="font-size:12px;color:#3d5c48;'+s+'">'+lbl+'</span>'
+    +'<span style="font-size:13px;font-weight:'+(bold?'900':'700')+';color:'+col+';">'+(sign||'')+fmt(Math.abs(val))+'</span>'
+    +'</div>';
+}
 
-    <!-- DÉCOMPOSITION -->
-    <div style="background:#f8faf8;border-radius:14px;padding:14px;margin-bottom:16px;">
-      <div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Décomposition</div>
-      ${[
-        {lbl:"Chiffre d'affaires (CA)",     val:totalVentes,       col:"#0369a1",  sign:""},
-        {lbl:"Coût d'achat des ventes",      val:-totalAchats,      col:"#dc2626",  sign:"−"},
-        {lbl:"Marge brute",                  val:margeGlobale,      col:couleur(tauxGlobal), sign:margeGlobale>=0?"+":""},
-        {lbl:"Frais terrain (transport...)", val:-fraisTerrain,     col:"#c2410c",  sign:"−"},
-        {lbl:"Marge nette estimée",          val:margeNette,        col:couleur(tauxNet), sign:margeNette>=0?"+":"", bold:true},
-      ].map(r=>`
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #e2ece7;${r.bold?"border-top:2px solid #e2ece7;margin-top:4px;padding-top:10px;":""}">
-          <span style="font-size:12px;color:#3d5c48;${r.bold?"font-weight:700;color:#0f1f16;":""}">${r.lbl}</span>
-          <span style="font-size:13px;font-weight:${r.bold?"900":"700"};color:${r.col};">${r.sign}${fmt(Math.abs(r.val))}</span>
-        </div>`).join("")}
-    </div>
+// ── FONCTION PRINCIPALE ───────────────────────────────────────────────────────
+let margeOnglet = "jour"; // "jour" | "mois" | "annee"
 
-    <!-- PAR PRODUIT -->
-    ${detailProds.length ? `
-    <div style="margin-bottom:16px;">
-      <div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Marge par produit</div>
-      ${detailProds.map(d=>`
-        <div style="background:#fff;border:1.5px solid #e2ece7;border-radius:12px;padding:12px;margin-bottom:8px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-            <div style="display:flex;align-items:center;gap:8px;">
-              <span style="font-size:18px;">${getProduitIcon(d.p)||"🌿"}</span>
-              <span style="font-weight:700;color:#0f1f16;font-size:13px;">${d.p}</span>
-            </div>
-            <div style="text-align:right;">
-              ${d.tauxP!==null
-                ? `<span style="font-size:14px;font-weight:900;color:${couleur(d.tauxP)};">${d.tauxP}%</span>`
-                : `<span style="font-size:11px;color:#6b8c7a;">Coût non calculable</span>`}
-            </div>
-          </div>
-          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;text-align:center;">
-            <div style="background:#eff6ff;border-radius:8px;padding:6px;">
-              <div style="font-size:11px;font-weight:700;color:#1d4ed8;">${fmt(d.pxAchat)}</div>
-              <div style="font-size:9px;color:#6b8c7a;">Px achat moy</div>
-            </div>
-            <div style="background:#f0fdf4;border-radius:8px;padding:6px;">
-              <div style="font-size:11px;font-weight:700;color:#166534;">${fmt(d.pxVenteMoy)}</div>
-              <div style="font-size:9px;color:#6b8c7a;">Px vente moy</div>
-            </div>
-            <div style="background:#f8faf8;border-radius:8px;padding:6px;">
-              <div style="font-size:11px;font-weight:700;color:#0f1f16;">${fmt(d.ca)}</div>
-              <div style="font-size:9px;color:#6b8c7a;">CA total</div>
-            </div>
-            <div style="background:${d.margeP!==null&&d.margeP>=0?"#f0fdf4":"#fef2f2"};border-radius:8px;padding:6px;">
-              <div style="font-size:11px;font-weight:700;color:${d.margeP!==null&&d.margeP>=0?"#166534":"#dc2626"};">${d.margeP!==null?fmt(d.margeP):"—"}</div>
-              <div style="font-size:9px;color:#6b8c7a;">Marge</div>
-            </div>
-          </div>
-          ${d.pxAchat&&d.pxVenteMoy ? `
-          <div style="margin-top:8px;height:6px;background:#e2ece7;border-radius:999px;overflow:hidden;">
-            <div style="height:100%;border-radius:999px;background:${couleur(d.tauxP||0)};width:${Math.min(Math.max(d.tauxP||0,0),100)}%;"></div>
-          </div>` : ""}
-        </div>`).join("")}
-    </div>` : ""}
+function detailMarge(onglet) {
+  if(onglet) margeOnglet = onglet;
 
-    <!-- PAR MOIS -->
-    ${moisTries.length ? `
-    <div style="margin-bottom:8px;">
-      <div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Évolution mensuelle</div>
-      ${moisTries.map(m=>{
-        const d=parMois[m];
-        const t=d.ca?Math.round(d.marge/d.ca*100):0;
-        const pct=Math.min(Math.max(t,0),100);
-        return `<div style="margin-bottom:10px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-            <span style="font-size:12px;font-weight:600;color:#0f1f16;">${m}</span>
-            <div style="text-align:right;">
-              <span style="font-size:12px;font-weight:700;color:${couleur(t)};">${t}%</span>
-              <span style="font-size:11px;color:#6b8c7a;margin-left:8px;">${fmt(d.marge)} / CA ${fmt(d.ca)}</span>
-            </div>
-          </div>
-          <div style="height:7px;background:#e2ece7;border-radius:999px;overflow:hidden;">
-            <div style="height:100%;background:${t>=20?"#22a356":t>=10?"#f47820":"#dc2626"};border-radius:999px;width:${pct}%;transition:width .5s;"></div>
-          </div>
-        </div>`;
-      }).join("")}
-    </div>` : ""}
-  `);
+  // ── Onglets ──
+  const onglets = ['jour','mois','annee'];
+  const ongletLabels = {jour:'Par jour',mois:'Par mois',annee:'Par année'};
+  const ongletsHtml = '<div style="display:flex;gap:6px;margin-bottom:18px;background:#f0f5f1;border-radius:12px;padding:4px;">'
+    + onglets.map(o =>
+        '<button onclick="detailMarge(\''+o+'\')" style="flex:1;padding:8px 4px;border:none;border-radius:9px;cursor:pointer;font-family:inherit;font-size:12px;font-weight:700;transition:all .2s;'
+        +(margeOnglet===o?'background:#0d3d1a;color:#fff;box-shadow:0 2px 8px rgba(13,61,26,.3);':'background:none;color:#3d5c48;')
+        +'">'+ongletLabels[o]+'</button>'
+      ).join('')
+    + '</div>';
+
+  // ── KPI global (commun à tous les onglets) ──
+  const global = calculerMarge(ventes, achats.filter(a=>a.statut==="recu"));
+  const kpiHtml =
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px;">'
+    +'<div style="background:'+bgMarge(global.tauxB)+';border:1.5px solid '+borderMarge(global.tauxB)+';border-radius:14px;padding:12px;text-align:center;">'
+      +jaugeMarge(global.tauxB)
+      +'<div style="font-size:11px;font-weight:700;color:#0f1f16;margin-top:2px;">Marge brute globale</div>'
+      +'<div style="font-size:14px;font-weight:900;color:'+couleurMarge(global.tauxB)+';margin-top:2px;">'+fmt(global.margeB)+'</div>'
+      +'<div style="font-size:9px;color:#6b8c7a;">CA : '+fmt(global.ca)+'</div>'
+    +'</div>'
+    +'<div style="background:'+bgMarge(global.tauxN)+';border:1.5px solid '+borderMarge(global.tauxN)+';border-radius:14px;padding:12px;text-align:center;">'
+      +jaugeMarge(global.tauxN)
+      +'<div style="font-size:11px;font-weight:700;color:#0f1f16;margin-top:2px;">Marge nette globale</div>'
+      +'<div style="font-size:14px;font-weight:900;color:'+couleurMarge(global.tauxN)+';margin-top:2px;">'+fmt(global.margeN)+'</div>'
+      +'<div style="font-size:9px;color:#6b8c7a;">Frais : −'+fmt(global.frais)+'</div>'
+    +'</div>'
+    +'</div>';
+
+  // ── Décomposition globale ──
+  const decomp =
+    '<div style="background:#f8faf8;border-radius:14px;padding:14px;margin-bottom:18px;">'
+    +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Décomposition</div>'
+    +ligneDecomp("Chiffre d'affaires",global.ca,"#0369a1","",false)
+    +ligneDecomp("Coût d'achat",global.coutAch,"#dc2626","−",false)
+    +ligneDecomp("Marge brute",global.margeB,couleurMarge(global.tauxB),global.margeB>=0?"+":"",false)
+    +ligneDecomp("Frais terrain",global.frais,"#c2410c","−",false)
+    +ligneDecomp("Marge nette estimée",global.margeN,couleurMarge(global.tauxN),global.margeN>=0?"+":"",true)
+    +'</div>';
+
+  // ── Contenu selon onglet ──
+  let contenu = "";
+
+  if(margeOnglet === "jour") {
+    // Grouper par date de la vente (YYYY-MM-DD)
+    const parJour = {};
+    ventes.forEach(v => {
+      const j = (v.date||"").slice(0,10);
+      if(!j) return;
+      if(!parJour[j]) parJour[j] = {ventes:[], achats:[]};
+      parJour[j].ventes.push(v);
+    });
+    achats.filter(a=>a.statut==="recu").forEach(a => {
+      const j = (a.date_reception||a.date||"").slice(0,10);
+      if(!j) return;
+      if(!parJour[j]) parJour[j] = {ventes:[], achats:[]};
+      parJour[j].achats.push(a);
+    });
+    const jours = Object.keys(parJour).sort().reverse();
+    if(!jours.length) {
+      contenu = '<div style="text-align:center;padding:30px;color:#6b8c7a;font-size:12px;">Aucune donnée journalière.</div>';
+    } else {
+      contenu = '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Marge par jour</div>'
+        + '<div style="display:flex;flex-direction:column;gap:8px;">'
+        + jours.map(j => {
+            const d = parJour[j];
+            const m = calculerMarge(d.ventes, d.achats);
+            const dateAff = new Date(j).toLocaleDateString("fr-CI",{weekday:"short",day:"numeric",month:"short"});
+            const isToday = j === new Date().toISOString().slice(0,10);
+            return '<div style="background:#fff;border:1.5px solid '+(isToday?"#0d3d1a":"#e4ede7")+';border-radius:14px;padding:12px;">'
+              +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
+                +'<div>'
+                  +'<div style="font-weight:700;color:#0f1f16;font-size:13px;">'+dateAff+(isToday?' <span style="font-size:10px;background:#0d3d1a;color:#fff;padding:2px 8px;border-radius:999px;">Aujourd\'hui</span>':'')+'</div>'
+                  +'<div style="font-size:10px;color:#6b8c7a;margin-top:1px;">'+d.ventes.length+' vente'+(d.ventes.length>1?"s":"")
+                    +(d.achats.length?" · "+d.achats.length+" achat"+(d.achats.length>1?"s":""):"")+'</div>'
+                +'</div>'
+                +'<div style="text-align:right;">'
+                  +'<div style="font-size:15px;font-weight:900;color:'+couleurMarge(m.tauxB)+';">'+(m.margeB>=0?"+":"")+fmt(m.margeB)+'</div>'
+                  +'<div style="font-size:10px;color:#6b8c7a;">CA '+fmt(m.ca)+' · '+m.tauxB+'%</div>'
+                +'</div>'
+              +'</div>'
+              + barreMarge(m.tauxB)
+              // Détail par produit ce jour
+              + (()=>{
+                const prods = [...new Set(d.ventes.map(v=>v.produit))];
+                if(!prods.length) return "";
+                return '<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px;">'
+                  +prods.map(p=>{
+                    const vp=d.ventes.filter(v=>v.produit===p);
+                    const cap=vp.reduce((s,v)=>s+v.quantite*v.prix_vente,0);
+                    const cm=coutMoyen(p);
+                    const mp=cm?vp.reduce((s,v)=>s+(v.prix_vente-cm)*v.quantite,0):null;
+                    const tp=cap&&mp!==null?Math.round(mp/cap*100):null;
+                    return '<span style="background:'+bgMarge(tp||0)+';border:1px solid '+borderMarge(tp||0)+';border-radius:8px;padding:3px 8px;font-size:10px;font-weight:700;color:'+couleurMarge(tp||0)+';">'
+                      +(getProduitIcon(p)||"🌿")+" "+p+(tp!==null?" "+tp+"%":"")+'</span>';
+                  }).join("")
+                +'</div>';
+              })()
+            +'</div>';
+          }).join("")
+        + '</div>';
+    }
+  }
+
+  else if(margeOnglet === "mois") {
+    const parMois = {};
+    ventes.forEach(v => {
+      const m = (v.date||"").slice(0,7);
+      if(!m) return;
+      if(!parMois[m]) parMois[m] = {ventes:[], achats:[]};
+      parMois[m].ventes.push(v);
+    });
+    achats.filter(a=>a.statut==="recu").forEach(a => {
+      const m = (a.date_reception||a.date||"").slice(0,7);
+      if(!m) return;
+      if(!parMois[m]) parMois[m] = {ventes:[], achats:[]};
+      parMois[m].achats.push(a);
+    });
+    const moisList = Object.keys(parMois).sort().reverse();
+    const nomsMois = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
+    if(!moisList.length) {
+      contenu = '<div style="text-align:center;padding:30px;color:#6b8c7a;font-size:12px;">Aucune donnée mensuelle.</div>';
+    } else {
+      contenu = '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Marge par mois</div>'
+        + '<div style="display:flex;flex-direction:column;gap:8px;">'
+        + moisList.map(k => {
+            const d = parMois[k];
+            const m = calculerMarge(d.ventes, d.achats);
+            const [annee, moisIdx] = k.split("-");
+            const nomMois = nomsMois[parseInt(moisIdx,10)-1]+" "+annee;
+            const isCurrent = k === new Date().toISOString().slice(0,7);
+            return '<div style="background:#fff;border:1.5px solid '+(isCurrent?"#0d3d1a":"#e4ede7")+';border-radius:14px;padding:14px;">'
+              +'<div style="display:flex;justify-content:space-between;align-items:center;">'
+                +'<div>'
+                  +'<div style="font-weight:700;color:#0f1f16;font-size:14px;">'+nomMois+(isCurrent?' <span style="font-size:10px;background:#0d3d1a;color:#fff;padding:2px 8px;border-radius:999px;">En cours</span>':'')+'</div>'
+                  +'<div style="font-size:10px;color:#6b8c7a;margin-top:2px;">'+d.ventes.length+' vente'+(d.ventes.length>1?"s":"")+" · "+d.achats.length+' achat'+(d.achats.length>1?"s":"")+'</div>'
+                +'</div>'
+                +'<div style="text-align:right;">'
+                  +'<div style="font-size:16px;font-weight:900;color:'+couleurMarge(m.tauxB)+';">'+(m.margeB>=0?"+":"")+fmt(m.margeB)+'</div>'
+                  +'<div style="font-size:10px;color:#6b8c7a;">CA '+fmt(m.ca)+'</div>'
+                +'</div>'
+              +'</div>'
+              +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px;">'
+                +'<div style="background:#eff6ff;border-radius:8px;padding:7px;text-align:center;"><div style="font-size:11px;font-weight:700;color:#1d4ed8;">'+fmt(m.ca)+'</div><div style="font-size:9px;color:#6b8c7a;">CA</div></div>'
+                +'<div style="background:'+bgMarge(m.tauxB)+';border-radius:8px;padding:7px;text-align:center;"><div style="font-size:11px;font-weight:700;color:'+couleurMarge(m.tauxB)+';">'+m.tauxB+'%</div><div style="font-size:9px;color:#6b8c7a;">Taux brut</div></div>'
+                +'<div style="background:'+bgMarge(m.tauxN)+';border-radius:8px;padding:7px;text-align:center;"><div style="font-size:11px;font-weight:700;color:'+couleurMarge(m.tauxN)+';">'+m.tauxN+'%</div><div style="font-size:9px;color:#6b8c7a;">Taux net</div></div>'
+              +'</div>'
+              + barreMarge(m.tauxB)
+            +'</div>';
+          }).join("")
+        + '</div>';
+    }
+  }
+
+  else if(margeOnglet === "annee") {
+    const parAnnee = {};
+    ventes.forEach(v => {
+      const a = (v.date||"").slice(0,4);
+      if(!a) return;
+      if(!parAnnee[a]) parAnnee[a] = {ventes:[], achats:[]};
+      parAnnee[a].ventes.push(v);
+    });
+    achats.filter(a=>a.statut==="recu").forEach(a => {
+      const an = (a.date_reception||a.date||"").slice(0,4);
+      if(!an) return;
+      if(!parAnnee[an]) parAnnee[an] = {ventes:[], achats:[]};
+      parAnnee[an].achats.push(a);
+    });
+    const anneeList = Object.keys(parAnnee).sort().reverse();
+    if(!anneeList.length) {
+      contenu = '<div style="text-align:center;padding:30px;color:#6b8c7a;font-size:12px;">Aucune donnée annuelle.</div>';
+    } else {
+      contenu = '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Marge par année</div>'
+        + '<div style="display:flex;flex-direction:column;gap:8px;">'
+        + anneeList.map(an => {
+            const d = parAnnee[an];
+            const m = calculerMarge(d.ventes, d.achats);
+            const isCurrent = an === new Date().getFullYear().toString();
+            return '<div style="background:#fff;border:1.5px solid '+(isCurrent?"#0d3d1a":"#e4ede7")+';border-radius:16px;padding:16px;">'
+              +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
+                +'<div>'
+                  +'<div style="font-size:20px;font-weight:900;color:#0f1f16;">'+an+(isCurrent?' <span style="font-size:10px;background:#0d3d1a;color:#fff;padding:2px 8px;border-radius:999px;">En cours</span>':'')+'</div>'
+                  +'<div style="font-size:11px;color:#6b8c7a;margin-top:2px;">'+d.ventes.length+' ventes · '+d.achats.length+' achats</div>'
+                +'</div>'
+                + jaugeMarge(m.tauxB)
+              +'</div>'
+              +'<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;">'
+                +'<div style="background:#eff6ff;border-radius:10px;padding:10px;text-align:center;">'
+                  +'<div style="font-size:14px;font-weight:900;color:#1d4ed8;">'+fmt(m.ca)+'</div>'
+                  +'<div style="font-size:10px;color:#6b8c7a;">Chiffre d\'affaires</div>'
+                +'</div>'
+                +'<div style="background:'+bgMarge(m.tauxB)+';border-radius:10px;padding:10px;text-align:center;">'
+                  +'<div style="font-size:14px;font-weight:900;color:'+couleurMarge(m.tauxB)+';">'+(m.margeB>=0?"+":"")+fmt(m.margeB)+'</div>'
+                  +'<div style="font-size:10px;color:#6b8c7a;">Marge brute ('+m.tauxB+'%)</div>'
+                +'</div>'
+                +'<div style="background:#fff3e8;border-radius:10px;padding:10px;text-align:center;">'
+                  +'<div style="font-size:14px;font-weight:900;color:#c2410c;">−'+fmt(m.frais)+'</div>'
+                  +'<div style="font-size:10px;color:#6b8c7a;">Frais terrain</div>'
+                +'</div>'
+                +'<div style="background:'+bgMarge(m.tauxN)+';border-radius:10px;padding:10px;text-align:center;">'
+                  +'<div style="font-size:14px;font-weight:900;color:'+couleurMarge(m.tauxN)+';">'+(m.margeN>=0?"+":"")+fmt(m.margeN)+'</div>'
+                  +'<div style="font-size:10px;color:#6b8c7a;">Marge nette ('+m.tauxN+'%)</div>'
+                +'</div>'
+              +'</div>'
+            +'</div>';
+          }).join("")
+        + '</div>';
+    }
+  }
+
+  showModal(
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
+    +'<div>'
+      +'<div style="font-size:17px;font-weight:800;color:#0f1f16;">📊 Analyse de marge</div>'
+      +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">Marge brute & nette · Toutes périodes</div>'
+    +'</div>'
+    +'<div style="display:flex;gap:6px;align-items:center;">'
+      +'<button onclick="exportMargeCSV()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;border-radius:10px;padding:6px 10px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">⬇ CSV</button>'
+      +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;color:#3d5c48;">✕</button>'
+    +'</div>'
+    +'</div>'
+    + ongletsHtml
+    + kpiHtml
+    + decomp
+    + contenu
+  );
 }
 
 function exportMargeCSV(){
-  const totalV = ventes.reduce((s,v)=>s+v.quantite*v.prix_vente,0);
-  const totalA = achats.reduce((s,a)=>s+a.quantite*a.prix_unitaire,0);
-  const frais  = achats.reduce((s,a)=>s+(a.droit_terre||0)+(a.transport||0)+(a.droit_vente||0)+(a.charrette||0),0);
-  const margeB = ventes.reduce((s,v)=>{const c=coutMoyen(v.produit);return c?s+(v.prix_vente-c)*v.quantite:s;},0);
-  const margeN = margeB - frais;
-  const tauxB  = totalV?Math.round(margeB/totalV*100):0;
-  const tauxN  = totalV?Math.round(margeN/totalV*100):0;
+  const global = calculerMarge(ventes, achats.filter(a=>a.statut==="recu"));
 
-  const prodsVendus = [...new Set(ventes.map(v=>v.produit))];
-  const lignesProd  = prodsVendus.map(p=>{
-    const ca  = ventes.filter(v=>v.produit===p).reduce((s,v)=>s+v.quantite*v.prix_vente,0);
-    const cm  = coutMoyen(p);
-    const mP  = cm ? ventes.filter(v=>v.produit===p).reduce((s,v)=>s+(v.prix_vente-cm)*v.quantite,0) : 0;
-    const tP  = ca ? Math.round(mP/ca*100) : 0;
-    return [p, fmt(ca), fmt(cm||0), fmt(mP), tP+"%"];
-  });
+  // Par jour
+  const parJour = {};
+  ventes.forEach(v=>{ const j=(v.date||"").slice(0,10); if(j){ if(!parJour[j])parJour[j]={v:[],a:[]}; parJour[j].v.push(v); }});
+  achats.filter(a=>a.statut==="recu").forEach(a=>{ const j=(a.date_reception||a.date||"").slice(0,10); if(j){ if(!parJour[j])parJour[j]={v:[],a:[]}; parJour[j].a.push(a); }});
+
+  // Par mois
+  const parMois = {};
+  ventes.forEach(v=>{ const m=(v.date||"").slice(0,7); if(m){ if(!parMois[m])parMois[m]={v:[],a:[]}; parMois[m].v.push(v); }});
+  achats.filter(a=>a.statut==="recu").forEach(a=>{ const m=(a.date_reception||a.date||"").slice(0,7); if(m){ if(!parMois[m])parMois[m]={v:[],a:[]}; parMois[m].a.push(a); }});
 
   const rows = [
     ["=== RÉSUMÉ GLOBAL ==="],
-    ["Chiffre d'affaires", fmt(totalV)],
-    ["Coût d'achat", fmt(totalA)],
-    ["Marge brute", fmt(margeB), tauxB+"%"],
-    ["Frais terrain", fmt(frais)],
-    ["Marge nette", fmt(margeN), tauxN+"%"],
+    ["CA total", fmt(global.ca)],
+    ["Marge brute", fmt(global.margeB), global.tauxB+"%"],
+    ["Frais terrain", fmt(global.frais)],
+    ["Marge nette", fmt(global.margeN), global.tauxN+"%"],
     [""],
-    ["=== PAR PRODUIT ==="],
-    ["Produit","CA","Prix achat moy","Marge","Taux"],
-    ...lignesProd,
+    ["=== PAR JOUR ==="],
+    ["Date","CA","Marge brute","Taux brut%","Marge nette","Taux net%","Nb ventes","Nb achats"],
+    ...Object.keys(parJour).sort().reverse().map(j=>{
+      const m=calculerMarge(parJour[j].v,parJour[j].a);
+      return [j,fmt(m.ca),fmt(m.margeB),m.tauxB+"%",fmt(m.margeN),m.tauxN+"%",parJour[j].v.length,parJour[j].a.length];
+    }),
+    [""],
+    ["=== PAR MOIS ==="],
+    ["Mois","CA","Marge brute","Taux brut%","Marge nette","Taux net%"],
+    ...Object.keys(parMois).sort().reverse().map(k=>{
+      const m=calculerMarge(parMois[k].v,parMois[k].a);
+      return [k,fmt(m.ca),fmt(m.margeB),m.tauxB+"%",fmt(m.margeN),m.tauxN+"%"];
+    }),
   ];
 
   const d = new Date().toISOString().slice(0,10);
-  downloadCSV(`VerdApp_DetailMarge_${d}.csv`, rows, []);
-  showToast("✓ Détail marge exporté");
+  downloadCSV("VerdApp_AnalyseMarge_"+d+".csv", rows, []);
+  showToast("✓ Analyse marge exportée");
 }
+
 
 
 // ─── PANNEAU JOURNAL ADMIN ───────────────────────────────────────────────────

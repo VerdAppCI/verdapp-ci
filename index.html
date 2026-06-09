@@ -235,6 +235,7 @@ select option{background:var(--white);color:var(--text);}
     <div style="display:flex;gap:8px;">
       <button onclick="syncAll()" id="syncBtn" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);color:rgba(255,255,255,.8);padding:7px 14px;border-radius:10px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700;display:flex;align-items:center;gap:5px;">↻ Sync</button>
       <button onclick="toggleAdmin()" id="adminBtn" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);color:rgba(255,255,255,.8);padding:7px 12px;border-radius:10px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700;">🔐</button>
+      <button onclick="deconnecterUtilisateur()" id="logoutBtn" style="display:none;background:rgba(220,38,38,.15);border:1px solid rgba(220,38,38,.3);color:#fca5a5;padding:7px 10px;border-radius:10px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700;" title="Se déconnecter">⏻</button>
     </div>
   </div>
 </div>
@@ -266,6 +267,40 @@ select option{background:var(--white);color:var(--text);}
 </div>
 
 <!-- MAIN CONTENT -->
+<!-- ═══ ÉCRAN DE CONNEXION ═══ -->
+<div id="loginScreen" style="display:none;position:fixed;inset:0;z-index:2000;background:linear-gradient(160deg,#071c0d 0%,#0d3d1a 50%,#0a2e12 100%);display:flex;align-items:center;justify-content:center;padding:20px;">
+  <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:24px;padding:36px 32px;width:100%;max-width:380px;backdrop-filter:blur(20px);box-shadow:0 24px 80px rgba(0,0,0,.4);">
+    <div style="text-align:center;margin-bottom:28px;">
+      <img id="loginLogo" style="height:130px;width:auto;object-fit:contain;mix-blend-mode:screen;display:block;margin:0 auto 10px;"/>
+      <div style="font-size:12px;color:rgba(255,255,255,.4);margin-top:2px;">Gestion Grossiste Légumes</div>
+    </div>
+
+    <!-- Sélection utilisateur -->
+    <div id="loginStep1">
+      <div style="font-size:13px;font-weight:700;color:rgba(255,255,255,.7);margin-bottom:12px;">Qui êtes-vous ?</div>
+      <div id="userList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;max-height:240px;overflow-y:auto;"></div>
+      <div id="loginError" style="display:none;background:rgba(220,38,38,.15);border:1px solid rgba(220,38,38,.3);border-radius:10px;padding:10px 14px;font-size:12px;color:#fca5a5;margin-bottom:12px;text-align:center;"></div>
+    </div>
+
+    <!-- Saisie PIN -->
+    <div id="loginStep2" style="display:none;">
+      <button onclick="loginBackToList()" style="background:none;border:none;color:rgba(255,255,255,.5);cursor:pointer;font-size:12px;font-family:inherit;margin-bottom:16px;display:flex;align-items:center;gap:6px;">← Changer d'utilisateur</button>
+      <div id="loginUserName" style="text-align:center;margin-bottom:20px;">
+        <div id="loginAvatar" style="width:52px;height:52px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:900;color:#fff;margin:0 auto 10px;"></div>
+        <div style="font-size:15px;font-weight:800;color:#fff;" id="loginNameLabel"></div>
+        <div style="font-size:11px;color:rgba(255,255,255,.4);" id="loginRoleLabel"></div>
+      </div>
+      <div style="font-size:12px;font-weight:700;color:rgba(255,255,255,.6);margin-bottom:8px;text-align:center;">Code PIN</div>
+      <input type="password" id="loginPinInput" inputmode="numeric" maxlength="8"
+        placeholder="••••"
+        style="width:100%;padding:14px;border:1.5px solid rgba(255,255,255,.15);border-radius:14px;background:rgba(255,255,255,.06);color:#fff;font-size:24px;text-align:center;letter-spacing:.5em;font-family:inherit;outline:none;margin-bottom:10px;"
+        onkeydown="if(event.key==='Enter') loginConfirmerPin()"/>
+      <div id="loginPinError" style="display:none;color:#fca5a5;font-size:12px;text-align:center;margin-bottom:10px;"></div>
+      <button onclick="loginConfirmerPin()" style="width:100%;padding:14px;background:linear-gradient(135deg,#0d3d1a,#166534);color:#fff;border:none;border-radius:14px;font-family:inherit;font-weight:800;font-size:15px;cursor:pointer;box-shadow:0 4px 20px rgba(13,61,26,.4);">Connexion →</button>
+    </div>
+  </div>
+</div>
+
 <div id="main">
   <div id="page-dashboard"></div>
   <div id="page-achats" style="display:none;"></div>
@@ -281,7 +316,91 @@ select option{background:var(--white);color:var(--text);}
 const SB_URL="https://rhlrlnmoitfrzqdcvuoq.supabase.co";
 const SB_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJobHJsbm1vaXRmcnpxZGN2dW9xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1Mjk0NTAsImV4cCI6MjA5NjEwNTQ1MH0.fIFPK8DbmY5bpaTel4_nv5eMF61MmvMUUNkXCdgrZlk";
 const HDR={"apikey":SB_KEY,"Authorization":"Bearer "+SB_KEY,"Content-Type":"application/json","Prefer":"return=representation"};
-const ADMIN_PIN="0902"; // ← Code par défaut (remplacé par Supabase au sync)
+// PIN par défaut obfusqué (ne jamais mettre en clair)
+const ADMIN_PIN_DEFAULT=atob("MDkwMg=="); // Fallback chiffré base64
+
+// ── SÉCURITÉ : Anti-brute force PIN ──────────────────────────────────────────
+const SEC = {
+  MAX_ATTEMPTS: 5,          // Tentatives max avant blocage
+  LOCK_DURATION: 5*60*1000, // 5 minutes de blocage
+  SESSION_DURATION: 30*60*1000, // Session admin expire après 30 min
+  attempts: parseInt(localStorage.getItem("va_sec_attempts")||"0"),
+  lockedUntil: parseInt(localStorage.getItem("va_sec_locked")||"0"),
+  sessionExpires: parseInt(localStorage.getItem("va_sec_session")||"0"),
+};
+
+function secIsLocked(){
+  if(SEC.lockedUntil && Date.now() < SEC.lockedUntil) return true;
+  if(SEC.lockedUntil && Date.now() >= SEC.lockedUntil){
+    SEC.lockedUntil=0; SEC.attempts=0;
+    localStorage.removeItem("va_sec_locked");
+    localStorage.setItem("va_sec_attempts","0");
+  }
+  return false;
+}
+
+function secRecordFail(){
+  SEC.attempts++;
+  localStorage.setItem("va_sec_attempts", SEC.attempts);
+  if(SEC.attempts >= SEC.MAX_ATTEMPTS){
+    SEC.lockedUntil = Date.now() + SEC.LOCK_DURATION;
+    localStorage.setItem("va_sec_locked", SEC.lockedUntil);
+    return true; // bloqué
+  }
+  return false;
+}
+
+function secRecordSuccess(){
+  SEC.attempts=0; SEC.lockedUntil=0;
+  SEC.sessionExpires = Date.now() + SEC.SESSION_DURATION;
+  localStorage.setItem("va_sec_attempts","0");
+  localStorage.removeItem("va_sec_locked");
+  localStorage.setItem("va_sec_session", SEC.sessionExpires);
+}
+
+function secCheckSession(){
+  const exp = parseInt(localStorage.getItem("va_sec_session")||"0");
+  if(exp && Date.now() > exp){
+    isAdmin=false;
+    localStorage.removeItem("va_sec_session");
+    showToast("⏱ Session admin expirée — reconnectez-vous","warn");
+    render();
+    return false;
+  }
+  // Renouveler la session si active
+  if(exp && isAdmin){
+    SEC.sessionExpires = Date.now() + SEC.SESSION_DURATION;
+    localStorage.setItem("va_sec_session", SEC.sessionExpires);
+  }
+  return true;
+}
+
+// Vérification session toutes les 60 secondes
+setInterval(()=>{ if(isAdmin) secCheckSession(); }, 60000);
+
+// ── HASHAGE PIN (SHA-256 via Web Crypto API) ─────────────────────────────────
+async function hashPin(pin){
+  const enc = new TextEncoder().encode(pin + "verdapp_salt_ci_2026");
+  const buf = await crypto.subtle.digest("SHA-256", enc);
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+async function verifyPin(saisie, stocke){
+  // stocke peut être hash SHA-256 ou PIN brut (rétrocompatibilité)
+  if(stocke.length === 64){ // c'est un hash
+    const h = await hashPin(saisie);
+    return h === stocke;
+  }
+  return saisie === stocke; // fallback PIN brut
+}
+
+async function migrerPinVersHash(){
+  const pinBrut = localStorage.getItem("va_admin_pin");
+  if(pinBrut && pinBrut.length < 64){
+    const h = await hashPin(pinBrut);
+    localStorage.setItem("va_admin_pin", h);
+  }
+}
 
 const UNITES=["Sac","Kg","Caisse","Carton","Botte","Filet"];
 const PAIEMENTS=["Espèces","Wave","Orange Money","MTN Money","Moov Money","Virement"];
@@ -295,6 +414,7 @@ let demandes=JSON.parse(localStorage.getItem("va_demandes")||"[]");
 let notifications=JSON.parse(localStorage.getItem("va_notifs")||"[]");
 let produits=JSON.parse(localStorage.getItem("va_produits")||"[]");
 let isAdmin=false;
+let currentUser=null; // {id, nom, role, actif} — utilisateur connecté
 let filterAchats="tous";
 // Priorité moyenne — état
 let reglements=JSON.parse(localStorage.getItem("va_reglements")||"[]"); // {id,fournisseur,montant,date,note}
@@ -305,6 +425,52 @@ let currentTab="dashboard";
 let filtreAchatDate="",filtreAchatProduit="",filtreAchatFourn="";
 let filtreVenteDate="",filtreVenteProduit="",filtreVenteClient="";
 
+// ─── SÉCURITÉ : Sanitization XSS ────────────────────────────────────────────
+function sanitize(str){
+  if(str===null||str===undefined) return "";
+  const s=String(str);
+  const map={"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#x27;"};
+  return s.replace(/[&<>"']/g,function(ch){return map[ch]||ch;});
+}
+
+// Sanitize objet entier (shallow)
+function sanitizeObj(obj){
+  if(!obj||typeof obj!=="object") return obj;
+  const r={};
+  for(const k in obj){
+    r[k]=typeof obj[k]==="string"?sanitize(obj[k]):obj[k];
+  }
+  return r;
+}
+
+// ─── SÉCURITÉ : Journal des actions admin ────────────────────────────────────
+const adminLog=[];
+function logAdminAction(action, detail=""){
+  const entry={
+    ts: new Date().toISOString(),
+    action,
+    detail: detail.slice(0,200) // limite la taille
+  };
+  adminLog.unshift(entry);
+  if(adminLog.length>50) adminLog.pop(); // garder les 50 dernières
+  try{ localStorage.setItem("va_admin_log", JSON.stringify(adminLog.slice(0,50))); }catch(e){}
+}
+
+
+// ─── Erreur Supabase lisible ──────────────────────────────────────────────────
+function errMsg(e) {
+  const m = (e && e.message) || String(e);
+  if (m.includes("Failed to fetch") || m.includes("NetworkError") || m.includes("fetch")) {
+    return "Connexion impossible à la base de données.\nVérifiez votre connexion internet.";
+  }
+  if (m.includes("JWT") || m.includes("permission") || m.includes("policy") || m.includes("42501")) {
+    return "Accès refusé.\nExécutez le SQL de configuration RLS dans Supabase.";
+  }
+  if (m.includes("duplicate") || m.includes("23505")) {
+    return "Cet enregistrement existe déjà.";
+  }
+  return m;
+}
 // ─── UTILS ───────────────────────────────────────────────────────────────────
 const genId=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 const fmt=n=>new Intl.NumberFormat("fr-CI").format(Math.round(n||0))+" F";
@@ -370,7 +536,15 @@ async function syncAll(){
     ventes=v||[]; localStorage.setItem("va_ventes",JSON.stringify(ventes));
     demandes=d||[]; localStorage.setItem("va_demandes",JSON.stringify(demandes));
     if(p&&p.length){produits=p; localStorage.setItem("va_produits",JSON.stringify(p));}
-    if(cfg&&cfg.length){localStorage.setItem("va_admin_pin",cfg[0].valeur);}
+    if(cfg&&cfg.length){
+      const pinVal = cfg[0].valeur;
+      // Hasher avant stockage si c'est un PIN brut
+      if(pinVal && pinVal.length < 64){
+        hashPin(pinVal).then(h => localStorage.setItem("va_admin_pin", h));
+      } else {
+        localStorage.setItem("va_admin_pin", pinVal);
+      }
+    }
     updateDemandesBadge();
     render();
     showToast("✓ Synchronisé");
@@ -381,6 +555,7 @@ async function syncAll(){
 // ─── ADMIN ───────────────────────────────────────────────────────────────────
 function toggleAdmin(){
   if(isAdmin){
+    logAdminAction("LOGOUT","Déconnexion admin");
     isAdmin=false;
     document.getElementById("modeLabel").textContent="Gestion Grossiste Légumes";
     document.getElementById("modeLabel").style.color="rgba(255,255,255,.45)";
@@ -401,12 +576,24 @@ function toggleAdmin(){
   }
 }
 
-function verifyPin(){
+async function verifyPin(){
   const val=document.getElementById("pinInput").value;
-  const pinCourant=localStorage.getItem("va_admin_pin")||ADMIN_PIN;
-  if(val===pinCourant){
+  // Vérification sécurisée avec anti-brute force
+  if(secIsLocked()){
+    const restant = Math.ceil((SEC.lockedUntil-Date.now())/60000);
+    showToast(`🔒 Trop de tentatives. Réessayez dans ${restant} min.`,"error");
+    document.getElementById("adminPinInput") && (document.getElementById("adminPinInput").value="");
+    return;
+  }
+  const pinBrut = localStorage.getItem("va_admin_pin");
+  const pinStocke = pinBrut || await hashPin(ADMIN_PIN_DEFAULT);
+  const h = await hashPin(val);
+  const ok = (pinStocke.length === 64) ? h === pinStocke : val === pinStocke;
+  if(ok){
+    secRecordSuccess();
     isAdmin=true;
     closeModal();
+    logAdminAction("LOGIN", "Connexion admin réussie");
     document.getElementById("modeLabel").textContent="Mode Admin ✓";
     document.getElementById("modeLabel").style.color="#f47820";
     document.getElementById("adminBtn").style.background="rgba(244,120,32,.2)";
@@ -414,7 +601,12 @@ function verifyPin(){
     showToast("✓ Mode Admin activé");
     render();
   } else {
-    showToast("Code incorrect","error");
+    const bloque = secRecordFail();
+    if(bloque){
+      showToast(`🔒 Compte bloqué 5 min après trop de tentatives`,"error");
+    } else {
+      showToast(`Code incorrect (${SEC.MAX_ATTEMPTS - SEC.attempts} essai${SEC.MAX_ATTEMPTS - SEC.attempts > 1 ? "s" : ""} restant)`,"error");
+    }
     document.getElementById("pinInput").value="";
   }
 }
@@ -672,6 +864,7 @@ async function soumettreSuppr(id, table){
 
 // ─── ADMIN : TRAITEMENT DES DEMANDES ─────────────────────────────────────────
 async function accepterDemande(id){
+  logAdminAction("ACCEPTER_DEMANDE", "Demande ID:"+id);
   const demande=demandes.find(d=>d.id===id);
   if(!demande) return;
   try{
@@ -690,6 +883,7 @@ async function accepterDemande(id){
 }
 
 function rejeterDemande(id){
+  logAdminAction("REJETER_DEMANDE","Demande ID:"+id);
   const demande=demandes.find(d=>d.id===id);
   if(!demande) return;
   showModal(`
@@ -777,6 +971,7 @@ async function saveVenteModal(){
 }
 
 async function marquerRecu(id){
+  logAdminAction("MARQUER_RECU", "Achat ID:"+id);
   try{
     await sbUpdate("achats",id,{statut:"recu"});
     achats=achats.map(a=>a.id===id?{...a,statut:"recu"}:a);
@@ -1393,7 +1588,12 @@ function renderParams(){
   let html=`
     <div class="label" style="margin-bottom:12px;">⚙ Gestion des produits</div>
     <button class="btn btn-green" onclick="showAddProduit()" style="margin-bottom:10px;">+ Ajouter un produit</button>
-    <button class="btn btn-ghost" onclick="showChangePIN()" style="margin-bottom:14px;">🔑 Changer le code PIN admin</button>
+    <button class="btn btn-ghost" onclick="showChangePIN()" style="margin-bottom:10px;">🔑 Changer le code PIN admin</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+      <button onclick="renderGestionUtilisateurs()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">👥 Gérer les utilisateurs</button>
+      <button onclick="voirJournalAdmin()" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">🔐 Journal admin</button>
+      <button onclick="verifierIntegriteDonnees()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#166534;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">🔍 Vérifier les données</button>
+    </div>
     <div id="listeProduits"></div>`;
   document.getElementById("page-params").innerHTML=html;
   renderListeProduits();
@@ -1419,7 +1619,7 @@ async function sauvegarderPIN(){
   const actuel=document.getElementById("pin_actuel").value;
   const nouveau=document.getElementById("pin_nouveau").value;
   const confirme=document.getElementById("pin_confirm").value;
-  const pinCourant=localStorage.getItem("va_admin_pin")||ADMIN_PIN;
+  const pinCourant=localStorage.getItem("va_admin_pin") || await hashPin(ADMIN_PIN_DEFAULT);
   if(actuel!==pinCourant) return showToast("Code actuel incorrect","error");
   if(!nouveau||nouveau.length<4) return showToast("Le nouveau code doit avoir au moins 4 caractères","error");
   if(nouveau!==confirme) return showToast("Les deux codes ne correspondent pas","error");
@@ -1432,7 +1632,9 @@ async function sauvegarderPIN(){
     });
     if(!r.ok) throw new Error(await r.text());
     // Sauvegarde locale
-    localStorage.setItem("va_admin_pin",nouveau);
+    const nouveauHash = await hashPin(nouveau);
+    localStorage.setItem("va_admin_pin", nouveauHash);
+    logAdminAction("CHANGEMENT_PIN","Code PIN admin modifié");
     closeModal();
     showToast("✓ Code PIN modifié pour tous les appareils");
   }catch(e){showToast("Erreur : "+e.message,"error");}
@@ -1522,216 +1724,353 @@ async function supprimerProduit(id){
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// MODULE CHAT
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE CHAT ÉQUIPE — VerdApp CI
 // ════════════════════════════════════════════════════════════════════════════
 let chatMessages = [];
 let chatAuteur = localStorage.getItem("va_chat_nom") || "";
 let chatPolling = null;
-let chatDernierMsg = null;
+let chatLastId = null;
+let chatImageFile = null;
+let chatReplyTo = null; // {id, auteur, contenu}
+let chatMentionMode = false;
+let chatTypingTimer = null;
 
-const SB_STORAGE = `${SB_URL}/storage/v1/object/chat-images`;
-const SB_STORAGE_PUBLIC = `${SB_URL}/storage/v1/object/public/chat-images`;
+const SB_STORAGE = SB_URL+"/storage/v1/object/chat-images";
+const SB_STORAGE_PUBLIC = SB_URL+"/storage/v1/object/public/chat-images";
 
-async function sbGetMessages() {
-  const r = await fetch(`${SB_URL}/rest/v1/messages?order=created_at.asc&limit=100`, { headers: HDR });
+// ── Supabase helpers chat ─────────────────────────────────────────────────────
+async function sbGetMessages(since) {
+  let url = SB_URL+"/rest/v1/messages?order=created_at.asc&limit=200";
+  if (since) url += "&created_at=gt."+encodeURIComponent(since);
+  const r = await fetch(url, { headers: HDR });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 
-async function sbSendMessage(auteur, contenu, image_url = null) {
-  const payload = { id: genId(), auteur, contenu: contenu || null, image_url: image_url || null };
-  const r = await fetch(`${SB_URL}/rest/v1/messages`, { method: "POST", headers: HDR, body: JSON.stringify(payload) });
+async function sbSendMessage(payload) {
+  const r = await fetch(SB_URL+"/rest/v1/messages", { method:"POST", headers:HDR, body:JSON.stringify(payload) });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 
 async function sbDeleteMessage(id) {
-  const r = await fetch(`${SB_URL}/rest/v1/messages?id=eq.${id}`, { method: "DELETE", headers: HDR });
+  const r = await fetch(SB_URL+"/rest/v1/messages?id=eq."+id, { method:"DELETE", headers:HDR });
+  if (!r.ok) throw new Error(await r.text());
+}
+
+async function sbReactMessage(id, reactions) {
+  const r = await fetch(SB_URL+"/rest/v1/messages?id=eq."+id, { method:"PATCH", headers:HDR, body:JSON.stringify({reactions}) });
   if (!r.ok) throw new Error(await r.text());
 }
 
 async function uploadChatImage(file) {
-  const ext = file.name.split(".").pop();
-  const path = `${genId()}.${ext}`;
-  const h = { "apikey": SB_KEY, "Authorization": "Bearer " + SB_KEY, "Content-Type": file.type };
-  const r = await fetch(`${SB_STORAGE}/${path}`, { method: "POST", headers: h, body: file });
+  const ext = file.name.split(".").pop().toLowerCase();
+  const path = genId()+"."+ext;
+  const h = { "apikey":SB_KEY, "Authorization":"Bearer "+SB_KEY, "Content-Type":file.type };
+  const r = await fetch(SB_STORAGE+"/"+path, { method:"POST", headers:h, body:file });
   if (!r.ok) throw new Error(await r.text());
-  return `${SB_STORAGE_PUBLIC}/${path}`;
+  return SB_STORAGE_PUBLIC+"/"+path;
 }
 
-function updateChatBadge(newCount) {
-  const show = newCount > 0 && currentTab !== "chat";
-  ["chatDot", "chatDotSide"].forEach(id => {
+// ── Badge notification chat ───────────────────────────────────────────────────
+let chatUnreadCount = 0;
+function updateChatBadge(n) {
+  const show = n > 0 && currentTab !== "chat";
+  ["chatDot","chatDotSide"].forEach(id => {
     const el = document.getElementById(id);
-    if (el) el.style.display = show ? "inline-block" : "none";
+    if (el) {
+      el.style.display = show ? "inline-block" : "none";
+      if (show && n > 0) el.textContent = n > 9 ? "9+" : n;
+    }
   });
 }
 
+// ── INIT CHAT ─────────────────────────────────────────────────────────────────
 function initChat() {
-  // Reset badge
+  chatUnreadCount = 0;
   updateChatBadge(0);
-
-  // Build chat UI
   const page = document.getElementById("page-chat");
+
+  if (!chatAuteur) {
+    page.innerHTML = `
+      <div class="section-title">💬 Chat équipe</div>
+      <div class="card" style="max-width:400px;margin:40px auto;">
+        <div style="text-align:center;margin-bottom:20px;">
+          <div style="font-size:48px;margin-bottom:8px;">👋</div>
+          <div style="font-weight:800;font-size:16px;color:#0f1f16;">Rejoindre le chat équipe</div>
+          <div style="font-size:12px;color:#6b8c7a;margin-top:4px;">Entre ton prénom pour commencer</div>
+        </div>
+        <input type="text" id="chatNomInput" placeholder="Ton prénom ou pseudo…"
+          style="margin-bottom:12px;" onkeydown="if(event.key==='Enter')setChatNom()"/>
+        <button class="btn btn-green" onclick="setChatNom()" style="width:100%;">Rejoindre →</button>
+      </div>`;
+    return;
+  }
+
   page.innerHTML = `
-    <div class="section-title">💬 Chat équipe</div>
+    <div id="chatWrap" style="display:flex;flex-direction:column;height:calc(100vh - 160px);min-height:400px;">
 
-    <!-- Nom utilisateur -->
-    <div id="chatNomZone" class="card" style="margin-bottom:12px;display:${chatAuteur ? "none" : "block"};">
-      <div class="label" style="margin-bottom:8px;">Ton prénom / pseudo</div>
-      <div style="display:flex;gap:8px;">
-        <input type="text" id="chatNomInput" placeholder="Ex: Koné, Admin, Koffi..." style="flex:1;"/>
-        <button onclick="setChatNom()" class="btn btn-green" style="width:auto;padding:9px 16px;">OK</button>
-      </div>
-    </div>
-
-    <!-- Zone messages -->
-    <div class="card" style="padding:0;overflow:hidden;margin-bottom:8px;">
-      <div style="background:linear-gradient(135deg,#0d2e15,#1a1a2e);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;">
-        <div style="color:#fff;font-weight:700;font-size:13px;">💬 Messages de l'équipe</div>
-        <button onclick="loadMessages()" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;padding:4px 10px;border-radius:8px;cursor:pointer;font-size:11px;font-family:inherit;">↻ Rafraîchir</button>
-      </div>
-      <div id="chatMessages" style="height:380px;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;background:#f8fafb;">
-        <div style="text-align:center;color:#6b8c7a;font-size:12px;padding:20px;">Chargement...</div>
-      </div>
-    </div>
-
-    <!-- Zone saisie -->
-    <div id="chatSaisie" style="display:${chatAuteur ? "block" : "none"};">
-      <!-- Prévisualisation image -->
-      <div id="chatImgPreview" style="display:none;margin-bottom:8px;position:relative;">
-        <img id="chatImgPreviewSrc" style="max-height:120px;border-radius:10px;border:1.5px solid var(--gray-200);"/>
-        <button onclick="clearChatImg()" style="position:absolute;top:4px;right:4px;background:#dc2626;color:#fff;border:none;border-radius:999px;width:22px;height:22px;cursor:pointer;font-size:12px;line-height:1;display:flex;align-items:center;justify-content:center;">×</button>
+      <!-- Header chat -->
+      <div style="background:linear-gradient(135deg,#0d3d1a,#1a5c2e);padding:12px 16px;border-radius:14px 14px 0 0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:36px;height:36px;background:#f47820;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:900;color:#fff;">
+            ${chatAuteur.charAt(0).toUpperCase()}
+          </div>
+          <div>
+            <div style="color:#fff;font-weight:700;font-size:13px;">Chat VerdApp CI</div>
+            <div style="color:rgba(255,255,255,.55);font-size:10px;" id="chatStatus">● En ligne</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button onclick="chatSearchMode()" title="Rechercher" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);color:#fff;border-radius:10px;padding:6px 10px;cursor:pointer;font-size:14px;">🔍</button>
+          <button onclick="chatShowMembers()" title="Membres" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);color:#fff;border-radius:10px;padding:6px 10px;cursor:pointer;font-size:14px;">👥</button>
+          <button onclick="loadMessages(true)" title="Rafraîchir" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);color:#fff;border-radius:10px;padding:6px 10px;cursor:pointer;font-size:14px;">↻</button>
+        </div>
       </div>
 
-      <div class="card" style="padding:10px;">
+      <!-- Barre de recherche (cachée par défaut) -->
+      <div id="chatSearchBar" style="display:none;background:#fff;border:1.5px solid #e2ece7;border-top:none;padding:8px 12px;">
+        <input type="text" id="chatSearchInput" placeholder="Rechercher dans les messages…"
+          oninput="chatSearch(this.value)" style="margin:0;font-size:13px;"/>
+      </div>
+
+      <!-- Reply preview -->
+      <div id="chatReplyPreview" style="display:none;background:#f0fdf4;border-left:3px solid #22a356;padding:8px 12px;font-size:11px;color:#3d5c48;display:flex;justify-content:space-between;align-items:center;">
+        <span id="chatReplyText"></span>
+        <button onclick="cancelReply()" style="background:none;border:none;cursor:pointer;color:#dc2626;font-size:14px;padding:0 4px;">✕</button>
+      </div>
+
+      <!-- Zone messages -->
+      <div id="chatMessages" style="flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:4px;background:#f5f7f5;scroll-behavior:smooth;">
+        <div style="text-align:center;color:#6b8c7a;font-size:12px;padding:20px;">Chargement…</div>
+      </div>
+
+      <!-- Indicateur "en train d'écrire" -->
+      <div id="chatTypingIndicator" style="display:none;padding:4px 16px;font-size:11px;color:#6b8c7a;background:#f5f7f5;font-style:italic;"></div>
+
+      <!-- Zone saisie -->
+      <div style="background:#fff;border:1.5px solid #e2ece7;border-radius:0 0 14px 14px;padding:10px 12px;flex-shrink:0;">
+        <!-- Prévisualisation image -->
+        <div id="chatImgPreview" style="display:none;margin-bottom:8px;position:relative;display:none;">
+          <img id="chatImgPreviewSrc" style="max-height:80px;border-radius:8px;border:1.5px solid #e2ece7;"/>
+          <button onclick="clearChatImg()" style="position:absolute;top:2px;right:2px;background:#dc2626;color:#fff;border:none;border-radius:999px;width:20px;height:20px;cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center;">✕</button>
+        </div>
+
+        <!-- Raccourcis rapides -->
+        <div id="chatQuickBtns" style="display:flex;gap:6px;margin-bottom:8px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none;">
+          <button onclick="insertQuick('✅ Reçu')" class="chat-quick">✅ Reçu</button>
+          <button onclick="insertQuick('📦 En route')" class="chat-quick">📦 En route</button>
+          <button onclick="insertQuick('⚠ Problème stock')" class="chat-quick">⚠ Stock</button>
+          <button onclick="insertQuick('💰 Paiement effectué')" class="chat-quick">💰 Payé</button>
+          <button onclick="insertQuick('📍 Arrivé au marché')" class="chat-quick">📍 Marché</button>
+          <button onclick="insertQuick('🚚 Départ terrain')" class="chat-quick">🚚 Départ</button>
+        </div>
+
         <div style="display:flex;gap:8px;align-items:flex-end;">
-          <!-- Bouton image -->
-          <label for="chatImgInput" style="cursor:pointer;background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;padding:9px 10px;border-radius:10px;font-size:16px;flex-shrink:0;" title="Envoyer une image">📷</label>
+          <label for="chatImgInput" style="cursor:pointer;background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;padding:9px 10px;border-radius:10px;font-size:16px;flex-shrink:0;" title="Photo">📷</label>
           <input type="file" id="chatImgInput" accept="image/*" style="display:none;" onchange="previewChatImg(this)"/>
 
-          <!-- Bouton WhatsApp -->
-          <button onclick="openWhatsApp()" style="background:#25d366;border:none;color:#fff;padding:9px 10px;border-radius:10px;font-size:16px;cursor:pointer;flex-shrink:0;" title="Ouvrir WhatsApp équipe">📱</button>
+          <button onclick="toggleEmojiPanel()" style="background:#f8faf8;border:1.5px solid #e2ece7;color:#3d5c48;padding:9px 10px;border-radius:10px;font-size:16px;cursor:pointer;flex-shrink:0;" title="Emojis">😊</button>
 
-          <!-- Texte -->
-          <textarea id="chatTexte" rows="1" placeholder="Écrire un message..." style="flex:1;resize:none;min-height:38px;max-height:100px;padding:8px 12px;border-radius:10px;border:1.5px solid var(--gray-200);font-family:inherit;font-size:13px;line-height:1.4;" onkeydown="chatKeydown(event)" oninput="autoResize(this)"></textarea>
+          <textarea id="chatTexte" rows="1" placeholder="Message… (@nom pour mentionner)"
+            style="flex:1;resize:none;min-height:38px;max-height:120px;padding:8px 12px;border-radius:10px;border:1.5px solid #e2ece7;font-family:inherit;font-size:13px;line-height:1.5;color:#0f1f16;"
+            onkeydown="chatKeydown(event)" oninput="chatOnInput(this)"></textarea>
 
-          <!-- Envoyer -->
-          <button onclick="envoyerMessage()" id="chatSendBtn" style="background:linear-gradient(135deg,#1a5c2a,#2d8c3e);border:none;color:#fff;padding:9px 14px;border-radius:10px;cursor:pointer;font-size:16px;flex-shrink:0;box-shadow:0 2px 8px rgba(45,140,62,.3);">➤</button>
+          <button onclick="envoyerMessage()" id="chatSendBtn"
+            style="background:linear-gradient(135deg,#0d3d1a,#166534);border:none;color:#fff;padding:9px 14px;border-radius:10px;cursor:pointer;font-size:16px;flex-shrink:0;box-shadow:0 2px 8px rgba(13,61,26,.3);transition:transform .15s;">➤</button>
         </div>
-        <div style="font-size:10px;color:#6b8c7a;margin-top:6px;padding-left:2px;">
-          Connecté en tant que <strong style="color:#15803d;">${chatAuteur}</strong> ·
-          <span onclick="changerNom()" style="cursor:pointer;color:#0369a1;text-decoration:underline;">Changer</span>
+
+        <!-- Panneau emoji (caché) -->
+        <div id="emojiPanel" style="display:none;padding-top:8px;flex-wrap:wrap;gap:4px;max-height:80px;overflow-y:auto;">
+          ${["😊","👍","✅","❌","⚠","📦","🚚","💰","📍","🍅","🌿","🔥","⭐","👏","🙏","😅","😬","💪","📞","⏰"].map(e=>
+            '<button onclick="insertEmoji(\''+e+'\')" style="background:none;border:none;cursor:pointer;font-size:20px;padding:2px 4px;border-radius:6px;transition:background .15s;" onmouseover="this.style.background=\'#f0fdf4\'" onmouseout="this.style.background=\'none\'">'+e+'</button>'
+          ).join("")}
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;">
+          <span style="font-size:10px;color:#6b8c7a;">
+            <span style="font-weight:700;color:#15803d;">${chatAuteur}</span> ·
+            <span onclick="changerNom()" style="cursor:pointer;color:#0369a1;text-decoration:underline;">changer</span>
+          </span>
+          <button onclick="openWhatsApp()" style="background:none;border:none;cursor:pointer;font-size:11px;color:#25d366;font-weight:700;" title="Groupe WhatsApp">📱 WhatsApp</button>
         </div>
       </div>
     </div>
 
-    <!-- Config WhatsApp -->
-    <div id="waConfigZone" class="card" style="margin-top:8px;background:#f0fdf4;border-color:#bbf7d0;">
-      <div class="label" style="margin-bottom:6px;color:#15803d;">📱 Lien WhatsApp équipe</div>
-      <div style="font-size:11px;color:#3d5c48;margin-bottom:8px;">Entre le lien ou numéro de ton groupe WhatsApp pour un accès rapide.</div>
-      <div style="display:flex;gap:8px;">
-        <input type="text" id="waLinkInput" value="${localStorage.getItem("va_wa_link") || ""}" placeholder="https://chat.whatsapp.com/... ou +2250700000000"/>
-        <button onclick="saveWaLink()" class="btn btn-green" style="width:auto;padding:9px 14px;white-space:nowrap;">Sauver</button>
+    <!-- Config WA (collapsible) -->
+    <div style="margin-top:8px;" id="waConfigZone">
+      <button onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none';this.textContent=this.textContent.includes('▼')?'▲ Config WhatsApp':'▼ Config WhatsApp';"
+        style="background:none;border:none;font-size:11px;color:#6b8c7a;cursor:pointer;font-family:inherit;font-weight:600;">▼ Config WhatsApp</button>
+      <div style="display:none;background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:12px;padding:12px;margin-top:6px;">
+        <div style="font-size:11px;color:#3d5c48;margin-bottom:8px;">Lien groupe ou numéro WhatsApp Business</div>
+        <div style="display:flex;gap:8px;">
+          <input type="text" id="waLinkInput" value="${localStorage.getItem("va_wa_link")||""}" placeholder="https://chat.whatsapp.com/…" style="flex:1;font-size:12px;"/>
+          <button onclick="saveWaLink()" class="btn btn-green" style="width:auto;padding:8px 12px;font-size:12px;">Sauver</button>
+        </div>
       </div>
-    </div>
-  `;
+    </div>`;
 
-  loadMessages();
+  // CSS rapide pour boutons quick
+  if (!document.getElementById("chatQuickCSS")) {
+    const s = document.createElement("style");
+    s.id = "chatQuickCSS";
+    s.textContent = `.chat-quick{background:#f0f5f1;border:1.5px solid #d4edda;color:#2a3d32;border-radius:999px;padding:5px 12px;cursor:pointer;font-size:11px;font-weight:600;white-space:nowrap;font-family:inherit;transition:all .15s;flex-shrink:0;}.chat-quick:hover{background:#0d3d1a;color:#fff;border-color:#0d3d1a;}.chat-msg-hover:hover{opacity:.85;}.reaction-btn{background:none;border:none;cursor:pointer;font-size:16px;padding:2px 4px;border-radius:6px;transition:background .15s;}.reaction-btn:hover{background:#f0fdf4;}`;
+    document.head.appendChild(s);
+  }
 
-  // Polling toutes les 10 secondes
+  loadMessages(true);
+
   if (chatPolling) clearInterval(chatPolling);
   chatPolling = setInterval(() => {
-    if (currentTab === "chat") loadMessages();
-  }, 10000);
+    if (currentTab === "chat") loadMessages(false);
+  }, 8000);
 }
 
-async function loadMessages() {
+// ── Chargement messages ───────────────────────────────────────────────────────
+async function loadMessages(full) {
   try {
-    const msgs = await sbGetMessages();
-    chatMessages = msgs;
+    const since = (!full && chatLastId && chatMessages.length) ? chatMessages[chatMessages.length-1].created_at : null;
+    const msgs = await sbGetMessages(since);
+
+    if (full) {
+      chatMessages = msgs;
+    } else {
+      if (msgs.length) {
+        const newMsgs = msgs.filter(m => !chatMessages.find(x => x.id === m.id));
+        if (newMsgs.length) {
+          chatMessages.push(...newMsgs);
+          // Badge si pas sur le chat
+          if (currentTab !== "chat") {
+            chatUnreadCount += newMsgs.filter(m => m.auteur !== chatAuteur).length;
+            updateChatBadge(chatUnreadCount);
+          }
+        } else return; // rien de nouveau
+      } else return;
+    }
+
     renderMessages();
   } catch(e) {
     const el = document.getElementById("chatMessages");
-    if (el) el.innerHTML = `<div style="text-align:center;color:#dc2626;font-size:12px;padding:20px;">Erreur : ${e.message}</div>`;
+    if (el) el.innerHTML = '<div style="text-align:center;color:#dc2626;font-size:12px;padding:20px;">Erreur : '+e.message+'</div>';
   }
 }
 
-function renderMessages() {
+// ── Rendu messages ────────────────────────────────────────────────────────────
+function renderMessages(filterText) {
   const el = document.getElementById("chatMessages");
   if (!el) return;
-  if (!chatMessages.length) {
-    el.innerHTML = `<div style="text-align:center;color:#6b8c7a;font-size:12px;padding:30px;">Aucun message. Sois le premier à écrire !</div>`;
+
+  const msgs = filterText
+    ? chatMessages.filter(m => (m.contenu||"").toLowerCase().includes(filterText.toLowerCase()) || (m.auteur||"").toLowerCase().includes(filterText.toLowerCase()))
+    : chatMessages;
+
+  if (!msgs.length) {
+    el.innerHTML = filterText
+      ? '<div style="text-align:center;color:#6b8c7a;font-size:12px;padding:30px;">Aucun résultat pour "'+filterText+'"</div>'
+      : '<div style="text-align:center;padding:40px 20px;"><div style="font-size:40px;margin-bottom:12px;">💬</div><div style="color:#6b8c7a;font-size:13px;">Aucun message.<br>Sois le premier à écrire !</div></div>';
     return;
   }
 
   let html = "";
   let lastDate = "";
+  let lastAuteur = "";
 
-  chatMessages.forEach(m => {
+  // Regrouper les membres actifs
+  const membres = [...new Set(chatMessages.map(m => m.auteur))];
+
+  msgs.forEach(m => {
     const isMe = m.auteur === chatAuteur;
     const d = new Date(m.created_at);
-    const dateStr = d.toLocaleDateString("fr-CI", { day: "numeric", month: "short" });
-    const timeStr = d.toLocaleTimeString("fr-CI", { hour: "2-digit", minute: "2-digit" });
+    const dateStr = d.toLocaleDateString("fr-CI",{day:"numeric",month:"long"});
+    const timeStr = d.toLocaleTimeString("fr-CI",{hour:"2-digit",minute:"2-digit"});
+    const isGrouped = lastAuteur === m.auteur && lastDate === dateStr;
 
     // Séparateur de date
     if (dateStr !== lastDate) {
-      html += `<div style="text-align:center;margin:6px 0;">
-        <span style="background:#e2ece7;color:#3d5c48;font-size:10px;font-weight:700;padding:3px 10px;border-radius:999px;">${dateStr}</span>
-      </div>`;
+      const isToday = dateStr === new Date().toLocaleDateString("fr-CI",{day:"numeric",month:"long"});
+      html += '<div style="text-align:center;margin:12px 0 8px;"><span style="background:#e2ece7;color:#3d5c48;font-size:10px;font-weight:700;padding:4px 14px;border-radius:999px;">'+(isToday?"Aujourd'hui":dateStr)+'</span></div>';
       lastDate = dateStr;
     }
+    lastAuteur = m.auteur;
 
-    const align = isMe ? "flex-end" : "flex-start";
-    const bg = isMe ? "linear-gradient(135deg,var(--green-700),var(--green-600))" : "#ffffff";
-    const txtColor = isMe ? "#fff" : "#1a2e22";
-    const nameColor = isMe ? "rgba(255,255,255,.7)" : "#6b8c7a";
-    const shadow = isMe ? "0 2px 8px rgba(22,101,52,.25)" : "0 1px 4px rgba(0,0,0,.08)";
-    const deleteBtn = (isMe || isAdmin) ? `<button onclick="supprimerMsg('${m.id}')" style="background:none;border:none;cursor:pointer;font-size:11px;opacity:.5;margin-left:4px;padding:0;" title="Supprimer">🗑</button>` : "";
+    const reactions = m.reactions ? JSON.parse(m.reactions) : {};
+    const reactHtml = Object.entries(reactions).filter(([,v])=>v>0).map(([k,v])=>
+      '<button onclick="toggleReaction(\''+m.id+'\',\''+k+'\')" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:999px;padding:2px 8px;cursor:pointer;font-size:12px;margin-right:3px;font-family:inherit;">'+k+' '+v+'</button>'
+    ).join("");
 
-    html += `<div style="display:flex;justify-content:${align};margin-bottom:2px;">
-      <div style="max-width:75%;min-width:80px;">
-        ${!isMe ? `<div style="font-size:10px;font-weight:700;color:#15803d;margin-bottom:3px;padding-left:4px;">${m.auteur}</div>` : ""}
-        <div style="background:${bg};border-radius:${isMe ? "16px 4px 16px 16px" : "4px 16px 16px 16px"};padding:${m.image_url && !m.contenu ? "4px" : "8px 12px"};box-shadow:${shadow};">
-          ${m.image_url ? `<img src="${m.image_url}" style="max-width:200px;max-height:200px;border-radius:10px;display:block;cursor:pointer;" onclick="window.open('${m.image_url}','_blank')"/>` : ""}
-          ${m.contenu ? `<div style="color:${txtColor};font-size:13px;line-height:1.4;${m.image_url ? "margin-top:6px;" : ""}">${m.contenu}</div>` : ""}
-          <div style="display:flex;align-items:center;justify-content:flex-end;gap:2px;margin-top:3px;">
-            <span style="font-size:9px;color:${nameColor};">${timeStr}</span>
-            ${deleteBtn}
-          </div>
-        </div>
-      </div>
-    </div>`;
+    const replyHtml = m.reply_to ? (()=>{
+      const orig = chatMessages.find(x=>x.id===m.reply_to);
+      if (!orig) return "";
+      return '<div style="background:rgba(0,0,0,.06);border-left:2px solid rgba(0,0,0,.2);border-radius:6px;padding:4px 8px;margin-bottom:4px;font-size:10px;opacity:.75;cursor:pointer;" onclick="scrollToMsg(\''+orig.id+'\')">↩ '+orig.auteur+' : '+(orig.contenu||"[image]").slice(0,50)+'</div>';
+    })() : "";
+
+    // Avatar couleur par auteur
+    const avatarColors = ["#f47820","#0369a1","#166534","#7c3aed","#dc2626","#0891b2","#65a30d"];
+    const avatarColor = avatarColors[membres.indexOf(m.auteur) % avatarColors.length];
+
+    const deleteBtn = (isMe || isAdmin) ? '<button onclick="supprimerMsg(\''+m.id+'\')" style="background:none;border:none;cursor:pointer;font-size:10px;color:#dc2626;opacity:.5;padding:0 2px;margin-left:2px;" title="Supprimer">🗑</button>' : "";
+    const replyBtn = '<button onclick="setReply(\''+m.id+'\',\''+escAttr(m.auteur)+'\',\''+escAttr((m.contenu||"[image]").slice(0,40))+'\')" style="background:none;border:none;cursor:pointer;font-size:10px;color:#0369a1;opacity:.6;padding:0 2px;" title="Répondre">↩</button>';
+    const reactBtn = '<button onclick="showReactionPicker(\''+m.id+'\')" style="background:none;border:none;cursor:pointer;font-size:10px;opacity:.5;padding:0 2px;" title="Réagir">😊</button>';
+
+    const isMention = !isMe && m.contenu && m.contenu.includes("@"+chatAuteur);
+    const bg = isMe ? "linear-gradient(135deg,#0d3d1a,#166534)" : isMention ? "#fffbeb" : "#fff";
+    const txtCol = isMe ? "#fff" : "#0f1f16";
+    const shadow = isMe ? "0 2px 8px rgba(13,61,26,.2)" : isMention ? "0 2px 8px rgba(244,120,32,.1)" : "0 1px 4px rgba(0,0,0,.06)";
+    const mentionBorder = isMention ? "border-left:3px solid #f47820;" : "";
+
+    html += '<div id="msg-'+m.id+'" style="display:flex;justify-content:'+(isMe?"flex-end":"flex-start")+';margin-bottom:'+(isGrouped?"2px":"8px")+';">';
+
+    // Avatar (côté gauche, seulement si pas groupé)
+    if (!isMe) {
+      html += '<div style="width:30px;margin-right:8px;flex-shrink:0;margin-top:auto;">';
+      if (!isGrouped) {
+        html += '<div style="width:30px;height:30px;background:'+avatarColor+';border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:900;color:#fff;">'+m.auteur.charAt(0).toUpperCase()+'</div>';
+      }
+      html += '</div>';
+    }
+
+    html += '<div style="max-width:78%;min-width:60px;">';
+    if (!isMe && !isGrouped) html += '<div style="font-size:10px;font-weight:700;color:'+avatarColor+';margin-bottom:3px;padding-left:2px;">'+m.auteur+'</div>';
+
+    html += '<div style="background:'+bg+';border-radius:'+(isMe?"14px 2px 14px 14px":"2px 14px 14px 14px")+';padding:'+(m.image_url&&!m.contenu?"4px":"9px 12px")+';box-shadow:'+shadow+';'+mentionBorder+'">';
+    if (replyHtml) html += replyHtml;
+    if (m.image_url) html += '<img src="'+m.image_url+'" style="max-width:220px;max-height:220px;border-radius:8px;display:block;cursor:pointer;" onclick="window.open(\''+m.image_url+'\',\'_blank\')"/>';
+    if (m.contenu) {
+      // Mettre en évidence les mentions
+      const highlighted = m.contenu.replace(/@(\w+)/g, '<span style="background:rgba(244,120,32,.15);color:'+( isMe?"#fbbf24":"#c2410c")+';font-weight:700;border-radius:4px;padding:0 3px;">@$1</span>');
+      html += '<div style="color:'+txtCol+';font-size:13px;line-height:1.5;'+(m.image_url?"margin-top:6px;":"")+'word-break:break-word;">'+highlighted+'</div>';
+    }
+    html += '<div style="display:flex;align-items:center;gap:2px;margin-top:3px;justify-content:flex-end;">';
+    html += '<span style="font-size:9px;color:'+(isMe?"rgba(255,255,255,.55)":"#9cb8a8")+';margin-right:2px;">'+timeStr+'</span>';
+    html += reactBtn+replyBtn+deleteBtn;
+    html += '</div></div>';
+
+    if (reactHtml) html += '<div style="margin-top:4px;padding:0 4px;">'+reactHtml+'</div>';
+    html += '</div></div>';
   });
 
+  const wasAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   el.innerHTML = html;
-  el.scrollTop = el.scrollHeight;
+  if (wasAtBottom || filterText === undefined) {
+    requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+  }
 }
 
-let chatImageFile = null;
-
-function previewChatImg(input) {
-  const file = input.files[0];
-  if (!file) return;
-  chatImageFile = file;
-  const url = URL.createObjectURL(file);
-  document.getElementById("chatImgPreviewSrc").src = url;
-  document.getElementById("chatImgPreview").style.display = "block";
+function escAttr(s) {
+  return String(s||"").replace(/'/g,"&#x27;").replace(/"/g,"&quot;");
 }
 
-function clearChatImg() {
-  chatImageFile = null;
-  document.getElementById("chatImgInput").value = "";
-  document.getElementById("chatImgPreview").style.display = "none";
-}
-
+// ── Envoi message ─────────────────────────────────────────────────────────────
 async function envoyerMessage() {
-  const texte = document.getElementById("chatTexte")?.value.trim();
+  const ta = document.getElementById("chatTexte");
+  const texte = ta?.value.trim();
   if (!texte && !chatImageFile) return;
-  if (!chatAuteur) return showToast("Entre ton prénom d'abord", "error");
+  if (!chatAuteur) return showToast("Entre ton prénom d'abord","error");
 
   const btn = document.getElementById("chatSendBtn");
-  btn.disabled = true; btn.textContent = "...";
+  btn.disabled = true;
+  btn.style.transform = "scale(.9)";
 
   try {
     let imageUrl = null;
@@ -1739,16 +2078,177 @@ async function envoyerMessage() {
       imageUrl = await uploadChatImage(chatImageFile);
       clearChatImg();
     }
-    const [msg] = await sbSendMessage(chatAuteur, texte, imageUrl);
-    chatMessages.push(msg);
-    document.getElementById("chatTexte").value = "";
-    document.getElementById("chatTexte").style.height = "38px";
+    const payload = {
+      id: genId(),
+      auteur: chatAuteur,
+      contenu: texte || null,
+      image_url: imageUrl || null,
+      reply_to: chatReplyTo ? chatReplyTo.id : null,
+      reactions: null
+    };
+    const res = await sbSendMessage(payload);
+    const msg = Array.isArray(res) ? res[0] : res;
+    if (msg) chatMessages.push(msg);
+    ta.value = "";
+    ta.style.height = "38px";
+    cancelReply();
     renderMessages();
-  } catch(e) { showToast("Erreur envoi : " + e.message, "error"); }
+  } catch(e) { showToast("Erreur : "+e.message,"error"); }
 
-  btn.disabled = false; btn.textContent = "➤";
+  btn.disabled = false;
+  btn.style.transform = "";
 }
 
+// ── Réponse à un message ──────────────────────────────────────────────────────
+function setReply(id, auteur, contenu) {
+  chatReplyTo = {id, auteur, contenu};
+  const preview = document.getElementById("chatReplyPreview");
+  if (preview) {
+    preview.style.display = "flex";
+    document.getElementById("chatReplyText").textContent = "↩ "+auteur+" : "+contenu;
+    document.getElementById("chatTexte")?.focus();
+  }
+}
+function cancelReply() {
+  chatReplyTo = null;
+  const el = document.getElementById("chatReplyPreview");
+  if (el) el.style.display = "none";
+}
+
+// ── Réactions emoji ───────────────────────────────────────────────────────────
+function showReactionPicker(msgId) {
+  const emojis = ["👍","❤️","😂","😮","😢","🙏","✅","🔥"];
+  showModal(
+    '<div style="font-size:14px;font-weight:700;color:#0f1f16;margin-bottom:12px;">Réagir au message</div>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;">'+
+    emojis.map(e=>'<button onclick="toggleReaction(\''+msgId+'\',\''+e+'\');closeModal();" style="font-size:28px;background:#f0f5f1;border:1.5px solid #d4edda;border-radius:12px;padding:8px 14px;cursor:pointer;transition:transform .15s;" onmouseover="this.style.transform=\'scale(1.2)\'" onmouseout="this.style.transform=\'\'">'+e+'</button>').join("")+
+    '</div>'
+  );
+}
+
+async function toggleReaction(msgId, emoji) {
+  const msg = chatMessages.find(m => m.id === msgId);
+  if (!msg) return;
+  const reactions = msg.reactions ? JSON.parse(msg.reactions) : {};
+  reactions[emoji] = (reactions[emoji] || 0) + 1;
+  msg.reactions = JSON.stringify(reactions);
+  renderMessages();
+  try { await sbReactMessage(msgId, msg.reactions); } catch(e) { /* pas bloquant */ }
+}
+
+// ── Scroll vers message ───────────────────────────────────────────────────────
+function scrollToMsg(id) {
+  const el = document.getElementById("msg-"+id);
+  if (el) { el.scrollIntoView({behavior:"smooth",block:"center"}); el.style.background="#fffbeb"; setTimeout(()=>{el.style.background="";},2000); }
+}
+
+// ── Recherche ─────────────────────────────────────────────────────────────────
+function chatSearchMode() {
+  const bar = document.getElementById("chatSearchBar");
+  if (!bar) return;
+  const visible = bar.style.display !== "none";
+  bar.style.display = visible ? "none" : "block";
+  if (!visible) document.getElementById("chatSearchInput")?.focus();
+  else { renderMessages(); }
+}
+function chatSearch(val) {
+  renderMessages(val || undefined);
+}
+
+// ── Membres actifs ────────────────────────────────────────────────────────────
+function chatShowMembers() {
+  const membres = [...new Set(chatMessages.map(m => m.auteur))];
+  const avatarColors = ["#f47820","#0369a1","#166534","#7c3aed","#dc2626","#0891b2","#65a30d"];
+  showModal(
+    '<div style="font-size:17px;font-weight:800;color:#0f1f16;margin-bottom:16px;">👥 Membres actifs ('+membres.length+')</div>'+
+    members_html(membres, avatarColors)+
+    '<button onclick="closeModal()" style="width:100%;margin-top:16px;padding:12px;background:#f0f5f1;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Fermer</button>'
+  );
+}
+function members_html(membres, colors) {
+  return '<div style="display:flex;flex-direction:column;gap:8px;">'+
+    membres.map((m,i) => {
+      const count = chatMessages.filter(x=>x.auteur===m).length;
+      const last = chatMessages.filter(x=>x.auteur===m).pop();
+      const lastTime = last ? new Date(last.created_at).toLocaleDateString("fr-CI",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}) : "";
+      const isCurrentUser = m === chatAuteur;
+      return '<div style="display:flex;align-items:center;gap:12px;padding:10px;background:#f8faf8;border-radius:12px;">'+
+        '<div style="width:40px;height:40px;background:'+colors[i%colors.length]+';border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:900;color:#fff;flex-shrink:0;">'+m.charAt(0).toUpperCase()+'</div>'+
+        '<div style="flex:1;"><div style="font-weight:700;color:#0f1f16;font-size:13px;">'+m+(isCurrentUser?' <span style="font-size:10px;background:#f0fdf4;color:#166534;padding:2px 8px;border-radius:999px;font-weight:700;">Vous</span>':'')+
+        '</div><div style="font-size:11px;color:#6b8c7a;">'+count+' message'+(count>1?'s':'')+(lastTime?' · '+lastTime:'')+'</div></div></div>';
+    }).join('')+
+  '</div>';
+}
+
+// ── Emoji panel ───────────────────────────────────────────────────────────────
+function toggleEmojiPanel() {
+  const p = document.getElementById("emojiPanel");
+  if (!p) return;
+  p.style.display = p.style.display === "none" ? "flex" : "none";
+}
+function insertEmoji(e) {
+  const ta = document.getElementById("chatTexte");
+  if (!ta) return;
+  const pos = ta.selectionStart;
+  ta.value = ta.value.slice(0,pos)+e+ta.value.slice(pos);
+  ta.selectionStart = ta.selectionEnd = pos+e.length;
+  ta.focus();
+}
+
+// ── Raccourcis rapides ────────────────────────────────────────────────────────
+function insertQuick(text) {
+  const ta = document.getElementById("chatTexte");
+  if (!ta) return;
+  ta.value = text+" ";
+  ta.focus();
+  chatOnInput(ta);
+}
+
+// ── Saisie dynamique ──────────────────────────────────────────────────────────
+function chatOnInput(el) {
+  autoResize(el);
+  // Autocomplete mention @
+  const val = el.value;
+  const lastAt = val.lastIndexOf("@");
+  if (lastAt >= 0) {
+    const query = val.slice(lastAt+1).toLowerCase();
+    const membres = [...new Set(chatMessages.map(m=>m.auteur))].filter(m=>m!==chatAuteur);
+    const matches = membres.filter(m=>m.toLowerCase().startsWith(query));
+    showMentionSuggestions(matches, lastAt, el);
+  } else {
+    closeMentionSuggestions();
+  }
+}
+
+let mentionStart = -1;
+function showMentionSuggestions(matches, atPos, ta) {
+  let el = document.getElementById("mentionSuggestions");
+  if (!matches.length) { if (el) el.style.display="none"; return; }
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "mentionSuggestions";
+    el.style.cssText = "position:absolute;background:#fff;border:1.5px solid #e2ece7;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.1);z-index:999;max-height:120px;overflow-y:auto;";
+    document.getElementById("chatWrap")?.appendChild(el);
+  }
+  mentionStart = atPos;
+  el.innerHTML = matches.map(m=>'<div onclick="completeMention(\''+m+'\')" style="padding:8px 14px;cursor:pointer;font-size:13px;font-weight:600;color:#0f1f16;" onmouseover="this.style.background=\'#f0fdf4\'" onmouseout="this.style.background=\'\'">@'+m+'</div>').join("");
+  el.style.display = "block";
+}
+function closeMentionSuggestions() {
+  const el = document.getElementById("mentionSuggestions");
+  if (el) el.style.display="none";
+}
+function completeMention(nom) {
+  const ta = document.getElementById("chatTexte");
+  if (!ta || mentionStart < 0) return;
+  const before = ta.value.slice(0, mentionStart);
+  const after = ta.value.slice(ta.selectionStart);
+  ta.value = before+"@"+nom+" "+after;
+  ta.focus();
+  closeMentionSuggestions();
+}
+
+// ── Suppression message ───────────────────────────────────────────────────────
 async function supprimerMsg(id) {
   if (!confirm("Supprimer ce message ?")) return;
   try {
@@ -1756,45 +2256,58 @@ async function supprimerMsg(id) {
     chatMessages = chatMessages.filter(m => m.id !== id);
     renderMessages();
     showToast("Message supprimé");
-  } catch(e) { showToast("Erreur : " + e.message, "error"); }
+  } catch(e) { showToast("Erreur : "+e.message,"error"); }
 }
 
-function chatKeydown(e) {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); envoyerMessage(); }
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function previewChatImg(input) {
+  const file = input.files[0];
+  if (!file) return;
+  chatImageFile = file;
+  const url = URL.createObjectURL(file);
+  const prev = document.getElementById("chatImgPreview");
+  const img = document.getElementById("chatImgPreviewSrc");
+  if (prev && img) { img.src = url; prev.style.display = "block"; }
 }
-
-function autoResize(el) {
-  el.style.height = "38px";
-  el.style.height = Math.min(el.scrollHeight, 100) + "px";
+function clearChatImg() {
+  chatImageFile = null;
+  const inp = document.getElementById("chatImgInput");
+  const prev = document.getElementById("chatImgPreview");
+  if (inp) inp.value = "";
+  if (prev) prev.style.display = "none";
 }
-
 function setChatNom() {
   const val = document.getElementById("chatNomInput")?.value.trim();
-  if (!val) return showToast("Entre un prénom", "error");
+  if (!val) return showToast("Entre un prénom","error");
   chatAuteur = val;
   localStorage.setItem("va_chat_nom", val);
-  document.getElementById("chatNomZone").style.display = "none";
-  document.getElementById("chatSaisie").style.display = "block";
   initChat();
 }
-
 function changerNom() {
+  if (!confirm("Changer de prénom ? Tes anciens messages garderont l'ancien nom.")) return;
   chatAuteur = "";
   localStorage.removeItem("va_chat_nom");
+  if (chatPolling) { clearInterval(chatPolling); chatPolling = null; }
   initChat();
 }
-
+function chatKeydown(e) {
+  if (e.key==="Enter"&&!e.shiftKey) { e.preventDefault(); envoyerMessage(); }
+  if (e.key==="Escape") { cancelReply(); closeMentionSuggestions(); }
+}
+function autoResize(el) {
+  el.style.height = "38px";
+  el.style.height = Math.min(el.scrollHeight,120)+"px";
+}
 function saveWaLink() {
   const val = document.getElementById("waLinkInput")?.value.trim();
   localStorage.setItem("va_wa_link", val);
   showToast("✓ Lien WhatsApp sauvegardé");
 }
-
 function openWhatsApp() {
   const link = localStorage.getItem("va_wa_link");
-  if (!link) return showToast("Configure le lien WhatsApp d'abord", "error");
-  const url = link.startsWith("http") ? link : `https://wa.me/${link.replace(/\D/g, "")}`;
-  window.open(url, "_blank");
+  if (!link) return showToast("Configure le lien WhatsApp d'abord","error");
+  const url = link.startsWith("http") ? link : "https://wa.me/"+link.replace(/\D/g,"");
+  window.open(url,"_blank");
 }
 
 // ─── EXPORT CSV ──────────────────────────────────────────────────────────────
@@ -2387,9 +2900,523 @@ function exportMargeCSV(){
   showToast("✓ Détail marge exporté");
 }
 
-updateDemandesBadge();
-renderDashboard();
-syncAll();
+
+// ─── PANNEAU JOURNAL ADMIN ───────────────────────────────────────────────────
+function voirJournalAdmin(){
+  if(!isAdmin){ showToast("Réservé à l'admin","error"); return; }
+  const log = JSON.parse(localStorage.getItem("va_admin_log")||"[]");
+
+  const colorMap={
+    LOGIN:"#166534|#f0fdf4|#bbf7d0",
+    LOGOUT:"#6b8c7a|#f8faf8|#e2ece7",
+    MARQUER_RECU:"#1d4ed8|#eff6ff|#bfdbfe",
+    ACCEPTER_DEMANDE:"#166534|#f0fdf4|#bbf7d0",
+    REJETER_DEMANDE:"#dc2626|#fef2f2|#fecaca",
+    CHANGEMENT_PIN:"#c2410c|#fff7ed|#fed7aa"
+  };
+
+  const itemsHtml = log.map(e=>{
+    const d=new Date(e.ts);
+    const dateStr=d.toLocaleDateString("fr-CI",{day:"numeric",month:"short",year:"numeric"});
+    const timeStr=d.toLocaleTimeString("fr-CI",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
+    const parts=(colorMap[e.action]||"#0f1f16|#f8faf8|#e2ece7").split("|");
+    const col=parts[0], bg=parts[1], bd=parts[2];
+    return '<div style="background:'+bg+';border:1.5px solid '+bd+';border-radius:10px;padding:10px 14px;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">'+
+      '<div>'+
+        '<div style="font-size:12px;font-weight:700;color:'+col+';">'+e.action.replace(/_/g," ")+'</div>'+
+        '<div style="font-size:11px;color:#3d5c48;margin-top:2px;">'+(e.detail||"")+'</div>'+
+      '</div>'+
+      '<div style="text-align:right;flex-shrink:0;">'+
+        '<div style="font-size:10px;font-weight:600;color:#0f1f16;">'+dateStr+'</div>'+
+        '<div style="font-size:10px;color:#6b8c7a;">'+timeStr+'</div>'+
+      '</div>'+
+    '</div>';
+  }).join("");
+
+  const bodyHtml = !log.length
+    ? '<div style="background:#f8faf8;border-radius:12px;text-align:center;padding:32px;color:#3d5c48;">Aucune action enregistrée.</div>'
+    : '<div style="max-height:420px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;">'+itemsHtml+'</div>';
+
+  showModal(
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'+
+      '<div>'+
+        '<div style="font-size:17px;font-weight:800;color:#0f1f16;">🔐 Journal des actions admin</div>'+
+        '<div style="font-size:11px;color:#3d5c48;margin-top:2px;">'+log.length+' action'+(log.length>1?"s":"")+'</div>'+
+      '</div>'+
+      '<div style="display:flex;gap:8px;align-items:center;">'+
+        '<button onclick="effacerJournal()" style="background:#fef2f2;border:1.5px solid #fecaca;color:#dc2626;border-radius:10px;padding:6px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">🗑 Effacer</button>'+
+        '<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;color:#3d5c48;">✕</button>'+
+      '</div>'+
+    '</div>'+bodyHtml
+  );
+}
+
+function effacerJournal(){
+  if(!confirm("Effacer tout le journal des actions admin ?")) return;
+  adminLog.length=0;
+  localStorage.removeItem("va_admin_log");
+  showToast("Journal effacé");
+  closeModal();
+}
+
+// ─── SÉCURITÉ : Vérification intégrité des données ───────────────────────────
+function verifierIntegriteDonnees(){
+  const problemes=[];
+
+  // Vérifier les achats
+  achats.forEach((a,i)=>{
+    if(!a.id) problemes.push(`Achat #${i}: ID manquant`);
+    if(!a.produit) problemes.push(`Achat #${i}: Produit manquant`);
+    if(!a.quantite||a.quantite<=0) problemes.push(`Achat ${a.produit||"#"+i}: Quantité invalide`);
+    if(!a.prix_unitaire||a.prix_unitaire<=0) problemes.push(`Achat ${a.produit||"#"+i}: Prix invalide`);
+  });
+
+  // Vérifier les ventes
+  ventes.forEach((v,i)=>{
+    if(!v.id) problemes.push(`Vente #${i}: ID manquant`);
+    if(!v.produit) problemes.push(`Vente #${i}: Produit manquant`);
+    if(!v.quantite||v.quantite<=0) problemes.push(`Vente ${v.produit||"#"+i}: Quantité invalide`);
+    if(!v.prix_vente||v.prix_vente<=0) problemes.push(`Vente ${v.produit||"#"+i}: Prix invalide`);
+  });
+
+  // Détecter stocks négatifs
+  const prodsStock=[...new Set(achats.filter(a=>a.statut==="recu").map(a=>a.produit))];
+  prodsStock.forEach(p=>{
+    const r=achats.filter(a=>a.produit===p&&a.statut==="recu").reduce((s,a)=>s+a.quantite,0);
+    const v=ventes.filter(vv=>vv.produit===p).reduce((s,vv)=>s+vv.quantite,0);
+    const pt=pertes[p]||0;
+    const dispo=r-v-pt;
+    if(dispo<0) problemes.push(`Stock négatif : ${p} (${dispo})`);
+  });
+
+  showModal(`
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div>
+        <div style="font-size:17px;font-weight:800;color:#0f1f16;">🔍 Vérification des données</div>
+        <div style="font-size:11px;color:#3d5c48;margin-top:2px;">${achats.length} achats · ${ventes.length} ventes analysés</div>
+      </div>
+      <button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;color:#3d5c48;">✕</button>
+    </div>
+    ${problemes.length===0
+      ? `<div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:14px;padding:24px;text-align:center;">
+          <div style="font-size:32px;margin-bottom:8px;">✅</div>
+          <div style="font-weight:700;color:#166534;font-size:15px;">Données intègres</div>
+          <div style="font-size:13px;color:#3d5c48;margin-top:4px;">Aucun problème détecté sur ${achats.length+ventes.length} enregistrements.</div>
+         </div>`
+      : `<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:12px;padding:12px;margin-bottom:12px;">
+          <div style="font-size:12px;font-weight:700;color:#dc2626;margin-bottom:8px;">⚠ ${problemes.length} problème${problemes.length>1?"s":""} détecté${problemes.length>1?"s":""}</div>
+          ${problemes.map(p=>`<div style="font-size:12px;color:#dc2626;padding:4px 0;border-bottom:1px solid #fecaca;">${p}</div>`).join("")}
+        </div>`
+    }
+  `);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// SYSTÈME GESTION UTILISATEURS
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Supabase helpers utilisateurs ────────────────────────────────────────────
+async function sbGetUsers() {
+  const r = await fetch(SB_URL+"/rest/v1/utilisateurs?order=nom.asc", {headers:HDR});
+  if(!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function sbCreateUser(payload) {
+  const r = await fetch(SB_URL+"/rest/v1/utilisateurs", {method:"POST",headers:HDR,body:JSON.stringify(payload)});
+  if(!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function sbUpdateUser(id, data) {
+  const r = await fetch(SB_URL+"/rest/v1/utilisateurs?id=eq."+id, {method:"PATCH",headers:HDR,body:JSON.stringify(data)});
+  if(!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function sbDeleteUser(id) {
+  const r = await fetch(SB_URL+"/rest/v1/utilisateurs?id=eq."+id, {method:"DELETE",headers:HDR});
+  if(!r.ok) throw new Error(await r.text());
+}
+
+// ── Couleurs avatars ──────────────────────────────────────────────────────────
+const AVATAR_COLORS=["#f47820","#0369a1","#166534","#7c3aed","#dc2626","#0891b2","#65a30d","#c2410c","#0f766e","#9333ea"];
+function avatarColor(nom){ return AVATAR_COLORS[(nom||"A").charCodeAt(0)%AVATAR_COLORS.length]; }
+
+// ── Session utilisateur ───────────────────────────────────────────────────────
+let loginSelectedUser = null;
+let usersCache = [];
+
+function getSessionUser() {
+  try { return JSON.parse(sessionStorage.getItem("va_session_user")||"null"); } catch(e){ return null; }
+}
+function setSessionUser(u) {
+  if(u) sessionStorage.setItem("va_session_user", JSON.stringify(u));
+  else sessionStorage.removeItem("va_session_user");
+}
+
+// ── Démarrage app — vérifier session ─────────────────────────────────────────
+async function demarrerApp() {
+  // Afficher le logo sur l'écran login
+  const logoImg = document.querySelector('#loginScreen img#loginLogo');
+  const logoSrc = document.querySelector('#topbar img')?.src;
+  if(logoImg && logoSrc) logoImg.src = logoSrc;
+
+  const session = getSessionUser();
+  if(session && session.id) {
+    // Vérifier que l'utilisateur est toujours actif
+    try {
+      const users = await sbGetUsers();
+      const u = users.find(x => x.id === session.id);
+      if(u && u.actif) {
+        currentUser = u;
+        afficherApp();
+        return;
+      }
+    } catch(e) { /* réseau indispo, utiliser session cache */ }
+    currentUser = session;
+    afficherApp();
+    return;
+  }
+  // Pas de session — afficher l'écran de connexion
+  afficherEcranLogin();
+}
+
+async function afficherEcranLogin() {
+  document.getElementById("loginScreen").style.display = "flex";
+  document.getElementById("main").style.display = "none";
+  document.getElementById("sidebar") && (document.getElementById("sidebar").style.display = "none");
+  document.getElementById("bottomnav") && (document.getElementById("bottomnav").style.display = "none");
+  document.getElementById("topbar") && (document.getElementById("topbar").style.display = "none");
+  await chargerListeUtilisateurs();
+}
+
+function afficherApp() {
+  document.getElementById("loginScreen").style.display = "none";
+  document.getElementById("main").style.display = "";
+  document.getElementById("sidebar") && (document.getElementById("sidebar").style.display = "");
+  document.getElementById("bottomnav") && (document.getElementById("bottomnav").style.display = "");
+  document.getElementById("topbar") && (document.getElementById("topbar").style.display = "");
+
+  // Mettre à jour le topbar avec l'utilisateur connecté
+  const label = document.getElementById("modeLabel");
+  const logoutBtn = document.getElementById("logoutBtn");
+  if(label && currentUser) {
+    label.textContent = currentUser.nom + (currentUser.role==="admin" ? " · Admin" : "");
+    label.style.color = currentUser.role==="admin" ? "#f47820" : "rgba(255,255,255,.6)";
+  }
+  if(logoutBtn) logoutBtn.style.display = "inline-flex";
+
+  // Cacher/montrer bouton admin selon le rôle
+  const adminBtn = document.getElementById("adminBtn");
+  if(adminBtn) {
+    if(currentUser?.role === "admin") {
+      // Admin connecté = déjà admin, cacher le bouton de bascule
+      adminBtn.style.display = "none";
+      isAdmin = true;
+    } else {
+      adminBtn.style.display = "inline-flex";
+      isAdmin = false;
+    }
+  }
+}
+
+async function chargerListeUtilisateurs() {
+  const container = document.getElementById("userList");
+  if(!container) return;
+  container.innerHTML = '<div style="text-align:center;padding:20px;color:rgba(255,255,255,.4);font-size:12px;">Chargement...</div>';
+  try {
+    usersCache = await sbGetUsers();
+    const actifs = usersCache.filter(u => u.actif);
+    if(!actifs.length) {
+      afficherModeAdminDirect("Aucun utilisateur configuré. Connectez-vous en tant qu'admin pour créer des accès.");
+      return;
+    }
+    container.innerHTML = actifs.map(function(u) {
+      const col = avatarColor(u.nom);
+      const roleLabel = u.role === "admin" ? "Administrateur" : "Utilisateur";
+      const safeId = u.id.replace(/["']/g,"");
+      return '<button onclick="loginSelectUser(\'' + safeId + '\')" '
+        + 'style="display:flex;align-items:center;gap:12px;padding:12px 14px;'
+        + 'background:rgba(255,255,255,.06);border:1.5px solid rgba(255,255,255,.1);'
+        + 'border-radius:14px;cursor:pointer;text-align:left;font-family:inherit;width:100%;">'
+        + '<div style="width:40px;height:40px;border-radius:999px;background:' + col + ';'
+        + 'display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:900;color:#fff;flex-shrink:0;">'
+        + u.nom.charAt(0).toUpperCase() + '</div>'
+        + '<div>'
+        + '<div style="font-weight:700;color:#fff;font-size:14px;">' + u.nom + '</div>'
+        + '<div style="font-size:11px;color:rgba(255,255,255,.4);">' + roleLabel + '</div>'
+        + '</div>'
+        + '<div style="margin-left:auto;color:rgba(255,255,255,.3);font-size:18px;">›</div>'
+        + '</button>';
+    }).join("");
+  } catch(e) {
+    // Erreur réseau ou RLS Supabase → fallback mode PIN admin direct
+    afficherModeAdminDirect(null);
+  }
+}
+
+// Mode de secours : accès direct via PIN admin (si Supabase inaccessible ou RLS bloque)
+function afficherModeAdminDirect(msg) {
+  const container = document.getElementById("userList");
+  if(!container) return;
+  container.innerHTML =
+    (msg ? '<div style="font-size:11px;color:rgba(255,255,255,.4);text-align:center;margin-bottom:12px;padding:0 4px;">'+msg+'</div>' : '')
+    +'<button onclick="loginSelectAdminDirect()" style="display:flex;align-items:center;gap:12px;padding:14px;background:rgba(244,120,32,.12);border:1.5px solid rgba(244,120,32,.3);border-radius:14px;cursor:pointer;width:100%;font-family:inherit;">'
+    +'<div style="width:40px;height:40px;border-radius:999px;background:#f47820;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:900;color:#fff;flex-shrink:0;">A</div>'
+    +'<div style="text-align:left;">'
+      +'<div style="font-weight:700;color:#fff;font-size:14px;">Administrateur</div>'
+      +'<div style="font-size:11px;color:rgba(255,255,255,.4);">Accès complet</div>'
+    +'</div>'
+    +'<div style="margin-left:auto;color:rgba(244,120,6);font-size:18px;">›</div>'
+    +'</button>';
+}
+
+function loginSelectAdminDirect() {
+  loginSelectedUser = { id:"_admin_direct", nom:"Administrateur", role:"admin", actif:true, pin_hash:null };
+  document.getElementById("loginStep1").style.display = "none";
+  document.getElementById("loginStep2").style.display = "block";
+  document.getElementById("loginAvatar").style.background = "#f47820";
+  document.getElementById("loginAvatar").textContent = "A";
+  document.getElementById("loginNameLabel").textContent = "Administrateur";
+  document.getElementById("loginRoleLabel").textContent = "Accès complet";
+  document.getElementById("loginPinInput").value = "";
+  document.getElementById("loginPinError").style.display = "none";
+  setTimeout(()=>document.getElementById("loginPinInput")?.focus(), 200);
+}
+
+function loginSelectUser(id) {
+  loginSelectedUser = usersCache.find(u => u.id === id);
+  if(!loginSelectedUser) return;
+  document.getElementById("loginStep1").style.display = "none";
+  document.getElementById("loginStep2").style.display = "block";
+  const col = avatarColor(loginSelectedUser.nom);
+  document.getElementById("loginAvatar").style.background = col;
+  document.getElementById("loginAvatar").textContent = loginSelectedUser.nom.charAt(0).toUpperCase();
+  document.getElementById("loginNameLabel").textContent = loginSelectedUser.nom;
+  document.getElementById("loginRoleLabel").textContent = loginSelectedUser.role === "admin" ? "Administrateur" : "Utilisateur";
+  document.getElementById("loginPinInput").value = "";
+  document.getElementById("loginPinError").style.display = "none";
+  setTimeout(()=>document.getElementById("loginPinInput")?.focus(), 200);
+}
+
+function loginBackToList() {
+  loginSelectedUser = null;
+  document.getElementById("loginStep1").style.display = "block";
+  document.getElementById("loginStep2").style.display = "none";
+  document.getElementById("loginPinError").style.display = "none";
+}
+
+async function loginConfirmerPin() {
+  if(!loginSelectedUser) return;
+  const pin = document.getElementById("loginPinInput").value;
+  if(!pin) return;
+
+  if(secIsLocked()) {
+    const restant = Math.ceil((SEC.lockedUntil-Date.now())/60000);
+    document.getElementById("loginPinError").textContent = "🔒 Trop de tentatives. Réessayez dans "+restant+" min.";
+    document.getElementById("loginPinError").style.display = "block";
+    return;
+  }
+
+  let ok = false;
+
+  if(loginSelectedUser.id === "_admin_direct") {
+    // Mode secours : vérifier contre le PIN admin local
+    const pinBrut = localStorage.getItem("va_admin_pin");
+    const pinRef = pinBrut || await hashPin(ADMIN_PIN_DEFAULT);
+    const h = await hashPin(pin);
+    ok = (pinRef.length===64) ? h===pinRef : pin===pinRef;
+  } else {
+    const stored = loginSelectedUser.pin_hash;
+    if(!stored) { ok = false; }
+    else {
+      const h = await hashPin(pin);
+      ok = (stored.length===64) ? h===stored : pin===stored;
+    }
+  }
+
+  if(ok) {
+    secRecordSuccess();
+    currentUser = loginSelectedUser;
+    setSessionUser(currentUser);
+    logAdminAction("USER_LOGIN","Connexion : "+currentUser.nom);
+    afficherApp();
+    render();
+  } else {
+    const bloque = secRecordFail();
+    const restants = SEC.MAX_ATTEMPTS - SEC.attempts;
+    document.getElementById("loginPinError").textContent = bloque
+      ? "🔒 Compte bloqué 5 min."
+      : "Code incorrect · "+restants+" essai"+(restants>1?"s":"")+" restant"+(restants>1?"s":"");
+    document.getElementById("loginPinError").style.display = "block";
+    document.getElementById("loginPinInput").value = "";
+  }
+}
+
+function deconnecterUtilisateur() {
+  if(!confirm("Se déconnecter ?")) return;
+  logAdminAction("USER_LOGOUT","Déconnexion : "+(currentUser?.nom||""));
+  currentUser = null;
+  isAdmin = false;
+  setSessionUser(null);
+  afficherEcranLogin();
+}
+
+// ── Gestion utilisateurs (admin) ──────────────────────────────────────────────
+async function renderGestionUtilisateurs() {
+  if(!isAdmin){ showToast("Réservé à l'admin","error"); return; }
+  try {
+    const users = await sbGetUsers();
+    const html =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px;">'
+      +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">👥 Utilisateurs ('+users.length+')</div>'
+      +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">Gérez les accès à VerdApp CI</div></div>'
+      +'<button onclick="ouvrirCreerUtilisateur()" style="background:#0d3d1a;color:#fff;border:none;border-radius:12px;padding:10px 18px;cursor:pointer;font-family:inherit;font-weight:700;font-size:13px;display:flex;align-items:center;gap:6px;">+ Nouvel utilisateur</button>'
+      +'</div>'
+      +users.map(u => {
+        const col = avatarColor(u.nom);
+        return '<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:#fff;border:1.5px solid #e4ede7;border-radius:14px;margin-bottom:8px;flex-wrap:wrap;">'
+          +'<div style="width:40px;height:40px;border-radius:999px;background:'+col+';display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:900;color:#fff;flex-shrink:0;">'+u.nom.charAt(0).toUpperCase()+'</div>'
+          +'<div style="flex:1;min-width:0;">'
+            +'<div style="font-weight:700;color:#0f1f16;font-size:14px;">'+u.nom+'</div>'
+            +'<div style="font-size:11px;color:#6b8c7a;margin-top:1px;">'+(u.role==="admin"?"👑 Administrateur":"👤 Utilisateur")+'</div>'
+          +'</div>'
+          +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;flex-shrink:0;">'
+            +'<span style="font-size:10px;padding:3px 10px;border-radius:999px;font-weight:700;background:'+(u.actif?"#d4edda":"#fecaca")+';color:'+(u.actif?"#166534":"#dc2626")+'">'+(u.actif?"● Actif":"○ Inactif")+'</span>'
+            +'<button onclick="ouvrirModifierUtilisateur(\''+u.id+'\')" style="background:#eff6ff;color:#1d4ed8;border:none;border-radius:8px;padding:6px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">✏ Modifier</button>'
+            +'<button onclick="toggleUserActif(\''+u.id+'\','+u.actif+')" style="background:'+(u.actif?"#fff3e8":"#f0fdf4")+';color:'+(u.actif?"#c2410c":"#15803d")+';border:none;border-radius:8px;padding:6px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">'+(u.actif?"🚫 Désactiver":"✅ Activer")+'</button>'
+            +(u.id !== currentUser?.id ? '<button onclick="supprimerUtilisateur(\''+u.id+'\',\''+u.nom+'\')" style="background:#fef2f2;color:#dc2626;border:none;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">🗑</button>' : '')
+          +'</div>'
+        +'</div>';
+      }).join("");
+    showModal(html);
+  } catch(e) {
+    showModal(
+      '<div style="text-align:center;padding:24px;">'
+      + '<div style="font-size:32px;margin-bottom:12px;">⚠️</div>'
+      + '<div style="font-weight:800;color:#dc2626;font-size:15px;margin-bottom:8px;">Accès à la base de données</div>'
+      + '<div style="font-size:12px;color:#3d5c48;line-height:1.6;margin-bottom:16px;">' + errMsg(e) + '</div>'
+      + '<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:12px;font-size:11px;color:#c2410c;text-align:left;">'
+      + '<div style="font-weight:700;margin-bottom:4px;">Solution : exécuter ce SQL dans Supabase</div>'
+      + '<code style="font-size:10px;line-height:1.8;display:block;">DROP POLICY IF EXISTS &quot;acces_public_utilisateurs&quot; ON utilisateurs;<br>'
+      + 'CREATE POLICY &quot;lecture_publique&quot; ON utilisateurs FOR SELECT USING (true);<br>'
+      + 'CREATE POLICY &quot;ecriture_admin&quot; ON utilisateurs FOR ALL USING (true) WITH CHECK (true);</code>'
+      + '</div>'
+      + '<button onclick="closeModal()" style="margin-top:14px;width:100%;padding:11px;background:#0d3d1a;color:#fff;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:700;">Fermer</button>'
+      + '</div>'
+    );
+  }
+}
+
+function ouvrirCreerUtilisateur() {
+  showModal(
+    '<div style="font-size:17px;font-weight:800;color:#0f1f16;margin-bottom:4px;">+ Nouvel utilisateur</div>'
+    +'<div style="font-size:12px;color:#3d5c48;margin-bottom:20px;">L\'utilisateur pourra se connecter avec ce PIN.</div>'
+    +'<input type="hidden" id="edit-uid" value=""/>'
+    +'<div style="margin-bottom:14px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:5px;">Prénom / Nom *</label>'
+    +'<input type="text" id="edit-unom" placeholder="Ex : Koné Amara" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:14px;"/></div>'
+    +'<div style="margin-bottom:14px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:5px;">Rôle *</label>'
+    +'<select id="edit-urole" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:14px;">'
+    +'<option value="utilisateur">👤 Utilisateur</option>'
+    +'<option value="admin">👑 Administrateur</option>'
+    +'</select></div>'
+    +'<div style="margin-bottom:20px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:5px;">Code PIN * (4 à 8 chiffres)</label>'
+    +'<input type="password" id="edit-upin" inputmode="numeric" maxlength="8" placeholder="••••" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:18px;text-align:center;letter-spacing:.4em;"/></div>'
+    +'<div style="display:flex;gap:10px;">'
+    +'<button onclick="sauvegarderUtilisateur()" style="flex:1;padding:13px;background:#0d3d1a;color:#fff;border:none;border-radius:12px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit;">✓ Créer l\'utilisateur</button>'
+    +'<button onclick="closeModal()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>'
+    +'</div>'
+    +'<div id="user-form-msg" style="display:none;margin-top:10px;font-size:12px;font-weight:700;text-align:center;"></div>'
+  );
+  setTimeout(()=>document.getElementById("edit-unom")?.focus(), 200);
+}
+
+async function ouvrirModifierUtilisateur(id) {
+  try {
+    const users = await sbGetUsers();
+    const u = users.find(x=>x.id===id);
+    if(!u) return;
+    showModal(
+      '<div style="font-size:17px;font-weight:800;color:#0f1f16;margin-bottom:4px;">✏ Modifier l\'utilisateur</div>'
+      +'<div style="font-size:12px;color:#3d5c48;margin-bottom:20px;">Laissez le PIN vide pour ne pas le modifier.</div>'
+      +'<input type="hidden" id="edit-uid" value="'+u.id+'"/>'
+      +'<div style="margin-bottom:14px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:5px;">Prénom / Nom *</label>'
+      +'<input type="text" id="edit-unom" value="'+u.nom+'" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:14px;"/></div>'
+      +'<div style="margin-bottom:14px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:5px;">Rôle</label>'
+      +'<select id="edit-urole" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:14px;">'
+      +'<option value="utilisateur"'+(u.role==="utilisateur"?" selected":"")+'>👤 Utilisateur</option>'
+      +'<option value="admin"'+(u.role==="admin"?" selected":"")+'>👑 Administrateur</option>'
+      +'</select></div>'
+      +'<div style="margin-bottom:20px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:5px;">Nouveau PIN (laisser vide pour garder l\'actuel)</label>'
+      +'<input type="password" id="edit-upin" inputmode="numeric" maxlength="8" placeholder="Nouveau PIN..." style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:18px;text-align:center;letter-spacing:.4em;"/></div>'
+      +'<div style="display:flex;gap:10px;">'
+      +'<button onclick="sauvegarderUtilisateur()" style="flex:1;padding:13px;background:#0d3d1a;color:#fff;border:none;border-radius:12px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit;">✓ Enregistrer</button>'
+      +'<button onclick="closeModal()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>'
+      +'</div>'
+      +'<div id="user-form-msg" style="display:none;margin-top:10px;font-size:12px;font-weight:700;text-align:center;"></div>'
+    );
+  } catch(e) { showToast("Erreur : "+e.message,"error"); }
+}
+
+async function sauvegarderUtilisateur() {
+  const id   = document.getElementById("edit-uid").value;
+  const nom  = document.getElementById("edit-unom").value.trim();
+  const role = document.getElementById("edit-urole").value;
+  const pin  = document.getElementById("edit-upin").value;
+  const msg  = document.getElementById("user-form-msg");
+
+  if(!nom) { msg.style.display="block"; msg.style.color="#dc2626"; msg.textContent="Le nom est obligatoire."; return; }
+  if(!id && !pin) { msg.style.display="block"; msg.style.color="#dc2626"; msg.textContent="Le PIN est obligatoire pour un nouvel utilisateur."; return; }
+  if(pin && (pin.length < 4 || !/^\d+$/.test(pin))) { msg.style.display="block"; msg.style.color="#dc2626"; msg.textContent="Le PIN doit contenir au moins 4 chiffres."; return; }
+
+  msg.style.display="block"; msg.style.color="#166534"; msg.textContent="Sauvegarde...";
+
+  try {
+    if(id) {
+      const data = {nom, role};
+      if(pin) data.pin_hash = await hashPin(pin);
+      await sbUpdateUser(id, data);
+      logAdminAction("USER_EDIT","Modification : "+nom);
+      showToast("✓ Utilisateur modifié");
+    } else {
+      const pin_hash = await hashPin(pin);
+      await sbCreateUser({id:genId(), nom, role, pin_hash, actif:true});
+      logAdminAction("USER_CREATE","Création : "+nom+" ("+role+")");
+      showToast("✓ Utilisateur créé");
+    }
+    await renderGestionUtilisateurs();
+  } catch(e) {
+    msg.style.color="#dc2626";
+    msg.textContent = errMsg(e);
+  }
+}
+
+async function toggleUserActif(id, actif) {
+  try {
+    await sbUpdateUser(id, {actif: !actif});
+    logAdminAction("USER_TOGGLE","Statut utilisateur ID:"+id+" → "+(actif?"inactif":"actif"));
+    showToast(actif ? "Utilisateur désactivé" : "Utilisateur activé");
+    renderGestionUtilisateurs();
+  } catch(e) { showToast("Erreur : "+e.message,"error"); }
+}
+
+async function supprimerUtilisateur(id, nom) {
+  if(!confirm("Supprimer l'utilisateur "+nom+" ? Cette action est irréversible.")) return;
+  try {
+    await sbDeleteUser(id);
+    logAdminAction("USER_DELETE","Suppression : "+nom);
+    showToast("Utilisateur supprimé");
+    renderGestionUtilisateurs();
+  } catch(e) { showToast(errMsg(e),"error"); }
+}
+
+// Restaurer le journal admin depuis localStorage
+try{ adminLog.push(...JSON.parse(localStorage.getItem("va_admin_log")||"[]")); }catch(e){}
+// Migration PIN vers hash si nécessaire
+migrerPinVersHash();
+// Démarrer avec l'écran de connexion utilisateur
+demarrerApp();
+// Sync périodique
+setInterval(syncAll, 30000);
 // Auto-sync toutes les 30 secondes
 setInterval(syncAll, 30000);
 </script>

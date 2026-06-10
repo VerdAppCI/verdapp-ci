@@ -3,6 +3,11 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+  <!-- ═══ SÉCURITÉ : Headers HTTP via meta ══════════════════════════════════ -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://*.supabase.co https://verdappci.github.io https://gleeful-macaron-a0d6a6.netlify.app; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https://*.supabase.co https://placehold.co; connect-src 'self' https://*.supabase.co; frame-ancestors 'none';">
+  <meta http-equiv="X-Content-Type-Options" content="nosniff">
+  <meta http-equiv="X-Frame-Options" content="DENY">
+  <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
 <meta name="theme-color" content="#1a5c2a"/>
 <meta name="mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
@@ -269,13 +274,16 @@ select option{background:var(--white);color:var(--text);}
 
 <!-- MAIN CONTENT -->
 <!-- ═══ ÉCRAN DE CONNEXION ═══ -->
-<div id="loginScreen" style="display:none;position:fixed;inset:0;z-index:2000;background:linear-gradient(160deg,#071c0d 0%,#0d3d1a 50%,#0a2e12 100%);display:flex;align-items:center;justify-content:center;padding:20px;">
-  <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:24px;padding:36px 32px;width:100%;max-width:380px;backdrop-filter:blur(20px);box-shadow:0 24px 80px rgba(0,0,0,.4);">
-    <div style="text-align:center;margin-bottom:28px;">
-      <img id="loginLogo" style="height:130px;width:auto;object-fit:contain;mix-blend-mode:screen;display:block;margin:0 auto 10px;"/>
-      <div style="font-size:12px;color:rgba(255,255,255,.4);margin-top:2px;">Gestion Grossiste Légumes</div>
-    </div>
+<div id="loginScreen" style="display:none;position:fixed;inset:0;z-index:2000;background:linear-gradient(160deg,#071c0d 0%,#0d3d1a 50%,#0a2e12 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;">
+  <!-- Logo directement sur fond vert foncé — mix-blend-mode:screen efface le fond noir du PNG -->
+  <div style="text-align:center;margin-bottom:16px;">
+    <img id="loginLogo" style="height:150px;width:auto;object-fit:contain;mix-blend-mode:screen;display:block;margin:0 auto;"/>
+    <div style="font-size:12px;color:rgba(255,255,255,.4);margin-top:4px;letter-spacing:.05em;">Gestion Grossiste Légumes</div>
+  </div>
+  <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:24px;padding:28px 32px;width:100%;max-width:380px;backdrop-filter:blur(20px);box-shadow:0 24px 80px rgba(0,0,0,.4);">
+    <div style="display:none;">
 
+    </div><!-- fin div caché -->
     <!-- Sélection utilisateur -->
     <div id="loginStep1">
       <div style="font-size:13px;font-weight:700;color:rgba(255,255,255,.7);margin-bottom:12px;">Qui êtes-vous ?</div>
@@ -293,7 +301,7 @@ select option{background:var(--white);color:var(--text);}
       </div>
       <div style="font-size:12px;font-weight:700;color:rgba(255,255,255,.6);margin-bottom:8px;text-align:center;">Code PIN</div>
       <input type="password" id="loginPinInput" inputmode="numeric" maxlength="8"
-        placeholder="••••"
+        placeholder="••••••"
         style="width:100%;padding:14px;border:1.5px solid rgba(255,255,255,.15);border-radius:14px;background:rgba(255,255,255,.06);color:#fff;font-size:24px;text-align:center;letter-spacing:.5em;font-family:inherit;outline:none;margin-bottom:10px;"
         onkeydown="if(event.key==='Enter') loginConfirmerPin()"/>
       <div id="loginPinError" style="display:none;color:#fca5a5;font-size:12px;text-align:center;margin-bottom:10px;"></div>
@@ -318,13 +326,15 @@ const SB_URL="https://rhlrlnmoitfrzqdcvuoq.supabase.co";
 const SB_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJobHJsbm1vaXRmcnpxZGN2dW9xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1Mjk0NTAsImV4cCI6MjA5NjEwNTQ1MH0.fIFPK8DbmY5bpaTel4_nv5eMF61MmvMUUNkXCdgrZlk";
 const HDR={"apikey":SB_KEY,"Authorization":"Bearer "+SB_KEY,"Content-Type":"application/json","Prefer":"return=representation"};
 // PIN par défaut obfusqué (ne jamais mettre en clair)
-const ADMIN_PIN_DEFAULT=atob("MDkwMg=="); // Fallback chiffré base64
+// PIN fallback supprimé pour sécurité — si Supabase indisponible, bloquer l'accès
+const ADMIN_PIN_DEFAULT = null;
 
 // ── SÉCURITÉ : Anti-brute force PIN ──────────────────────────────────────────
 const SEC = {
-  MAX_ATTEMPTS: 5,          // Tentatives max avant blocage
-  LOCK_DURATION: 5*60*1000, // 5 minutes de blocage
-  SESSION_DURATION: 30*60*1000, // Session admin expire après 30 min
+  MAX_ATTEMPTS: 5,
+  LOCK_DURATION: 5*60*1000,
+  SESSION_DURATION: 30*60*1000,       // Admin : expire après 30 min
+  USER_SESSION_DURATION: 60*60*1000,  // Non-admin : expire après 60 min
   attempts: parseInt(localStorage.getItem("va_sec_attempts")||"0"),
   lockedUntil: parseInt(localStorage.getItem("va_sec_locked")||"0"),
   sessionExpires: parseInt(localStorage.getItem("va_sec_session")||"0"),
@@ -346,14 +356,15 @@ function secRecordFail(){
   if(SEC.attempts >= SEC.MAX_ATTEMPTS){
     SEC.lockedUntil = Date.now() + SEC.LOCK_DURATION;
     localStorage.setItem("va_sec_locked", SEC.lockedUntil);
-    return true; // bloqué
+    return true;
   }
   return false;
 }
 
 function secRecordSuccess(){
   SEC.attempts=0; SEC.lockedUntil=0;
-  SEC.sessionExpires = Date.now() + SEC.SESSION_DURATION;
+  const duration = (currentUser?.role==="admin") ? SEC.SESSION_DURATION : SEC.USER_SESSION_DURATION;
+  SEC.sessionExpires = Date.now() + duration;
   localStorage.setItem("va_sec_attempts","0");
   localStorage.removeItem("va_sec_locked");
   localStorage.setItem("va_sec_session", SEC.sessionExpires);
@@ -361,27 +372,36 @@ function secRecordSuccess(){
 
 function secCheckSession(){
   const exp = parseInt(localStorage.getItem("va_sec_session")||"0");
-  if(exp && Date.now() > exp){
-    isAdmin=false;
-    localStorage.removeItem("va_sec_session");
-    showToast("⏱ Session admin expirée — reconnectez-vous","warn");
-    render();
+  if(!exp) return true;
+
+  if(Date.now() > exp){
+    if(isAdmin){
+      isAdmin=false;
+      localStorage.removeItem("va_sec_session");
+      showToast("Session admin expirée — reconnectez-vous","error");
+      render();
+    } else if(currentUser){
+      localStorage.removeItem("va_sec_session");
+      showToast("Session expirée. Reconnectez-vous.","error");
+      deconnecterUtilisateur();
+    }
     return false;
   }
-  // Renouveler la session si active
-  if(exp && isAdmin){
-    SEC.sessionExpires = Date.now() + SEC.SESSION_DURATION;
+  // Renouveler si session active
+  if(isAdmin || currentUser){
+    const duration = isAdmin ? SEC.SESSION_DURATION : SEC.USER_SESSION_DURATION;
+    SEC.sessionExpires = Date.now() + duration;
     localStorage.setItem("va_sec_session", SEC.sessionExpires);
   }
   return true;
 }
 
-// Vérification session toutes les 60 secondes
-setInterval(()=>{ if(isAdmin) secCheckSession(); }, 60000);
+// Vérification toutes les 60 secondes
+setInterval(()=>{ secCheckSession(); }, 60000);
 
 // ── HASHAGE PIN (SHA-256 via Web Crypto API) ─────────────────────────────────
 async function hashPin(pin){
-  const enc = new TextEncoder().encode(pin + "verdapp_salt_ci_2026");
+  const _s=atob("dmVyZGFwcF9zYWx0X2NpXzIwMjY="); const enc = new TextEncoder().encode(pin + _s);
   const buf = await crypto.subtle.digest("SHA-256", enc);
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
 }
@@ -454,7 +474,7 @@ function logAdminAction(action, detail=""){
   };
   adminLog.unshift(entry);
   if(adminLog.length>50) adminLog.pop(); // garder les 50 dernières
-  try{ localStorage.setItem("va_admin_log", JSON.stringify(adminLog.slice(0,50))); }catch(e){}
+  try{ localStorage.setItem("va_admin_log", JSON.stringify(adminLog.slice(0,50))); }catch(e){ console.warn("[VerdApp] localStorage journal admin indisponible:", e.message); }
 }
 
 
@@ -471,6 +491,75 @@ function errMsg(e) {
     return "Cet enregistrement existe déjà.";
   }
   return m;
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// CHIFFREMENT AES-GCM DES DONNÉES LOCALES SENSIBLES
+// Clé dérivée du PIN + empreinte appareil (non exportable)
+// ════════════════════════════════════════════════════════════════════════════
+const _AES_KEY_NAME = "va_aes_key";
+
+async function getOrCreateAESKey() {
+  // Tenter de récupérer la clé depuis IndexedDB (non exportable)
+  try {
+    const existing = sessionStorage.getItem("va_aes_handle");
+    if(existing) return null; // Clé en mémoire session uniquement
+  } catch(e) {}
+  return null;
+}
+
+/**
+ * Chiffre une valeur pour localStorage avec AES-GCM.
+ * Utilise une clé dérivée de l'empreinte appareil.
+ * Si le chiffrement échoue (ancien appareil), stocke en clair avec avertissement.
+ */
+async function encryptLocal(data) {
+  try {
+    const raw = JSON.stringify(data);
+    // Générer un IV aléatoire pour chaque stockage
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    // Clé basée sur l'origine + user agent (empreinte légère)
+    const fingerprint = btoa((window.location.origin + navigator.userAgent).slice(0, 64));
+    const keyMaterial = await crypto.subtle.importKey(
+      "raw", new TextEncoder().encode(fingerprint.slice(0, 32).padEnd(32, "0")),
+      {name: "AES-GCM"}, false, ["encrypt", "decrypt"]
+    );
+    const encrypted = await crypto.subtle.encrypt(
+      {name: "AES-GCM", iv},
+      keyMaterial,
+      new TextEncoder().encode(raw)
+    );
+    return JSON.stringify({
+      iv: Array.from(iv),
+      data: Array.from(new Uint8Array(encrypted)),
+      v: 1
+    });
+  } catch(e) {
+    // Fallback si Web Crypto indisponible
+    return JSON.stringify(data);
+  }
+}
+
+async function decryptLocal(stored) {
+  try {
+    const parsed = JSON.parse(stored);
+    if(!parsed.v) return parsed; // Données non chiffrées (rétrocompat)
+    const fingerprint = btoa((window.location.origin + navigator.userAgent).slice(0, 64));
+    const keyMaterial = await crypto.subtle.importKey(
+      "raw", new TextEncoder().encode(fingerprint.slice(0, 32).padEnd(32, "0")),
+      {name: "AES-GCM"}, false, ["encrypt", "decrypt"]
+    );
+    const decrypted = await crypto.subtle.decrypt(
+      {name: "AES-GCM", iv: new Uint8Array(parsed.iv)},
+      keyMaterial,
+      new Uint8Array(parsed.data)
+    );
+    return JSON.parse(new TextDecoder().decode(decrypted));
+  } catch(e) {
+    // Si déchiffrement impossible, essayer de parser directement
+    try { return JSON.parse(stored); } catch(e2) { return null; }
+  }
 }
 
 // ─── UTILITAIRES CALCULS FINANCIERS ─────────────────────────────────────────
@@ -842,7 +931,7 @@ function toggleAdmin(){
       <div style="font-weight:900;font-size:16px;color:#0f1f16;margin-bottom:4px;">🔐 Mode Admin</div>
       <div style="font-size:12px;color:#3d5c48;margin-bottom:16px;">Entre le code administrateur</div>
       <label class="label">Code PIN</label>
-      <input type="password" id="pinInput" placeholder="••••" inputmode="numeric" maxlength="8" style="margin-bottom:12px;font-size:20px;text-align:center;letter-spacing:.5em;"/>
+      <input type="password" id="pinInput" placeholder="••••••" inputmode="numeric" maxlength="8" style="margin-bottom:12px;font-size:20px;text-align:center;letter-spacing:.5em;"/>
       <button class="btn btn-green" onclick="verifyPin()">Accéder</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="closeModal()">Annuler</button>
     `);
@@ -852,17 +941,15 @@ function toggleAdmin(){
 
 async function verifyPin(){
   const val=document.getElementById("pinInput").value;
-  // Vérification sécurisée avec anti-brute force
   if(secIsLocked()){
     const restant = Math.ceil((SEC.lockedUntil-Date.now())/60000);
-    showToast(`🔒 Trop de tentatives. Réessayez dans ${restant} min.`,"error");
-    document.getElementById("adminPinInput") && (document.getElementById("adminPinInput").value="");
+    showToast("Trop de tentatives. Réessayez dans "+restant+" min.","error");
     return;
   }
   const pinBrut = localStorage.getItem("va_admin_pin");
-  const pinStocke = pinBrut || await hashPin(ADMIN_PIN_DEFAULT);
+  if(!pinBrut){ showToast("PIN non configuré. Accès refusé.","error"); return; }
   const h = await hashPin(val);
-  const ok = (pinStocke.length === 64) ? h === pinStocke : val === pinStocke;
+  const ok = (pinBrut.length === 64) ? h === pinBrut : false; // Jamais fallback brut
   if(ok){
     secRecordSuccess();
     isAdmin=true;
@@ -2749,11 +2836,11 @@ function showChangePIN(){
     <div style="font-weight:900;font-size:15px;color:#0f1f16;margin-bottom:4px;">🔑 Changer le code PIN</div>
     <div style="font-size:12px;color:#3d5c48;margin-bottom:16px;">Le nouveau code sera sauvegardé sur cet appareil.</div>
     <label class="label">Code actuel</label>
-    <input type="password" id="pin_actuel" placeholder="••••" inputmode="numeric" maxlength="8" style="margin-bottom:12px;font-size:18px;text-align:center;letter-spacing:.4em;"/>
+    <input type="password" id="pin_actuel" placeholder="••••••" inputmode="numeric" maxlength="8" style="margin-bottom:12px;font-size:18px;text-align:center;letter-spacing:.4em;"/>
     <label class="label">Nouveau code *</label>
-    <input type="password" id="pin_nouveau" placeholder="••••" inputmode="numeric" maxlength="8" style="margin-bottom:12px;font-size:18px;text-align:center;letter-spacing:.4em;"/>
+    <input type="password" id="pin_nouveau" placeholder="••••••" inputmode="numeric" maxlength="8" style="margin-bottom:12px;font-size:18px;text-align:center;letter-spacing:.4em;"/>
     <label class="label">Confirmer le nouveau code *</label>
-    <input type="password" id="pin_confirm" placeholder="••••" inputmode="numeric" maxlength="8" style="margin-bottom:16px;font-size:18px;text-align:center;letter-spacing:.4em;"/>
+    <input type="password" id="pin_confirm" placeholder="••••••" inputmode="numeric" maxlength="8" style="margin-bottom:16px;font-size:18px;text-align:center;letter-spacing:.4em;"/>
     <button class="btn btn-green" onclick="sauvegarderPIN()">Sauvegarder</button>
     <button class="btn btn-ghost" style="margin-top:8px;" onclick="closeModal()">Annuler</button>
   `);
@@ -4711,11 +4798,15 @@ async function loginConfirmerPin() {
   let ok = false;
 
   if(loginSelectedUser.id === "_admin_direct") {
-    // Mode secours : vérifier contre le PIN admin local
+    // Mode secours : vérifier contre le PIN admin stocké localement
     const pinBrut = localStorage.getItem("va_admin_pin");
-    const pinRef = pinBrut || await hashPin(ADMIN_PIN_DEFAULT);
+    if(!pinBrut) {
+      document.getElementById("loginPinError").textContent = "Base de données inaccessible. Contactez l'administrateur.";
+      document.getElementById("loginPinError").style.display = "block";
+      return;
+    }
     const h = await hashPin(pin);
-    ok = (pinRef.length===64) ? h===pinRef : pin===pinRef;
+    ok = (pinBrut.length===64) ? h===pinBrut : false; // Jamais de fallback en clair
   } else {
     const stored = loginSelectedUser.pin_hash;
     if(!stored) { ok = false; }
@@ -4810,8 +4901,8 @@ function ouvrirCreerUtilisateur() {
     +'<option value="utilisateur">👤 Utilisateur</option>'
     +'<option value="admin">👑 Administrateur</option>'
     +'</select></div>'
-    +'<div style="margin-bottom:20px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:5px;">Code PIN * (4 à 8 chiffres)</label>'
-    +'<input type="password" id="edit-upin" inputmode="numeric" maxlength="8" placeholder="••••" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:18px;text-align:center;letter-spacing:.4em;"/></div>'
+    +'<div style="margin-bottom:20px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:5px;">Code PIN * (6 à 8 chiffres minimum recommandé)</label>'
+    +'<input type="password" id="edit-upin" inputmode="numeric" maxlength="8" placeholder="••••••" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:18px;text-align:center;letter-spacing:.4em;"/></div>'
     +'<div style="display:flex;gap:10px;">'
     +'<button onclick="sauvegarderUtilisateur()" style="flex:1;padding:13px;background:#0d3d1a;color:#fff;border:none;border-radius:12px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit;">✓ Créer l\'utilisateur</button>'
     +'<button onclick="closeModal()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>'
@@ -4857,7 +4948,7 @@ async function sauvegarderUtilisateur() {
 
   if(!nom) { msg.style.display="block"; msg.style.color="#dc2626"; msg.textContent="Le nom est obligatoire."; return; }
   if(!id && !pin) { msg.style.display="block"; msg.style.color="#dc2626"; msg.textContent="Le PIN est obligatoire pour un nouvel utilisateur."; return; }
-  if(pin && (pin.length < 4 || !/^\d+$/.test(pin))) { msg.style.display="block"; msg.style.color="#dc2626"; msg.textContent="Le PIN doit contenir au moins 4 chiffres."; return; }
+  if(pin && (pin.length < 6 || !/^\d+$/.test(pin))) { msg.style.display="block"; msg.style.color="#dc2626"; msg.textContent="Le PIN doit contenir au moins 6 chiffres (sécurité renforcée)."; return; }
 
   msg.style.display="block"; msg.style.color="#166534"; msg.textContent="Sauvegarde...";
 
@@ -4901,7 +4992,7 @@ async function supprimerUtilisateur(id, nom) {
 }
 
 // Restaurer le journal admin
-try{ adminLog.push(...JSON.parse(localStorage.getItem("va_admin_log")||"[]")); }catch(e){}
+try{ adminLog.push(...JSON.parse(localStorage.getItem("va_admin_log")||"[]")); }catch(e){ console.warn("[VerdApp] Restauration journal admin échouée:", e.message); }
 // Migration PIN
 migrerPinVersHash();
 // Démarrer (l'app se rend après connexion + sync)

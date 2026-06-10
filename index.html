@@ -1443,6 +1443,99 @@ function setFilterDemandes(f){
 }
 
 // ─── RENDER ───────────────────────────────────────────────────────────────────
+
+function renderDashboard(){
+  const page = document.getElementById("page-dashboard");
+  if(!page) return;
+
+  const totalA   = totalAchats();
+  const totalAv  = totalAvances();
+  const totalV   = totalVentes();
+  const totalDus = totalA - totalAv;
+  const marge    = margebrute();
+  const margeNette = margenette();
+  const fraisTerrain = marge - margeNette;
+  const taux    = totalV ? Math.round(marge/totalV*100) : 0;
+  const tauxNet = totalV ? Math.round(margeNette/totalV*100) : 0;
+
+  const nbAchats = achats.length;
+  const nbRecus  = achats.filter(a=>a.statut==="recu").length;
+  const nbVentes = ventes.length;
+  const enTransit= achats.filter(a=>a.statut==="en_cours");
+  const valTransit= enTransit.reduce((s,a)=>s+a.quantite*a.prix_unitaire,0);
+
+  const gaugeColor = taux>=20?"#22a356":taux>=10?"#f47820":"#dc2626";
+
+  const html = `
+  <div class="section-title">Tableau de bord</div>
+
+  <!-- KPI Achats / Ventes -->
+  <div class="grid-4" style="margin-bottom:14px;">
+    <div style="background:linear-gradient(135deg,#1e3a5f,#1a2e4a);border:none;border-radius:14px;padding:14px;box-shadow:0 3px 12px rgba(30,58,95,.3);">
+      <div style="font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;letter-spacing:.1em;">Total achats</div>
+      <div style="font-size:17px;font-weight:900;color:#fff;margin-top:4px;line-height:1.1;">${fmt(totalA)}</div>
+      <div style="font-size:10px;color:#60a5fa;margin-top:4px;">${nbAchats} lot${nbAchats>1?"s":""} · ${nbRecus} reçu${nbRecus>1?"s":""}</div>
+      <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:2px;">Coût vendu FIFO : ${fmt(totalV-marge)}</div>
+    </div>
+    <div style="background:linear-gradient(135deg,#14532d,#166534);border:none;border-radius:14px;padding:14px;box-shadow:0 3px 12px rgba(20,83,45,.3);">
+      <div style="font-size:9px;font-weight:700;color:#86efac;text-transform:uppercase;letter-spacing:.1em;">Total ventes</div>
+      <div style="font-size:17px;font-weight:900;color:#fff;margin-top:4px;line-height:1.1;">${fmt(totalV)}</div>
+      <div style="font-size:10px;color:#4ade80;margin-top:4px;">${nbVentes} vente${nbVentes>1?"s":""}</div>
+      <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:2px;">Brute : ${fmt(marge)}  ·  Nette : ${fmt(margeNette)}</div>
+    </div>
+    <div style="background:${totalV-totalA>=0?"linear-gradient(135deg,#14532d,#166534)":"linear-gradient(135deg,#7f1d1d,#991b1b)"};border:none;border-radius:14px;padding:14px;">
+      <div style="font-size:9px;font-weight:700;color:${totalV-totalA>=0?"#86efac":"#fca5a5"};text-transform:uppercase;letter-spacing:.1em;">Solde</div>
+      <div style="font-size:17px;font-weight:900;color:#fff;margin-top:4px;">${totalV-totalA>=0?"+":""}${fmt(totalV-totalA)}</div>
+      <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:4px;">Dû fourn. : ${fmt(totalDus)}</div>
+    </div>
+    <div style="background:${enTransit.length>0?"linear-gradient(135deg,#c2410c,#ea580c)":"linear-gradient(135deg,#166534,#15803d)"};border:none;border-radius:14px;padding:14px;">
+      <div style="font-size:9px;font-weight:700;color:rgba(255,255,255,.7);text-transform:uppercase;letter-spacing:.1em;">En transit</div>
+      <div style="font-size:17px;font-weight:900;color:#fff;margin-top:4px;">${enTransit.length}</div>
+      <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:4px;">${fmt(valTransit)}</div>
+    </div>
+  </div>
+
+  <!-- Card marge -->
+  <div class="card" style="margin-bottom:14px;cursor:pointer;" onclick="detailMarge()" title="Voir le détail de la marge">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <div class="label" style="margin-bottom:0;">📊 Marge</div>
+      <span style="font-size:10px;color:#0369a1;font-weight:700;background:#eff6ff;padding:2px 8px;border-radius:999px;border:1px solid #bfdbfe;">Détail →</span>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+      <div style="background:${taux>=20?"#f0fdf4":taux>=10?"#fff7ed":"#fef2f2"};border:1.5px solid ${taux>=20?"#bbf7d0":taux>=10?"#fed7aa":"#fecaca"};border-radius:12px;padding:10px;text-align:center;">
+        <div style="font-size:20px;font-weight:900;color:${gaugeColor};">${taux}%</div>
+        <div style="font-size:10px;color:#3d5c48;font-weight:700;margin-top:2px;">Taux brut</div>
+        <div style="font-size:12px;font-weight:800;color:${gaugeColor};margin-top:3px;">${fmt(marge)}</div>
+      </div>
+      <div style="background:${margeNette>=0?"#f0fdf4":"#fef2f2"};border:1.5px solid ${margeNette>=0?"#bbf7d0":"#fecaca"};border-radius:12px;padding:10px;text-align:center;">
+        <div style="font-size:20px;font-weight:900;color:${margeNette>=0?"#166534":"#dc2626"};">${tauxNet}%</div>
+        <div style="font-size:10px;color:#3d5c48;font-weight:700;margin-top:2px;">Taux net</div>
+        <div style="font-size:12px;font-weight:800;color:${margeNette>=0?"#166534":"#dc2626"};margin-top:3px;">${fmt(margeNette)}</div>
+      </div>
+    </div>
+    <div style="height:6px;background:#e2ece7;border-radius:999px;overflow:hidden;">
+      <div style="height:100%;background:${gaugeColor};border-radius:999px;width:${Math.min(taux,100)}%;"></div>
+    </div>
+    <div style="font-size:9px;color:#6b8c7a;text-align:center;margin-top:6px;">Frais terrain : −${fmt(fraisTerrain)}</div>
+  </div>
+
+  <!-- Boutons actions -->
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+    ${isAdmin?`<button onclick="bilanFinancier()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">💼 Bilan</button>`:""}
+    ${isAdmin?`<button onclick="voirCommissionAdmin()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">💰 Commissions</button>`:""}
+    ${isAdmin?`<button onclick="switchTab('tiers')" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">🤝 Tiers</button>`:""}
+    ${isAdmin?`<button onclick="exportDashboardCSV()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">⬇ CSV</button>`:""}
+    ${!isAdmin?`<button onclick="voirCommission()" style="background:linear-gradient(135deg,#0d3d1a,#166534);color:#fff;border:none;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">💰 Ma commission</button>`:""}
+  </div>
+
+  <!-- Graphique camembert + stock -->
+  <div id="dashPie" style="margin-bottom:14px;"></div>
+  `;
+
+  page.innerHTML = html;
+  if(typeof buildPie === "function") buildPie();
+}
+
 function render(){
   if(currentTab==="dashboard") renderDashboard();
   else if(currentTab==="achats") renderAchats();

@@ -891,6 +891,7 @@ async function syncAll(silent=false){
     // Sync tiers en parallèle
     syncClients().catch(()=>{});
     syncFournisseurs().catch(()=>{});
+    syncCommPaie().catch(()=>{});
     syncFournisseurs().catch(()=>{});
     const [a,v,d,p,cfg]=await Promise.all([
       sbGet("achats"),sbGet("ventes"),sbGet("demandes"),
@@ -1745,242 +1746,292 @@ function voirCommission() {
 }
 
 // ── VUE UTILISATEUR : commissions par date de vente ──────────────────────────
-function voirCommissionUtilisateur(nom) {
-  if(!nom) return showToast("Connectez-vous d'abord","error");
 
-  // Lots enregistrés par cet utilisateur (reçus)
-  const lotsUser = achats.filter(a =>
-    a.statut === "recu" &&
-    ((a.enregistre_par||"") === nom)
+// ════════════════════════════════════════════════════════════════════════════
+// SYSTÈME PAIEMENT COMMISSIONS
+// ════════════════════════════════════════════════════════════════════════════
+let commissionsPaiements = JSON.parse(localStorage.getItem("va_comm_paie")||"[]");
+function saveCommPaie(){ localStorage.setItem("va_comm_paie", JSON.stringify(commissionsPaiements)); }
+
+async function syncCommPaie(){
+  try{
+    const r=await fetch(SB_URL+"/rest/v1/commissions_paiements?order=date.desc",{headers:HDR});
+    if(r.ok){ commissionsPaiements=await r.json(); saveCommPaie(); }
+  }catch(e){}
+}
+
+// ── Calcul complet commission d'un utilisateur ────────────────────────────────
+function calculerCommissionComplete(nomUtilisateur) {
+  const lotsUser = achats.filter(a=>
+    a.statut==="recu" && (a.enregistre_par===nomUtilisateur || a.auteur===nomUtilisateur)
   );
 
-  if(!lotsUser.length) {
-    showModal(
-      '<div style="text-align:center;padding:32px;">'
-      +'<div style="font-size:40px;margin-bottom:12px;">💰</div>'
-      +'<div style="font-weight:800;color:#0f1f16;font-size:15px;margin-bottom:8px;">Aucun lot enregistré</div>'
-      +'<div style="font-size:12px;color:#6b8c7a;">Tes commissions apparaîtront ici quand tes lots seront vendus.</div>'
-      +'</div>'
-    );
-    return;
-  }
+  let totalDue = 0;
+  const detailLots = [];
 
-  // Identifier les produits de l'utilisateur
-  const produitsUser = [...new Set(lotsUser.map(l=>l.produit))];
+  lotsUser.forEach(lot => {
+    const fifo = calculerFIFO(lot.produit);
+    const lotFifo = fifo.lots.find(l=>l.id===lot.id);
+    if(!lotFifo || !lotFifo.qteConsommee) {
+      detailLots.push({lot, commDue:0, margeNette:0, qteVendue:0, statut:"en_attente"});
+      return;
+    }
+    // Extraire les ventes imputées à ce lot via FIFO
+    const lotsAvant = fifo.lots.slice(0, fifo.lots.indexOf(lotFifo));
+    const qteAvant = lotsAvant.reduce((s,l)=>s+l.qteInitiale,0);
+    let aSkip=qteAvant, aPrendre=lotFifo.qteConsommee;
+    const ventesTriees = ventes.filter(v=>v.produit===lot.produit)
+      .sort((a,b)=>new Date(a.date)-new Date(b.date));
+    const ventesImputees = [];
+    for(const v of ventesTriees){
+      if(aPrendre<=0) break;
+      if(aSkip>=v.quantite){aSkip-=v.quantite;continue;}
+      const skip=aSkip; aSkip=0;
+      const pris=Math.min(aPrendre,v.quantite-skip);
+      aPrendre-=pris;
+      ventesImputees.push({...v,quantite:pris});
+    }
+    const mn = margenette(ventesImputees);
+    const commDue = Math.max(0, mn*0.10);
+    totalDue += commDue;
+    const statut = lotFifo.statut==="epuise" ? "lot_solde" : "partiel";
+    detailLots.push({lot, commDue, margeNette:mn, qteVendue:lotFifo.qteConsommee, statut});
+  });
 
-  // Grouper les ventes par date, pour chaque produit de l'utilisateur
-  const parDate = {};
-  ventes
-    .filter(v => produitsUser.includes(v.produit))
-    .sort((a,b) => new Date(a.date)-new Date(b.date))
-    .forEach(v => {
-      const j = (v.date||"").slice(0,10);
-      if(!j) return;
-      if(!parDate[j]) parDate[j] = [];
-      parDate[j].push(v);
-    });
+  // Commission déjà payée à cet utilisateur
+  const totalPaye = commissionsPaiements
+    .filter(p=>p.utilisateur===nomUtilisateur)
+    .reduce((s,p)=>s+p.montant,0);
 
-  const dates = Object.keys(parDate).sort().reverse();
+  const solde = totalDue - totalPaye;
 
-  // Calculer la commission par date
-  // Pour chaque date, identifier quels lots (de l'utilisateur) ont été consommés
-  let totalCommission = 0;
-  let totalMargeNette = 0;
+  // Calcul semaine en cours
+  const debutSemaine = new Date();
+  debutSemaine.setDate(debutSemaine.getDate() - debutSemaine.getDay() + 1);
+  debutSemaine.setHours(0,0,0,0);
+  const commSemaine = detailLots
+    .filter(d=>d.lot.date_reception&&new Date(d.lot.date_reception)>=debutSemaine)
+    .reduce((s,d)=>s+d.commDue, 0);
 
-  const lignesParDate = dates.map(j => {
-    const ventesJ = parDate[j];
-    let commissionJ = 0;
-    let margeNetteJ = 0;
-    const lotsImputes = [];
+  return {totalDue, totalPaye, solde, detailLots, commSemaine};
+}
 
-    // Pour chaque vente de ce jour, calculer la part qui consomme les lots de l'utilisateur
-    ventesJ.forEach(v => {
-      const fifo = calculerFIFO(v.produit);
-      const ventesAvant = ventes
-        .filter(x => x.produit===v.produit && new Date(x.date)<new Date(v.date))
-        .sort((a,b)=>new Date(a.date)-new Date(b.date));
+// ── Vue utilisateur (son propre tableau de bord commission) ───────────────────
+function voirCommissionUtilisateur(nom) {
+  const {totalDue, totalPaye, solde, detailLots, commSemaine} = calculerCommissionComplete(nom);
+  const historique = commissionsPaiements.filter(p=>p.utilisateur===nom)
+    .sort((a,b)=>b.date?.localeCompare(a.date||""));
 
-      // Simuler le FIFO jusqu'à cette vente
-      let qteDejaVendue = ventesAvant.reduce((s,x)=>s+x.quantite,0);
-      const lotsRecu = achats
-        .filter(a=>a.produit===v.produit&&a.statut==="recu")
-        .sort((a,b)=>new Date(a.date_reception||a.date)-new Date(b.date_reception||b.date));
-
-      let aConsommer = qteDejaVendue;
-      const etatLots = lotsRecu.map(lot => {
-        const consomme = Math.min(aConsommer, lot.quantite);
-        aConsommer = Math.max(0, aConsommer - lot.quantite);
-        return { ...lot, qteRestante: lot.quantite - consomme };
-      }).filter(l=>l.qteRestante>0);
-
-      // Appliquer la vente sur les lots restants
-      let aVendre = v.quantite;
-      etatLots.forEach(lot => {
-        if(aVendre<=0) return;
-        const pris = Math.min(aVendre, lot.qteRestante);
-        aVendre -= pris;
-
-        // Ce lot appartient-il à l'utilisateur ?
-        if((lot.enregistre_par||"")===nom && pris>0) {
-          // Calculer la marge nette sur cette portion
-          const venteVirtuelle = {...v, quantite: pris};
-          const mn = margenette([venteVirtuelle]);
-          margeNetteJ += mn;
-          commissionJ += Math.max(0, mn * 0.10);
-          // Ajouter ce lot à la liste des lots imputés si pas déjà dedans
-          if(!lotsImputes.find(l=>l.id===lot.id)) {
-            lotsImputes.push({...lot, qteVendueCeJour:0, mnCeJour:0, commCeJour:0});
-          }
-          const li = lotsImputes.find(l=>l.id===lot.id);
-          if(li){ li.qteVendueCeJour+=pris; li.mnCeJour+=mn; li.commCeJour+=Math.max(0,mn*0.10); }
-        }
-      });
-    });
-
-    totalCommission += commissionJ;
-    totalMargeNette += margeNetteJ;
-
-    if(commissionJ<=0 && margeNetteJ===0) return null;
-
-    const dateAff = new Date(j).toLocaleDateString("fr-CI",{weekday:"long",day:"numeric",month:"long"});
-    const lotsHtml = lotsImputes.map(l=>
-      '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:#f8faf8;border-radius:8px;margin-top:4px;">'
-        +'<div>'
-          +'<div style="font-size:11px;font-weight:700;color:#0f1f16;">'+(getProduitIcon(l.produit)||"🌿")+' '+l.produit+' — '+l.fournisseur+'</div>'
-          +'<div style="font-size:10px;color:#6b8c7a;">Lot reçu le '+(l.date_reception||l.date)+' · '+l.qteVendueCeJour+' u. vendues ce jour</div>'
+  const lotsHtml = detailLots.filter(d=>d.commDue>0).map(d=>{
+    const pct = d.lot.quantite ? Math.round(d.qteVendue/d.lot.quantite*100) : 0;
+    return '<div style="background:#f8faf8;border:1.5px solid #e4ede7;border-radius:10px;padding:10px 12px;margin-bottom:6px;">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;">'
+        +'<div><div style="font-weight:700;font-size:12px;color:#0f1f16;">'+(getProduitIcon(d.lot.produit)||"🌿")+" "+d.lot.produit+' — '+d.lot.fournisseur+'</div>'
+          +'<div style="font-size:10px;color:#6b8c7a;">'+(d.lot.date_reception||d.lot.date)+' · '+d.qteVendue+'/'+d.lot.quantite+' u. vendues ('+pct+'%)</div>'
         +'</div>'
         +'<div style="text-align:right;">'
-          +'<div style="font-size:12px;font-weight:900;color:#f47820;">+'+fmt(l.commCeJour)+'</div>'
-          +'<div style="font-size:9px;color:#6b8c7a;">10% de '+fmt(l.mnCeJour)+'</div>'
+          +'<div style="font-size:13px;font-weight:900;color:#f47820;">'+fmt(d.commDue)+'</div>'
+          +'<div style="font-size:9px;color:#6b8c7a;">MN: '+fmt(d.margeNette)+'</div>'
         +'</div>'
       +'</div>'
-    ).join('');
-
-    return '<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:12px;padding:12px;margin-bottom:8px;">'
-      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">'
-        +'<div>'
-          +'<div style="font-weight:700;color:#0f1f16;font-size:13px;">'+dateAff+'</div>'
-          +'<div style="font-size:10px;color:#6b8c7a;">'+ventesJ.length+' vente'+(ventesJ.length>1?'s':'')+'</div>'
-        +'</div>'
-        +'<div style="text-align:right;">'
-          +'<div style="font-size:15px;font-weight:900;color:#f47820;">+'+fmt(commissionJ)+'</div>'
-          +'<div style="font-size:9px;color:#6b8c7a;">10% de '+fmt(margeNetteJ)+'</div>'
-        +'</div>'
+      +'<div style="height:4px;background:#e2ece7;border-radius:999px;margin-top:6px;overflow:hidden;">'
+        +'<div style="height:100%;background:#f47820;border-radius:999px;width:'+pct+'%;"></div>'
       +'</div>'
-      +lotsHtml
     +'</div>';
-  }).filter(Boolean);
+  }).join('');
+
+  const historiqueHtml = historique.length
+    ? historique.map(p=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:10px;margin-bottom:6px;">'
+        +'<div><div style="font-weight:700;font-size:12px;color:#166534;">✓ Paiement reçu</div>'
+          +'<div style="font-size:10px;color:#6b8c7a;">'+p.date+' · '+p.mode_paiement+'</div>'
+          +(p.note?'<div style="font-size:10px;color:#6b8c7a;font-style:italic;">'+p.note+'</div>':"")
+        +'</div>'
+        +'<div style="font-size:15px;font-weight:900;color:#166534;">+'+fmt(p.montant)+'</div>'
+      +'</div>').join('')
+    : '<div style="text-align:center;padding:20px;color:#6b8c7a;font-size:12px;">Aucun paiement reçu.</div>';
 
   showModal(
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
-    +'<div>'
-      +'<div style="font-size:17px;font-weight:800;color:#0f1f16;">💰 Mes commissions</div>'
-      +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">10% de la marge nette · '+nom+'</div>'
-    +'</div>'
+    +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">💰 Ma commission</div>'
+    +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">10% marge nette · Semaine en cours : '+fmt(commSemaine)+'</div></div>'
     +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
     +'</div>'
 
-    // KPI total
-    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">'
+    // Solde
+    +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">'
       +'<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:12px;text-align:center;">'
-        +'<div style="font-size:10px;font-weight:700;color:#c2410c;text-transform:uppercase;letter-spacing:.06em;">Marge nette totale</div>'
-        +'<div style="font-size:18px;font-weight:900;color:#0f1f16;margin-top:4px;">'+fmt(totalMargeNette)+'</div>'
+        +'<div style="font-size:9px;font-weight:700;color:#c2410c;text-transform:uppercase;letter-spacing:.06em;">Cumulé dû</div>'
+        +'<div style="font-size:16px;font-weight:900;color:#c2410c;margin-top:4px;">'+fmt(totalDue)+'</div>'
+      +'</div>'
+      +'<div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:12px;padding:12px;text-align:center;">'
+        +'<div style="font-size:9px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.06em;">Déjà payé</div>'
+        +'<div style="font-size:16px;font-weight:900;color:#166534;margin-top:4px;">'+fmt(totalPaye)+'</div>'
       +'</div>'
       +'<div style="background:linear-gradient(135deg,#0d3d1a,#166534);border-radius:12px;padding:12px;text-align:center;">'
-        +'<div style="font-size:10px;font-weight:700;color:#86efac;text-transform:uppercase;letter-spacing:.06em;">Ma commission totale</div>'
-        +'<div style="font-size:22px;font-weight:900;color:#fff;margin-top:4px;">'+fmt(totalCommission)+'</div>'
+        +'<div style="font-size:9px;font-weight:700;color:#86efac;text-transform:uppercase;letter-spacing:.06em;">Solde à payer</div>'
+        +'<div style="font-size:18px;font-weight:900;color:#fff;margin-top:4px;">'+fmt(solde)+'</div>'
       +'</div>'
     +'</div>'
 
-    // Détail par date
-    +(lignesParDate.length
-      ? '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Par date de vente</div>'
-        +lignesParDate.join('')
-      : '<div style="text-align:center;padding:24px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;">Aucune vente sur tes lots pour le moment.</div>'
-    )
+    // Détail lots
+    +(detailLots.filter(d=>d.commDue>0).length
+      ? '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Détail par lot</div>'+lotsHtml
+      : '<div style="text-align:center;padding:20px;color:#6b8c7a;font-size:12px;">Aucun lot vendu pour le moment.</div>')
+
+    // Historique paiements
+    +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin:12px 0 8px;">Historique des versements</div>'
+    +historiqueHtml
   );
 }
 
-// ── VUE ADMIN : commissions par utilisateur et par lot ───────────────────────
+// ── Vue admin — toutes les commissions avec paiement ─────────────────────────
 function voirCommissionAdmin() {
-  // Obtenir tous les utilisateurs ayant enregistré des lots
+  if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
+
   const usersAvecLots = [...new Set(
     achats.filter(a=>a.statut==="recu"&&a.enregistre_par).map(a=>a.enregistre_par)
   )];
 
-  if(!usersAvecLots.length) {
-    showModal('<div style="text-align:center;padding:32px;color:#6b8c7a;font-size:12px;">Aucun lot n\'a encore été associé à un utilisateur.</div>');
+  if(!usersAvecLots.length){
+    showModal('<div style="text-align:center;padding:32px;color:#6b8c7a;font-size:12px;">Aucun lot associé à un utilisateur.</div>');
     return;
   }
 
-  // Pour chaque utilisateur, calculer la commission par lot
-  const usersHtml = usersAvecLots.map(nom => {
-    const lotsUser = achats.filter(a=>a.statut==="recu"&&a.enregistre_par===nom);
-    let totalCommUser = 0;
+  let totalSoldeGlobal = 0;
+  const avatarColors=["#f47820","#0369a1","#166534","#7c3aed","#dc2626"];
 
-    const lotsHtml = lotsUser.map(lot => {
-      const fifo = calculerFIFO(lot.produit);
-      const lotFifo = fifo.lots.find(l=>l.id===lot.id);
-      if(!lotFifo || !lotFifo.qteConsommee) return null;
+  const usersHtml = usersAvecLots.map((nom,i) => {
+    const {totalDue, totalPaye, solde, detailLots, commSemaine} = calculerCommissionComplete(nom);
+    totalSoldeGlobal += solde;
+    const col = avatarColors[i%avatarColors.length];
+    const historiqueUser = commissionsPaiements.filter(p=>p.utilisateur===nom)
+      .sort((a,b)=>b.date?.localeCompare(a.date||"")).slice(0,3);
 
-      // Ventes imputées à ce lot
-      const lotsAvant = fifo.lots.slice(0, fifo.lots.indexOf(lotFifo));
-      const qteAvant = lotsAvant.reduce((s,l)=>s+l.qteInitiale,0);
-      let aSkip=qteAvant, aPrendre=lotFifo.qteConsommee;
-      const ventesTriees = ventes
-        .filter(v=>v.produit===lot.produit)
-        .sort((a,b)=>new Date(a.date)-new Date(b.date));
-      const ventesImputees = [];
-      for(const v of ventesTriees){
-        if(aPrendre<=0) break;
-        if(aSkip>=v.quantite){aSkip-=v.quantite;continue;}
-        const skip=aSkip; aSkip=0;
-        const pris=Math.min(aPrendre,v.quantite-skip);
-        aPrendre-=pris;
-        ventesImputees.push({...v,quantite:pris});
-      }
-      const mn = margenette(ventesImputees);
-      const comm = Math.max(0, mn*0.10);
-      totalCommUser += comm;
+    const lotsHtml = detailLots.filter(d=>d.commDue>0).map(d=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:#f8faf8;border-radius:7px;margin-top:4px;font-size:11px;">'
+      +'<div><div style="font-weight:700;color:#0f1f16;">'+(getProduitIcon(d.lot.produit)||"🌿")+' '+d.lot.produit+' — '+d.lot.fournisseur+'</div>'
+        +'<div style="font-size:10px;color:#6b8c7a;">'+(d.lot.date_reception||d.lot.date)+' · '+d.qteVendue+'/'+d.lot.quantite+' u.</div>'
+      +'</div>'
+      +'<div style="text-align:right;">'
+        +'<div style="font-weight:900;color:#f47820;">'+fmt(d.commDue)+'</div>'
+        +'<div style="font-size:9px;color:#6b8c7a;">MN: '+fmt(d.margeNette)+'</div>'
+      +'</div>'
+    +'</div>').join('');
 
-      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:#f8faf8;border-radius:8px;margin-top:4px;font-size:11px;">'
-        +'<div>'
-          +'<div style="font-weight:700;color:#0f1f16;">'+(getProduitIcon(lot.produit)||"🌿")+' '+lot.produit+' — '+lot.fournisseur+'</div>'
-          +'<div style="font-size:10px;color:#6b8c7a;">'+(lot.date_reception||lot.date)+' · '+lotFifo.qteConsommee+'/'+lot.quantite+' u. vendues</div>'
+    const histHtml = historiqueUser.map(p=>'<div style="display:flex;justify-content:space-between;font-size:10px;color:#166534;padding:3px 6px;background:#f0fdf4;border-radius:6px;margin-top:3px;">'
+      +'<span>✓ '+p.date+' · '+p.mode_paiement+'</span><span style="font-weight:700;">'+fmt(p.montant)+'</span>'
+    +'</div>').join('');
+
+    return '<div style="background:#fff;border:1.5px solid '+(solde>0?"#fed7aa":"#bbf7d0")+';border-radius:14px;padding:14px;margin-bottom:10px;">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
+        +'<div style="display:flex;align-items:center;gap:10px;">'
+          +'<div style="width:38px;height:38px;background:'+col+';border-radius:999px;display:flex;align-items:center;justify-content:center;font-weight:900;color:#fff;font-size:16px;">'+nom.charAt(0).toUpperCase()+'</div>'
+          +'<div><div style="font-weight:800;color:#0f1f16;font-size:14px;">'+nom+'</div>'
+          +'<div style="font-size:10px;color:#6b8c7a;">Semaine : '+fmt(commSemaine)+' · Payé : '+fmt(totalPaye)+'</div></div>'
         +'</div>'
         +'<div style="text-align:right;">'
-          +'<div style="font-weight:900;color:#f47820;">+'+fmt(comm)+'</div>'
-          +'<div style="font-size:9px;color:#6b8c7a;">MN: '+fmt(mn)+'</div>'
-        +'</div>'
-      +'</div>';
-    }).filter(Boolean).join('');
-
-    const col = ["#f47820","#0369a1","#166534","#7c3aed","#dc2626"][usersAvecLots.indexOf(nom)%5];
-    return '<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:14px;padding:14px;margin-bottom:10px;">'
-      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
-        +'<div style="display:flex;align-items:center;gap:10px;">'
-          +'<div style="width:36px;height:36px;background:'+col+';border-radius:999px;display:flex;align-items:center;justify-content:center;font-weight:900;color:#fff;font-size:16px;">'+nom.charAt(0).toUpperCase()+'</div>'
-          +'<div><div style="font-weight:800;color:#0f1f16;font-size:14px;">'+nom+'</div>'
-          +'<div style="font-size:10px;color:#6b8c7a;">'+lotsUser.length+' lot'+(lotsUser.length>1?'s':'')+'</div></div>'
-        +'</div>'
-        +'<div style="background:linear-gradient(135deg,#0d3d1a,#166534);border-radius:10px;padding:8px 14px;text-align:center;">'
-          +'<div style="font-size:14px;font-weight:900;color:#fff;">'+fmt(totalCommUser)+'</div>'
-          +'<div style="font-size:9px;color:#86efac;">Commission</div>'
+          +'<div style="font-size:16px;font-weight:900;color:'+(solde>0?"#c2410c":"#166534")+';">'+(solde>0?fmt(solde)+" à payer":"✓ Soldé")+'</div>'
         +'</div>'
       +'</div>'
       +lotsHtml
+      +(histHtml?'<div style="margin-top:8px;">'+histHtml+'</div>':"")
+      +(solde>0&&isAdmin
+        ?'<div style="margin-top:10px;">'
+          +'<button onclick="modalPaiementCommission(\''+nom.replace(/'/g,"\\'")+'\','+Math.round(solde)+')" '
+            +'style="width:100%;background:linear-gradient(135deg,#0d3d1a,#166534);color:#fff;border:none;border-radius:10px;padding:10px;cursor:pointer;font-family:inherit;font-weight:700;font-size:13px;">💸 Payer '+fmt(solde)+' à '+nom+'</button>'
+          +'</div>'
+        :'')
     +'</div>';
   }).join('');
 
   showModal(
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
     +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">💰 Commissions équipe</div>'
-    +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">10% marge nette · Par utilisateur · Par lot</div></div>'
+    +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">10% marge nette · Versement hebdomadaire</div></div>'
     +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+    +'</div>'
+    // Solde global
+    +'<div style="background:'+(totalSoldeGlobal>0?"#fff7ed":"#f0fdf4")+';border:1.5px solid '+(totalSoldeGlobal>0?"#fed7aa":"#bbf7d0")+';border-radius:12px;padding:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;">'
+      +'<div style="font-size:12px;font-weight:700;color:'+(totalSoldeGlobal>0?"#c2410c":"#166534")+';">Total à verser cette semaine</div>'
+      +'<div style="font-size:20px;font-weight:900;color:'+(totalSoldeGlobal>0?"#c2410c":"#166534")+';">'+fmt(totalSoldeGlobal)+'</div>'
     +'</div>'
     +usersHtml
   );
 }
+
+// ── Modal paiement commission ─────────────────────────────────────────────────
+function modalPaiementCommission(nom, montantSolde) {
+  showModal(
+    '<div style="font-size:16px;font-weight:800;color:#0f1f16;margin-bottom:4px;">💸 Payer la commission</div>'
+    +'<div style="font-size:12px;color:#6b8c7a;margin-bottom:16px;">Bénéficiaire : <strong>'+nom+'</strong> · Solde dû : <strong>'+fmt(montantSolde)+' F</strong></div>'
+
+    +'<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:12px;margin-bottom:16px;">'
+      +'<div style="font-size:11px;font-weight:700;color:#c2410c;margin-bottom:6px;">Montant à verser</div>'
+      +'<input type="number" id="cp2_montant" value="'+montantSolde+'" min="1" max="'+montantSolde+'"'
+        +' style="width:100%;padding:12px;border:1.5px solid #fed7aa;border-radius:10px;font-size:20px;text-align:center;font-family:inherit;font-weight:900;color:#c2410c;"/>'
+      +'<div style="font-size:10px;color:#6b8c7a;text-align:center;margin-top:4px;">Solde total dû : '+fmt(montantSolde)+' F</div>'
+    +'</div>'
+
+    +'<div style="margin-bottom:12px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Mode de paiement</label>'
+      +'<select id="cp2_mode" style="width:100%;padding:11px;border:1.5px solid #e4ede7;border-radius:12px;font-family:inherit;font-size:13px;">'
+      +["Espèces","Wave","Orange Money","MTN Money","Moov Money","Virement"].map(m=>'<option>'+m+'</option>').join('')
+      +'</select></div>'
+
+    +'<div style="margin-bottom:16px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Note (optionnel)</label>'
+      +'<input type="text" id="cp2_note" placeholder="Ex : Commission semaine du 09/06/2026"'
+        +' style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/>'
+    +'</div>'
+
+    +'<div id="cp2_msg" style="display:none;margin-bottom:10px;font-size:12px;font-weight:700;text-align:center;"></div>'
+    +'<div style="display:flex;gap:10px;">'
+      +'<button onclick="confirmerPaiementCommission(\''+nom.replace(/'/g,"\\'")+'\','+montantSolde+')" '
+        +'style="flex:1;padding:13px;background:linear-gradient(135deg,#0d3d1a,#166534);color:#fff;border:none;border-radius:12px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">✓ Confirmer le paiement</button>'
+      +'<button onclick="closeModal()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>'
+    +'</div>'
+  );
+}
+
+async function confirmerPaiementCommission(nom, montantSolde) {
+  const montant = +document.getElementById("cp2_montant").value || 0;
+  const mode    = document.getElementById("cp2_mode").value;
+  const note    = document.getElementById("cp2_note").value.trim();
+  const msg     = document.getElementById("cp2_msg");
+
+  if(!montant||montant<=0){msg.style.cssText="display:block;color:#dc2626;";msg.textContent="Saisissez un montant valide.";return;}
+  if(montant>montantSolde){msg.style.cssText="display:block;color:#dc2626;";msg.textContent="Montant supérieur au solde dû ("+fmt(montantSolde)+" F).";return;}
+
+  msg.style.cssText="display:block;color:#166534;";msg.textContent="Enregistrement…";
+
+  const payload = {
+    id: genId(),
+    utilisateur: nom,
+    montant,
+    mode_paiement: mode,
+    note: note || "Commission hebdomadaire",
+    date: new Date().toISOString().slice(0,10),
+    semaine: getSemaine(),
+    enregistre_par: currentUser?.nom || "Admin"
+  };
+
+  try {
+    await fetch(SB_URL+"/rest/v1/commissions_paiements",{method:"POST",headers:HDR,body:JSON.stringify(payload)});
+    commissionsPaiements.unshift(payload);
+    saveCommPaie();
+    logAdminAction("COMMISSION_PAYEE", nom+" · "+fmt(montant)+" F · "+mode);
+    showToast("✓ Commission de "+fmt(montant)+" F versée à "+nom);
+    closeModal();
+    voirCommissionAdmin();
+  } catch(e) {
+    msg.style.cssText="display:block;color:#dc2626;";msg.textContent=errMsg(e);
+  }
+}
+
+function getSemaine() {
+  const d = new Date();
+  const start = new Date(d.getFullYear(),0,1);
+  return Math.ceil(((d-start)/86400000+start.getDay()+1)/7);
+}
+
+
 
 
 
@@ -5468,6 +5519,8 @@ async function supprimerUtilisateur(id, nom) {
 
 // Charger fournisseurs depuis localStorage
 try{ const fo=localStorage.getItem("va_fournisseurs"); if(fo) fournisseurs=JSON.parse(fo); }catch(e){}
+// Charger commissions paiements
+try{ const cp=localStorage.getItem("va_comm_paie"); if(cp) commissionsPaiements=JSON.parse(cp); }catch(e){}
 // Charger clients et fournisseurs depuis localStorage
 try{ const cl=localStorage.getItem("va_clients"); if(cl) clients=JSON.parse(cl); }catch(e){}
 try{ const ff=localStorage.getItem("va_fournisseurs"); if(ff) fournisseurs=JSON.parse(ff); }catch(e){}

@@ -1740,10 +1740,13 @@ function calculerCommission(nomUtilisateur) {
 // ════════════════════════════════════════════════════════════════════════════
 
 function voirCommission() {
-  if(isAdmin) {
+  const nom = currentUser?.nom;
+  if(!nom) return showToast("Connectez-vous d'abord","error");
+  if(isAdmin || currentUser?.role==="admin") {
     voirCommissionAdmin();
   } else {
-    voirCommissionUtilisateur(currentUser?.nom);
+    // Resync les paiements de CET utilisateur uniquement avant affichage
+    syncCommPaie().then(()=>voirCommissionUtilisateur(nom)).catch(()=>voirCommissionUtilisateur(nom));
   }
 }
 
@@ -1757,13 +1760,22 @@ function saveCommPaie(){ localStorage.setItem("va_comm_paie", JSON.stringify(com
 
 async function syncCommPaie(){
   try{
-    const r=await fetch(SB_URL+"/rest/v1/commissions_paiements?order=date.desc",{headers:HDR});
+    // Admin charge tout, utilisateur charge uniquement ses paiements
+    const filtre = (isAdmin || currentUser?.role==="admin")
+      ? ""
+      : "&utilisateur=eq."+encodeURIComponent(currentUser?.nom||"__vide__");
+    const r=await fetch(SB_URL+"/rest/v1/commissions_paiements?order=date.desc"+filtre,{headers:HDR});
     if(r.ok){ commissionsPaiements=await r.json(); saveCommPaie(); }
   }catch(e){}
 }
 
 // ── Calcul complet commission d'un utilisateur ────────────────────────────────
 function calculerCommissionComplete(nomUtilisateur) {
+  // Sécurité : un non-admin ne peut calculer que SA propre commission
+  if(!isAdmin && currentUser?.role!=="admin" && nomUtilisateur !== currentUser?.nom) {
+    console.warn("[SÉCURITÉ] Tentative d'accès aux commissions d'un autre utilisateur bloquée.");
+    return {totalDue:0, totalPaye:0, solde:0, detailLots:[], commSemaine:0};
+  }
   const lotsUser = achats.filter(a=>
     a.statut==="recu" && (a.enregistre_par===nomUtilisateur || a.auteur===nomUtilisateur)
   );
@@ -1821,8 +1833,10 @@ function calculerCommissionComplete(nomUtilisateur) {
 // ── Vue utilisateur (son propre tableau de bord commission) ───────────────────
 function voirCommissionUtilisateur(nom) {
   const {totalDue, totalPaye, solde, detailLots, commSemaine} = calculerCommissionComplete(nom);
-  const historique = commissionsPaiements.filter(p=>p.utilisateur===nom)
-    .sort((a,b)=>b.date?.localeCompare(a.date||""));
+  // Filtrer STRICTEMENT par nom — même si d'autres paiements sont en mémoire
+  const historique = commissionsPaiements
+    .filter(p=>p.utilisateur===nom)
+    .sort((a,b)=>(b.date||"").localeCompare(a.date||""));
 
   const lotsHtml = detailLots.filter(d=>d.commDue>0).map(d=>{
     const pct = d.lot.quantite ? Math.round(d.qteVendue/d.lot.quantite*100) : 0;
@@ -1878,7 +1892,12 @@ function voirCommissionUtilisateur(nom) {
     // Détail lots
     +(detailLots.filter(d=>d.commDue>0).length
       ? '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Détail par lot</div>'+lotsHtml
-      : '<div style="text-align:center;padding:20px;color:#6b8c7a;font-size:12px;">Aucun lot vendu pour le moment.</div>')
+      : (achats.filter(a=>a.statut==="recu"&&!a.enregistre_par).length > 0
+          ? '<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:14px;text-align:center;">'
+            +'<div style="font-size:13px;font-weight:700;color:#c2410c;margin-bottom:4px;">Lots non associés à ton compte</div>'
+            +'<div style="font-size:11px;color:#6b8c7a;line-height:1.5;">Tes achats ont ete enregistres avant la mise en place du suivi. Contacte l\'administrateur.</div>'
+            +'</div>'
+          : '<div style="text-align:center;padding:20px;color:#6b8c7a;font-size:12px;">Aucun lot vendu pour le moment.</div>'))
 
     // Historique paiements
     +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin:12px 0 8px;">Historique des versements</div>'

@@ -1399,10 +1399,6 @@ async function marquerRecu(id){
     await sbUpdate("achats",id,{statut:"recu"});
     achats=achats.map(a=>a.id===id?{...a,statut:"recu"}:a);
     saveLocal(); render(); showToast("✓ Marchandise reçue à Abidjan");
-    // Afficher la commission si utilisateur non-admin
-    if(!isAdmin && currentUser?.nom) {
-      setTimeout(()=>voirCommission(), 800);
-    }
   }catch(e){showToast("Erreur : "+e.message,"error");}
 }
 
@@ -1853,80 +1849,50 @@ function calculerCommissionComplete(nomUtilisateur) {
 
 // ── Vue utilisateur (son propre tableau de bord commission) ───────────────────
 function voirCommissionUtilisateur(nom) {
-  const {totalDue, totalPaye, solde, detailLots, commSemaine} = calculerCommissionComplete(nom);
-  // Filtrer STRICTEMENT par nom — même si d'autres paiements sont en mémoire
+  // L'utilisateur voit UNIQUEMENT ce qui lui a été versé par VerdApp CI
   const historique = commissionsPaiements
-    .filter(p=>p.utilisateur===nom)
-    .sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+    .filter(p => p.utilisateur === nom)
+    .sort((a,b) => (b.date||"").localeCompare(a.date||""));
 
-  const lotsHtml = detailLots.filter(d=>d.commDue>0).map(d=>{
-    const pct = d.lot.quantite ? Math.round(d.qteVendue/d.lot.quantite*100) : 0;
-    return '<div style="background:#f8faf8;border:1.5px solid #e4ede7;border-radius:10px;padding:10px 12px;margin-bottom:6px;">'
-      +'<div style="display:flex;justify-content:space-between;align-items:center;">'
-        +'<div><div style="font-weight:700;font-size:12px;color:#0f1f16;">'+(getProduitIcon(d.lot.produit)||"🌿")+" "+d.lot.produit+' — '+d.lot.fournisseur+'</div>'
-          +'<div style="font-size:10px;color:#6b8c7a;">'+(d.lot.date_reception||d.lot.date)+' · '+d.qteVendue+'/'+d.lot.quantite+' u. vendues ('+pct+'%)</div>'
-        +'</div>'
-        +'<div style="text-align:right;">'
-          +'<div style="font-size:13px;font-weight:900;color:#f47820;">'+fmt(d.commDue)+'</div>'
-          +'<div style="font-size:9px;color:#6b8c7a;">MN: '+fmt(d.margeNette)+'</div>'
-        +'</div>'
-      +'</div>'
-      +'<div style="height:4px;background:#e2ece7;border-radius:999px;margin-top:6px;overflow:hidden;">'
-        +'<div style="height:100%;background:#f47820;border-radius:999px;width:'+pct+'%;"></div>'
-      +'</div>'
-    +'</div>';
-  }).join('');
+  const totalRecu = historique.reduce((s,p) => s+p.montant, 0);
 
   const historiqueHtml = historique.length
-    ? historique.map(p=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:10px;margin-bottom:6px;">'
-        +'<div><div style="font-weight:700;font-size:12px;color:#166534;">✓ Paiement reçu</div>'
-          +'<div style="font-size:10px;color:#6b8c7a;">'+p.date+' · '+p.mode_paiement+'</div>'
-          +(p.note?'<div style="font-size:10px;color:#6b8c7a;font-style:italic;">'+p.note+'</div>':"")
+    ? historique.map(p =>
+        '<div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:12px;padding:12px;margin-bottom:8px;">'
+        +'<div style="display:flex;justify-content:space-between;align-items:center;">'
+          +'<div>'
+            +'<div style="font-weight:700;color:#166534;font-size:13px;">✓ Commission reçue</div>'
+            +'<div style="font-size:10px;color:#6b8c7a;margin-top:2px;">'+p.date+' · '+p.mode_paiement+'</div>'
+            +(p.note?'<div style="font-size:10px;color:#6b8c7a;font-style:italic;margin-top:1px;">'+p.note+'</div>':"")
+          +'</div>'
+          +'<div style="font-size:18px;font-weight:900;color:#166534;">+'+fmt(p.montant)+'</div>'
         +'</div>'
-        +'<div style="font-size:15px;font-weight:900;color:#166534;">+'+fmt(p.montant)+'</div>'
-      +'</div>').join('')
-    : '<div style="text-align:center;padding:20px;color:#6b8c7a;font-size:12px;">Aucun paiement reçu.</div>';
+        +'</div>'
+      ).join('')
+    : '<div style="background:#f8faf8;border-radius:12px;padding:24px;text-align:center;color:#6b8c7a;font-size:12px;">Aucun versement reçu pour le moment.</div>';
 
   showModal(
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
-    +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">💰 Ma commission</div>'
-    +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">10% marge nette · Semaine en cours : '+fmt(commSemaine)+'</div></div>'
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
+    +'<div>'
+      +'<div style="font-size:17px;font-weight:800;color:#0f1f16;">💰 Mes versements</div>'
+      +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">Commissions versées par VerdApp CI</div>'
+    +'</div>'
     +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
     +'</div>'
 
-    // Solde
-    +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">'
-      +'<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:12px;text-align:center;">'
-        +'<div style="font-size:9px;font-weight:700;color:#c2410c;text-transform:uppercase;letter-spacing:.06em;">Cumulé dû</div>'
-        +'<div style="font-size:16px;font-weight:900;color:#c2410c;margin-top:4px;">'+fmt(totalDue)+'</div>'
-      +'</div>'
-      +'<div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:12px;padding:12px;text-align:center;">'
-        +'<div style="font-size:9px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.06em;">Déjà payé</div>'
-        +'<div style="font-size:16px;font-weight:900;color:#166534;margin-top:4px;">'+fmt(totalPaye)+'</div>'
-      +'</div>'
-      +'<div style="background:linear-gradient(135deg,#0d3d1a,#166534);border-radius:12px;padding:12px;text-align:center;">'
-        +'<div style="font-size:9px;font-weight:700;color:#86efac;text-transform:uppercase;letter-spacing:.06em;">Solde à payer</div>'
-        +'<div style="font-size:18px;font-weight:900;color:#fff;margin-top:4px;">'+fmt(solde)+'</div>'
-      +'</div>'
+    // Total reçu
+    +'<div style="background:linear-gradient(135deg,#0d3d1a,#166534);border-radius:16px;padding:20px;text-align:center;margin-bottom:16px;">'
+      +'<div style="font-size:10px;font-weight:700;color:#86efac;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;">Total reçu</div>'
+      +'<div style="font-size:30px;font-weight:900;color:#fff;">'+fmt(totalRecu)+'</div>'
+      +'<div style="font-size:11px;color:rgba(255,255,255,.5);margin-top:6px;">'+historique.length+' versement'+(historique.length>1?'s':'')+'</div>'
     +'</div>'
 
-    // Détail lots
-    +(detailLots.filter(d=>d.commDue>0).length
-      ? '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Détail par lot</div>'+lotsHtml
-      : (achats.filter(a=>a.statut==="recu"&&!a.enregistre_par).length > 0
-          ? '<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:14px;text-align:center;">'
-            +'<div style="font-size:13px;font-weight:700;color:#c2410c;margin-bottom:4px;">Lots non associés à ton compte</div>'
-            +'<div style="font-size:11px;color:#6b8c7a;line-height:1.5;">Tes achats ont ete enregistres avant la mise en place du suivi. Contacte l\'administrateur.</div>'
-            +'</div>'
-          : '<div style="text-align:center;padding:20px;color:#6b8c7a;font-size:12px;">Aucun lot vendu pour le moment.</div>'))
-
-    // Historique paiements
-    +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin:12px 0 8px;">Historique des versements</div>'
+    // Historique
+    +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Historique des versements</div>'
     +historiqueHtml
   );
 }
 
-// ── Vue admin — toutes les commissions avec paiement ─────────────────────────
 function voirCommissionAdmin() {
   if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
 
@@ -1944,7 +1910,9 @@ function voirCommissionAdmin() {
 
   const usersHtml = usersAvecLots.map((nom,i) => {
     const {totalDue, totalPaye, solde, detailLots, commSemaine} = calculerCommissionComplete(nom);
-    totalSoldeGlobal += solde;
+    // Solde affiché = max(0, solde) — un paiement en avance ne crée pas de dette négative
+    const soldeAffiche = Math.max(0, solde);
+    totalSoldeGlobal += soldeAffiche;
     const col = avatarColors[i%avatarColors.length];
     const historiqueUser = commissionsPaiements.filter(p=>p.utilisateur===nom)
       .sort((a,b)=>b.date?.localeCompare(a.date||"")).slice(0,3);
@@ -1963,23 +1931,29 @@ function voirCommissionAdmin() {
       +'<span>✓ '+p.date+' · '+p.mode_paiement+'</span><span style="font-weight:700;">'+fmt(p.montant)+'</span>'
     +'</div>').join('');
 
-    return '<div style="background:#fff;border:1.5px solid '+(solde>0?"#fed7aa":"#bbf7d0")+';border-radius:14px;padding:14px;margin-bottom:10px;">'
+    const avance = totalPaye > totalDue ? totalPaye - totalDue : 0;
+    return '<div style="background:#fff;border:1.5px solid '+(soldeAffiche>0?"#fed7aa":"#bbf7d0")+';border-radius:14px;padding:14px;margin-bottom:10px;">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
         +'<div style="display:flex;align-items:center;gap:10px;">'
           +'<div style="width:38px;height:38px;background:'+col+';border-radius:999px;display:flex;align-items:center;justify-content:center;font-weight:900;color:#fff;font-size:16px;">'+nom.charAt(0).toUpperCase()+'</div>'
           +'<div><div style="font-weight:800;color:#0f1f16;font-size:14px;">'+nom+'</div>'
-          +'<div style="font-size:10px;color:#6b8c7a;">Semaine : '+fmt(commSemaine)+' · Payé : '+fmt(totalPaye)+'</div></div>'
+          +'<div style="font-size:10px;color:#6b8c7a;">Comm. due : '+fmt(totalDue)+' · Payé : '+fmt(totalPaye)+'</div>'
+          +(avance>0?'<div style="font-size:10px;color:#0369a1;font-weight:700;">Avance : '+fmt(avance)+'</div>':'')
+          +'</div>'
         +'</div>'
         +'<div style="text-align:right;">'
-          +'<div style="font-size:16px;font-weight:900;color:'+(solde>0?"#c2410c":"#166534")+';">'+(solde>0?fmt(solde)+" à payer":"✓ Soldé")+'</div>'
+          +'<div style="font-size:16px;font-weight:900;color:'+(soldeAffiche>0?"#c2410c":"#166534")+'">'
+            +(soldeAffiche>0?fmt(soldeAffiche)+" à payer":'✓ Soldé')
+          +'</div>'
+          +(avance>0?'<div style="font-size:10px;color:#0369a1;">+'+fmt(avance)+' avance</div>':"")
         +'</div>'
       +'</div>'
       +lotsHtml
       +(histHtml?'<div style="margin-top:8px;">'+histHtml+'</div>':"")
-      +(solde>0&&isAdmin
+      +(isAdmin
         ?'<div style="margin-top:10px;">'
-          +'<button onclick="modalPaiementCommission(\''+nom.replace(/'/g,"\\'")+'\','+Math.round(solde)+')" '
-            +'style="width:100%;background:linear-gradient(135deg,#0d3d1a,#166534);color:#fff;border:none;border-radius:10px;padding:10px;cursor:pointer;font-family:inherit;font-weight:700;font-size:13px;">💸 Payer '+fmt(solde)+' à '+nom+'</button>'
+          +'<button onclick="modalPaiementCommission(\''+nom.replace(/'/g,"\\'")+'\','+Math.round(soldeAffiche)+')" '
+            +'style="width:100%;background:linear-gradient(135deg,#0d3d1a,#166534);color:#fff;border:none;border-radius:10px;padding:10px;cursor:pointer;font-family:inherit;font-weight:700;font-size:13px;">💸 '+(soldeAffiche>0?'Payer '+fmt(soldeAffiche)+' à '+nom:'Versement manuel — '+nom)+'</button>'
           +'</div>'
         :'')
     +'</div>';
@@ -1993,8 +1967,11 @@ function voirCommissionAdmin() {
     +'</div>'
     // Solde global
     +'<div style="background:'+(totalSoldeGlobal>0?"#fff7ed":"#f0fdf4")+';border:1.5px solid '+(totalSoldeGlobal>0?"#fed7aa":"#bbf7d0")+';border-radius:12px;padding:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;">'
-      +'<div style="font-size:12px;font-weight:700;color:'+(totalSoldeGlobal>0?"#c2410c":"#166534")+';">Total à verser cette semaine</div>'
-      +'<div style="font-size:20px;font-weight:900;color:'+(totalSoldeGlobal>0?"#c2410c":"#166534")+';">'+fmt(totalSoldeGlobal)+'</div>'
+      +'<div>'
+        +'<div style="font-size:12px;font-weight:700;color:'+(totalSoldeGlobal>0?"#c2410c":"#166534")+';">Total commissions à verser</div>'
+        +'<div style="font-size:10px;color:#6b8c7a;margin-top:2px;">Versement hebdomadaire · '+(new Date().toLocaleDateString("fr-CI",{day:"numeric",month:"long"}))+'</div>'
+      +'</div>'
+      +'<div style="font-size:22px;font-weight:900;color:'+(totalSoldeGlobal>0?"#c2410c":"#166534")+';">'+fmt(totalSoldeGlobal)+'</div>'
     +'</div>'
     +usersHtml
   );
@@ -2008,9 +1985,11 @@ function modalPaiementCommission(nom, montantSolde) {
 
     +'<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:12px;margin-bottom:16px;">'
       +'<div style="font-size:11px;font-weight:700;color:#c2410c;margin-bottom:6px;">Montant à verser</div>'
-      +'<input type="number" id="cp2_montant" value="'+montantSolde+'" min="1" max="'+montantSolde+'"'
+      +'<input type="number" id="cp2_montant" value="'+montantSolde+'" min="1"'
         +' style="width:100%;padding:12px;border:1.5px solid #fed7aa;border-radius:10px;font-size:20px;text-align:center;font-family:inherit;font-weight:900;color:#c2410c;"/>'
-      +'<div style="font-size:10px;color:#6b8c7a;text-align:center;margin-top:4px;">Solde total dû : '+fmt(montantSolde)+' F</div>'
+      +'<div style="font-size:10px;color:#6b8c7a;text-align:center;margin-top:4px;">'
+        +(montantSolde>0?'Solde dû : '+fmt(montantSolde)+' F':'Saisie manuelle libre — comm. due : voir détail')
+      +'</div>'
     +'</div>'
 
     +'<div style="margin-bottom:12px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Mode de paiement</label>'
@@ -2039,7 +2018,7 @@ async function confirmerPaiementCommission(nom, montantSolde) {
   const msg     = document.getElementById("cp2_msg");
 
   if(!montant||montant<=0){msg.style.cssText="display:block;color:#dc2626;";msg.textContent="Saisissez un montant valide.";return;}
-  if(montant>montantSolde){msg.style.cssText="display:block;color:#dc2626;";msg.textContent="Montant supérieur au solde dû ("+fmt(montantSolde)+" F).";return;}
+  // Pas de limite max — l'admin peut verser une avance
 
   msg.style.cssText="display:block;color:#166534;";msg.textContent="Enregistrement…";
 
@@ -3114,51 +3093,131 @@ async function enregistrerPerteLot(lotId, produit, fournisseur, qteRestante, cou
 function voirPertesLots() {
   if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
 
-  const all = pertesLots.slice().sort((a,b)=>b.date.localeCompare(a.date));
+  const all = pertesLots.slice().sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  const totalVal = all.reduce((s,p)=>s+(p.valeur_perte||0),0);
+  const totalQte = all.reduce((s,p)=>s+(p.qte_perte||0),0);
 
-  const totalVal = all.reduce((s,p)=>s+p.valeur_perte,0);
-  const totalQte = all.reduce((s,p)=>s+p.qte_perte,0);
-
-  const lignes = all.map(p=>
-    '<div style="background:#fff;border:1.5px solid #fecaca;border-radius:10px;padding:10px 12px;margin-bottom:6px;">'
-    +'<div style="display:flex;justify-content:space-between;align-items:center;">'
-      +'<div>'
-        +'<div style="font-weight:700;color:#0f1f16;font-size:12px;">'+(getProduitIcon(p.produit)||"🌿")+' '+p.produit+' — '+p.fournisseur+'</div>'
-        +'<div style="font-size:10px;color:#6b8c7a;">'+p.date+' · Constaté par : '+p.constate_par+'</div>'
-        +(p.note?'<div style="font-size:10px;color:#6b8c7a;font-style:italic;">'+p.note+'</div>':'')
+  const lignes = all.map((p,i)=>
+    '<div style="background:#fff;border:1.5px solid #fecaca;border-radius:12px;padding:12px;margin-bottom:8px;">'
+    +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">'
+      +'<div style="flex:1;min-width:0;">'
+        +'<div style="font-weight:700;color:#0f1f16;font-size:13px;">'+(getProduitIcon(p.produit)||"🌿")+' '+p.produit+' — '+p.fournisseur+'</div>'
+        +'<div style="font-size:10px;color:#6b8c7a;margin-top:2px;">'+p.date+' · '+p.constate_par+'</div>'
+        +(p.note?'<div style="font-size:10px;color:#6b8c7a;font-style:italic;margin-top:2px;">'+p.note+'</div>':"")
+        +'<div style="font-size:10px;color:#6b8c7a;">Valorisé au '+(p.mode_valorisation==="revient"?"coût revient":"prix achat")+' : '+fmt(p.cout_unitaire||0)+'/u</div>'
       +'</div>'
       +'<div style="text-align:right;flex-shrink:0;">'
-        +'<div style="font-size:13px;font-weight:900;color:#dc2626;">−'+p.qte_perte+' u.</div>'
-        +'<div style="font-size:11px;font-weight:700;color:#c2410c;">−'+fmt(p.valeur_perte)+' F</div>'
-        +'<div style="font-size:9px;color:#6b8c7a;">Au '+( p.mode_valorisation==="revient"?"coût revient":"prix achat")+' : '+fmt(p.cout_unitaire)+'/u</div>'
+        +'<div style="font-size:15px;font-weight:900;color:#dc2626;">-'+p.qte_perte+' u.</div>'
+        +'<div style="font-size:12px;font-weight:700;color:#c2410c;">'+fmt(p.valeur_perte||0)+'</div>'
       +'</div>'
+    +'</div>'
+    +'<div style="display:flex;gap:6px;margin-top:8px;justify-content:flex-end;">'
+      +'<button class="btn-modif-perte" data-idx="'+i+'" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:8px;padding:5px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">✏ Modifier</button>'
+      +'<button class="btn-suppr-perte" data-id="'+p.id+'" style="background:#fef2f2;border:1.5px solid #fecaca;color:#dc2626;border-radius:8px;padding:5px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">🗑 Supprimer</button>'
     +'</div>'
     +'</div>'
   ).join('');
 
   showModal(
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
-    +'<div>'
-      +'<div style="font-size:17px;font-weight:800;color:#0f1f16;">📋 Pertes constatées par lot</div>'
-      +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">'+all.length+' constatation'+(all.length>1?'s':'')+' · Valeur totale : '+fmt(totalVal)+' F</div>'
-    +'</div>'
+    +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">📋 Pertes constatées</div>'
+    +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">'+all.length+' constatation'+(all.length>1?'s':'')+' · '+fmt(totalVal)+'</div></div>'
     +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
     +'</div>'
-    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">'
       +'<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:12px;padding:12px;text-align:center;">'
-        +'<div style="font-size:11px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:.06em;">Quantité perdue</div>'
-        +'<div style="font-size:20px;font-weight:900;color:#0f1f16;margin-top:4px;">'+totalQte+' u.</div>'
+        +'<div style="font-size:9px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:.06em;">Quantité perdue</div>'
+        +'<div style="font-size:22px;font-weight:900;color:#0f1f16;margin-top:4px;">'+totalQte+' u.</div>'
       +'</div>'
       +'<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:12px;padding:12px;text-align:center;">'
-        +'<div style="font-size:11px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:.06em;">Valeur perdue</div>'
-        +'<div style="font-size:20px;font-weight:900;color:#dc2626;margin-top:4px;">−'+fmt(totalVal)+' F</div>'
+        +'<div style="font-size:9px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:.06em;">Valeur perdue</div>'
+        +'<div style="font-size:22px;font-weight:900;color:#dc2626;margin-top:4px;">'+fmt(totalVal)+'</div>'
       +'</div>'
+    +'</div>'
+    +'<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:10px;padding:9px 12px;margin-bottom:12px;font-size:11px;color:#c2410c;">'
+      +'⚠ Ces pertes réduisent le stock disponible et le résultat net d\'exploitation.'
     +'</div>'
     +(all.length
       ? '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Détail</div>'+lignes
       : '<div style="text-align:center;padding:24px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;">Aucune perte constatée.</div>'
     )
   );
+
+  // Délégation événements boutons
+  setTimeout(()=>{
+    document.querySelectorAll(".btn-modif-perte").forEach(btn=>{
+      btn.onclick = ()=>modifierPerteLot(parseInt(btn.dataset.idx));
+    });
+    document.querySelectorAll(".btn-suppr-perte").forEach(btn=>{
+      btn.onclick = ()=>supprimerPerteLot(btn.dataset.id);
+    });
+  }, 100);
+}
+
+function modifierPerteLot(index) {
+  const all = pertesLots.slice().sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  const p = all[index];
+  if(!p) return;
+  showModal(
+    '<div style="font-size:16px;font-weight:800;color:#0f1f16;margin-bottom:4px;">✏ Modifier la perte</div>'
+    +'<div style="font-size:12px;color:#6b8c7a;margin-bottom:14px;">'+(getProduitIcon(p.produit)||"🌿")+' '+p.produit+' — '+p.fournisseur+'</div>'
+    +'<div style="margin-bottom:12px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Quantité perdue *</label>'
+      +'<input type="number" id="mp_qte" value="'+p.qte_perte+'" min="1" style="width:100%;padding:12px;border:1.5px solid #fecaca;border-radius:12px;font-size:18px;text-align:center;font-family:inherit;font-weight:700;color:#dc2626;"/></div>'
+    +'<div style="margin-bottom:12px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Mode valorisation</label>'
+      +'<select id="mp_mode" style="width:100%;padding:11px;border:1.5px solid #e4ede7;border-radius:12px;font-family:inherit;font-size:13px;">'
+        +'<option value="achat" '+(p.mode_valorisation==="achat"?"selected":"")+'>Au prix achat</option>'
+        +'<option value="revient" '+(p.mode_valorisation==="revient"?"selected":"")+'>Au coût de revient</option>'
+      +'</select></div>'
+    +'<div style="margin-bottom:16px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Motif</label>'
+      +'<input type="text" id="mp_note" value="'+(p.note||"")+'" placeholder="Ex : avarie, mévente…" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/></div>'
+    +'<div id="mp_msg" style="display:none;margin-bottom:10px;font-size:12px;font-weight:700;text-align:center;"></div>'
+    +'<div style="display:flex;gap:10px;">'
+      +'<button onclick="confirmerModifPerte(\''+p.id+'\','+p.qte_perte+')" style="flex:1;padding:13px;background:#0d3d1a;color:#fff;border:none;border-radius:12px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">✓ Enregistrer</button>'
+      +'<button onclick="voirPertesLots()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>'
+    +'</div>'
+  );
+  setTimeout(()=>document.getElementById("mp_qte")?.focus(),200);
+}
+
+async function confirmerModifPerte(id, ancienneQte) {
+  const qte  = parseInt(document.getElementById("mp_qte").value)||0;
+  const mode = document.getElementById("mp_mode").value;
+  const note = document.getElementById("mp_note").value.trim();
+  const msg  = document.getElementById("mp_msg");
+  if(!qte||qte<=0){ msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Quantité invalide."; return; }
+  msg.style.cssText="display:block;color:#166534;"; msg.textContent="Mise à jour…";
+  try {
+    const idx = pertesLots.findIndex(p=>p.id===id);
+    if(idx===-1) throw new Error("Perte introuvable");
+    const p = pertesLots[idx];
+    const valeur = qte * (p.cout_unitaire||0);
+    await fetch(SB_URL+"/rest/v1/pertes_lots?id=eq."+id,{method:"PATCH",headers:HDR,
+      body:JSON.stringify({qte_perte:qte,valeur_perte:valeur,mode_valorisation:mode,note})});
+    pertesLots[idx]={...p,qte_perte:qte,valeur_perte:valeur,mode_valorisation:mode,note};
+    savePertesLots();
+    const diff = qte - ancienneQte;
+    pertes[p.produit] = Math.max(0,(pertes[p.produit]||0)+diff);
+    await updatePerte(p.produit,pertes[p.produit]);
+    logAdminAction("MODIF_PERTE",p.produit+" · "+qte+"u");
+    showToast("✓ Perte mise à jour");
+    renderStock(); renderDashboard(); voirPertesLots();
+  } catch(e){ msg.style.cssText="display:block;color:#dc2626;"; msg.textContent=errMsg(e); }
+}
+
+async function supprimerPerteLot(id) {
+  const p = pertesLots.find(x=>x.id===id);
+  if(!p) return;
+  if(!confirm("Supprimer cette perte de "+p.qte_perte+" u. de "+p.produit+" ?")) return;
+  try {
+    await fetch(SB_URL+"/rest/v1/pertes_lots?id=eq."+id,{method:"DELETE",headers:HDR});
+    pertes[p.produit] = Math.max(0,(pertes[p.produit]||0)-p.qte_perte);
+    await updatePerte(p.produit,pertes[p.produit]);
+    pertesLots = pertesLots.filter(x=>x.id!==id);
+    savePertesLots();
+    logAdminAction("SUPPR_PERTE",p.produit+" · "+p.qte_perte+"u");
+    showToast("✓ Perte supprimée");
+    renderStock(); renderDashboard(); voirPertesLots();
+  } catch(e){ showToast(errMsg(e),"error"); }
 }
 
 function renderStock(){

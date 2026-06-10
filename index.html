@@ -255,6 +255,7 @@ select option{background:var(--white);color:var(--text);}
   <button class="nav-item active" id="nav-dashboard" onclick="switchTab('dashboard')" data-role="admin"><span class="nav-icon">⊞</span>Tableau de bord</button>
   <button class="nav-item" id="nav-achats" onclick="switchTab('achats')" data-role="all"><span class="nav-icon">⬡</span>Achats terrain</button>
   <button class="nav-item" id="nav-ventes" onclick="switchTab('ventes')" data-role="admin"><span class="nav-icon">$</span>Ventes Abidjan</button>
+  <button class="nav-item" id="nav-clients" onclick="switchTab('clients')" data-role="admin"><span class="nav-icon">👥</span>Clients<span id="clientsDotSide" class="notif-dot" style="display:none;"></span></button>
   <button class="nav-item" id="nav-stock" onclick="switchTab('stock')" data-role="admin"><span class="nav-icon">◈</span>Stock</button>
   <button class="nav-item" id="nav-demandes" onclick="switchTab('demandes')" data-role="admin"><span class="nav-icon">📋</span>Demandes<span id="demandesDotSide" class="notif-dot" style="display:none;"></span></button>
   <button class="nav-item" id="nav-chat" onclick="switchTab('chat')" data-role="all"><span class="nav-icon">💬</span>Chat équipe<span id="chatDotSide" class="notif-dot" style="display:none;"></span></button>
@@ -266,6 +267,7 @@ select option{background:var(--white);color:var(--text);}
   <button class="bnav-item active" id="bnav-dashboard" onclick="switchTab('dashboard')" data-role="admin"><span class="bnav-icon">⊞</span>Bord</button>
   <button class="bnav-item" id="bnav-achats" onclick="switchTab('achats')" data-role="all"><span class="bnav-icon">⬡</span>Achats</button>
   <button class="bnav-item" id="bnav-ventes" onclick="switchTab('ventes')" data-role="admin"><span class="bnav-icon">$</span>Ventes</button>
+  <button class="bnav-item" id="bnav-clients" onclick="switchTab('clients')" data-role="admin"><span class="bnav-icon">👥</span>Clients<span id="clientsDot" class="notif-dot" style="display:none;"></span></button>
   <button class="bnav-item" id="bnav-stock" onclick="switchTab('stock')" data-role="admin"><span class="bnav-icon">◈</span>Stock</button>
   <button class="bnav-item" id="bnav-demandes" onclick="switchTab('demandes')" data-role="admin"><span class="bnav-icon">📋</span>Dem.<span id="demandesDot" class="notif-dot" style="display:none;"></span></button>
   <button class="bnav-item" id="bnav-chat" onclick="switchTab('chat')" data-role="all"><span class="bnav-icon">💬</span>Chat<span id="chatDot" class="notif-dot" style="display:none;"></span></button>
@@ -314,6 +316,7 @@ select option{background:var(--white);color:var(--text);}
   <div id="page-dashboard"></div>
   <div id="page-achats" style="display:none;"></div>
   <div id="page-ventes" style="display:none;"></div>
+  <div id="page-clients" style="display:none;"></div>
   <div id="page-stock" style="display:none;"></div>
   <div id="page-demandes" style="display:none;"></div>
   <div id="page-chat" style="display:none;"></div>
@@ -424,7 +427,7 @@ async function migrerPinVersHash(){
 }
 
 const UNITES=["Sac","Kg","Caisse","Carton","Botte","Filet"];
-const PAIEMENTS=["Espèces","Wave","Orange Money","MTN Money","Moov Money","Virement"];
+const PAIEMENTS=["Espèces","Wave","Orange Money","MTN Money","Moov Money","Virement","Crédit"];
 const ICONES_DISPO=["🍅","🫛","🍆","🫑","🧅","🌶️","🥕","🥬","🥗","🥒","🫘","🍠","🍌","🌽","🥦","🫚","🧄","🍋","🍊","🍇","🌾","🌿","🥑","🫒","🍄","🌰","🥜","🫙"];
 
 // ─── STATE ───────────────────────────────────────────────────────────────────
@@ -560,6 +563,13 @@ async function decryptLocal(stored) {
     // Si déchiffrement impossible, essayer de parser directement
     try { return JSON.parse(stored); } catch(e2) { return null; }
   }
+}
+
+
+// ─── Toggle zone crédit dans formulaire vente ────────────────────────────────
+function toggleMontantPaye(mode) {
+  const zone = document.getElementById("vf_credit_zone");
+  if(zone) zone.style.display = mode === "Crédit" ? "" : "none";
 }
 
 // ─── UTILITAIRES CALCULS FINANCIERS ─────────────────────────────────────────
@@ -878,6 +888,8 @@ async function syncAll(silent=false){
   const btn = getEl("syncBtn");
   if(!silent && btn){ btn.innerHTML='<span class="spinner"></span>'; btn.disabled=true; }
   try{
+    // Sync clients en parallèle
+    syncClients().catch(()=>{});
     const [a,v,d,p,cfg]=await Promise.all([
       sbGet("achats"),sbGet("ventes"),sbGet("demandes"),
       fetch(`${SB_URL}/rest/v1/produits?order=nom.asc`,{headers:HDR}).then(r=>r.json()),
@@ -896,6 +908,7 @@ async function syncAll(silent=false){
       }
     }
     updateDemandesBadge();
+    updateClientsBadge();
     render();
     if(!silent) showToast("✓ Synchronisé");
     // Indicateur dernière sync
@@ -982,6 +995,20 @@ function closeModal(){getEl("modalOverlay").style.display="none";}
 function closeModalOutside(e){if(e.target===getEl("modalOverlay")) closeModal();}
 
 // ─── DEMANDES BADGE ──────────────────────────────────────────────────────────
+function updateClientsBadge(){
+  const nomsVentes = [...new Set(ventes.map(v=>v.client).filter(Boolean))];
+  const nbImpayes = nomsVentes.filter(nom => {
+    const ventesC = ventes.filter(v=>v.client===nom);
+    const total = ventesC.reduce((s,v)=>s+v.quantite*v.prix_vente, 0);
+    const paye = ventesC.reduce((s,v)=>v.mode_paiement==="Crédit"?s+(v.montant_paye||0):s+v.quantite*v.prix_vente, 0);
+    return total - paye > 0;
+  }).length;
+  ["clientsDot","clientsDotSide"].forEach(id=>{
+    const el = getEl(id);
+    if(el){ el.style.display = nbImpayes>0&&currentTab!=="clients"?"inline-block":"none"; el.textContent=nbImpayes; }
+  });
+}
+
 function updateDemandesBadge(){
   const pending=demandes.filter(d=>d.statut==="en_attente").length;
   ["demandesDot","demandesDotSide"].forEach(id=>{
@@ -1090,7 +1117,11 @@ function buildVenteForm(data, onSubmit, submitLabel){
       <div><label class="label">Unité</label><select id="vf_unite">${UNITES.map(u=>`<option value="${u}" ${data.unite===u?"selected":""}>${u}</option>`).join("")}</select></div>
       <div><label class="label">Quantité *</label><input type="number" id="vf_qte" value="${data.quantite||''}" placeholder="10" inputmode="numeric"/></div>
       <div><label class="label">Prix vente/unité (F) *</label><input type="number" id="vf_prix" value="${data.prix_vente||''}" placeholder="4000" inputmode="numeric"/></div>
-      <div><label class="label">Mode paiement</label><select id="vf_mode">${PAIEMENTS.map(p=>`<option value="${p}" ${data.mode_paiement===p?"selected":""}>${p}</option>`).join("")}</select></div>
+      <div><label class="label">Mode paiement</label><select id="vf_mode" onchange="toggleMontantPaye(this.value)">${PAIEMENTS.map(p=>`<option value="${p}" ${data.mode_paiement===p?"selected":""}>${p}</option>`).join("")}</select></div>
+      <div id="vf_credit_zone" style="${data.mode_paiement==="Crédit"?"":"display:none;"}">
+        <label class="label">Montant payé maintenant (avance)</label>
+        <input type="number" id="vf_montant_paye" min="0" value="${data.montant_paye||0}" placeholder="0 = vente entière à crédit"/>
+      </div>
       <div><label class="label">Notes</label><input type="text" id="vf_notes" value="${data.notes||''}" placeholder="Client régulier..."/></div>
     </div>
     <div id="vf_calc" style="display:none;background:var(--gray-100);border:1.5px solid var(--gray-200);border-radius:12px;padding:12px;margin-bottom:12px;grid-template-columns:1fr 1fr;gap:8px;text-align:center;">
@@ -1163,6 +1194,9 @@ async function soumettreModifVente(id){
     unite:document.getElementById("vf_unite").value,
     quantite:+qte, prix_vente:+prix,
     mode_paiement:document.getElementById("vf_mode").value,
+    montant_paye: document.getElementById("vf_mode").value==="Crédit"
+      ? (+document.getElementById("vf_montant_paye")?.value||0)
+      : null,
     notes:document.getElementById("vf_notes").value
   };
   const demande={id:genId(),type:"modification",table_cible:"ventes",enregistrement_id:id,donnees_originales:original,donnees_nouvelles:nouvelles,statut:"en_attente"};
@@ -1362,7 +1396,7 @@ async function updatePerte(produit,val){
 // ════════════════════════════════════════════════════════════════════════════
 function tabsAutorisés(){
   return (isAdmin || currentUser?.role==="admin")
-    ? ["dashboard","achats","ventes","stock","demandes","chat","params"]
+    ? ["dashboard","achats","ventes","clients","stock","demandes","chat","params"]
     : ["achats","chat"];
 }
 
@@ -1381,7 +1415,7 @@ function switchTab(tab){
     tab="achats";
   }
   currentTab=tab;
-  ["dashboard","achats","ventes","stock","demandes","chat","params"].forEach(t=>{
+  ["dashboard","achats","ventes","clients","stock","demandes","chat","params"].forEach(t=>{
     const page=document.getElementById("page-"+t);
     if(page) page.style.display=t===tab?"block":"none";
     const nav=document.getElementById("nav-"+t);
@@ -1853,6 +1887,441 @@ function voirCommissionAdmin() {
 }
 
 
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE CLIENTS & IMPAYÉS
+// ════════════════════════════════════════════════════════════════════════════
+let clients = JSON.parse(localStorage.getItem("va_clients")||"[]");
+
+function saveClients(){ localStorage.setItem("va_clients", JSON.stringify(clients)); }
+
+// ── Supabase helpers clients ──────────────────────────────────────────────────
+async function syncClients() {
+  try {
+    const r = await fetch(SB_URL+"/rest/v1/clients?order=nom.asc", {headers:HDR});
+    if(r.ok){ clients = await r.json(); saveClients(); }
+  } catch(e) { /* utiliser cache local */ }
+}
+
+async function sbSaveClient(payload) {
+  const r = await fetch(SB_URL+"/rest/v1/clients", {method:"POST",headers:HDR,body:JSON.stringify(payload)});
+  if(!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+async function sbUpdateClient(id, data) {
+  const r = await fetch(SB_URL+"/rest/v1/clients?id=eq."+id, {method:"PATCH",headers:HDR,body:JSON.stringify(data)});
+  if(!r.ok) throw new Error(await r.text());
+}
+
+async function sbDeleteClient(id) {
+  const r = await fetch(SB_URL+"/rest/v1/clients?id=eq."+id, {method:"DELETE",headers:HDR});
+  if(!r.ok) throw new Error(await r.text());
+}
+
+async function sbSaveReglement(payload) {
+  const r = await fetch(SB_URL+"/rest/v1/reglements_clients", {method:"POST",headers:HDR,body:JSON.stringify(payload)});
+  if(!r.ok) throw new Error(await r.text());
+}
+
+// ── Calculs client ────────────────────────────────────────────────────────────
+function getStatsClient(nomClient) {
+  const ventesC = ventes.filter(v => (v.client||"").toLowerCase() === nomClient.toLowerCase());
+  const totalAchete = ventesC.reduce((s,v) => s+v.quantite*v.prix_vente, 0);
+  const totalPaye = ventesC.reduce((s,v) => {
+    if(v.mode_paiement === "Crédit") return s + (v.montant_paye||0);
+    return s + v.quantite*v.prix_vente;
+  }, 0);
+  const soldeDu = totalAchete - totalPaye;
+  const nbVentes = ventesC.length;
+  const derniereVisite = ventesC.length
+    ? ventesC.sort((a,b)=>b.date?.localeCompare(a.date||""))[0].date
+    : null;
+  const produitsAchetes = [...new Set(ventesC.map(v=>v.produit))];
+  return {totalAchete, totalPaye, soldeDu, nbVentes, derniereVisite, produitsAchetes, ventesC};
+}
+
+// ── PAGE CLIENTS ──────────────────────────────────────────────────────────────
+function renderClients() {
+  const page = document.getElementById("page-clients");
+  if(!page) return;
+
+  // Construire la liste des clients depuis les ventes + table clients
+  const nomsVentes = [...new Set(ventes.map(v=>v.client).filter(Boolean))];
+  const clientsConnus = clients.length ? clients : nomsVentes.map(n=>({id:n,nom:n,telephone:"",adresse:"",notes:""}));
+
+  // Stats globales
+  let totalDuGlobal = 0, totalCAGlobal = 0;
+  clientsConnus.forEach(cl => {
+    const s = getStatsClient(cl.nom);
+    totalDuGlobal += s.soldeDu;
+    totalCAGlobal += s.totalAchete;
+  });
+
+  const nbImpayes = clientsConnus.filter(cl => getStatsClient(cl.nom).soldeDu > 0).length;
+
+  let html = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+      <div>
+        <div class="section-title" style="margin-bottom:0;">👥 Clients</div>
+        <div style="font-size:11px;color:#6b8c7a;margin-top:2px;">${clientsConnus.length} client${clientsConnus.length>1?"s":""} · ${nbImpayes} impayé${nbImpayes>1?"s":""}</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        ${isAdmin?`<button onclick="ouvrirNouveauClient()" style="background:#0d3d1a;color:#fff;border:none;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">+ Nouveau client</button>`:""}
+        ${isAdmin&&nbImpayes>0?`<button onclick="voirTousImpayes()" style="background:#fef2f2;border:1.5px solid #fecaca;color:#dc2626;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">⚠ Impayés (${nbImpayes})</button>`:""}
+      </div>
+    </div>`;
+
+  // KPI globaux
+  html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;">
+    <div style="background:linear-gradient(135deg,#1e3a5f,#1a2e4a);border-radius:12px;padding:12px;text-align:center;">
+      <div style="font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;letter-spacing:.1em;">CA clients</div>
+      <div style="font-size:18px;font-weight:900;color:#fff;margin-top:4px;">${fmt(totalCAGlobal)}</div>
+    </div>
+    <div style="background:${totalDuGlobal>0?"linear-gradient(135deg,#7f1d1d,#991b1b)":"linear-gradient(135deg,#14532d,#166534)"};border-radius:12px;padding:12px;text-align:center;">
+      <div style="font-size:9px;font-weight:700;color:${totalDuGlobal>0?"#fca5a5":"#86efac"};text-transform:uppercase;letter-spacing:.1em;">Total impayés</div>
+      <div style="font-size:18px;font-weight:900;color:#fff;margin-top:4px;">${fmt(totalDuGlobal)}</div>
+    </div>
+  </div>`;
+
+  // Filtre
+  html += `<div style="display:flex;gap:8px;margin-bottom:12px;">
+    <input type="text" id="clientSearch" placeholder="Rechercher un client…" oninput="filtrerClients(this.value)"
+      style="flex:1;padding:9px 12px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/>
+    <select id="clientFilter" onchange="filtrerClients()" style="padding:9px 12px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:12px;background:#fff;">
+      <option value="tous">Tous</option>
+      <option value="impayes">Avec impayés</option>
+      <option value="solde">Soldés</option>
+    </select>
+  </div>`;
+
+  html += `<div id="clientsList">` + renderClientsList(clientsConnus) + `</div>`;
+  page.innerHTML = html;
+}
+
+function renderClientsList(clientsListe, filtre="tous", search="") {
+  let liste = clientsListe;
+  if(search) liste = liste.filter(cl => cl.nom.toLowerCase().includes(search.toLowerCase()));
+  if(filtre==="impayes") liste = liste.filter(cl => getStatsClient(cl.nom).soldeDu > 0);
+  if(filtre==="solde") liste = liste.filter(cl => getStatsClient(cl.nom).soldeDu <= 0);
+
+  if(!liste.length) return `<div style="text-align:center;padding:40px;color:#6b8c7a;font-size:13px;">Aucun client trouvé.</div>`;
+
+  const avatarColors = ["#f47820","#0369a1","#166534","#7c3aed","#dc2626","#0891b2","#65a30d"];
+
+  return liste.map((cl, i) => {
+    const s = getStatsClient(cl.nom);
+    const col = avatarColors[i % avatarColors.length];
+    const hasDebt = s.soldeDu > 0;
+    return `<div style="background:#fff;border:1.5px solid ${hasDebt?"#fecaca":"#e4ede7"};border-radius:14px;padding:13px 14px;margin-bottom:8px;cursor:pointer;" onclick="voirFicheClient('${cl.nom.replace(/'/g,"\\'")}')">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div style="width:40px;height:40px;background:${col};border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:900;color:#fff;flex-shrink:0;">${cl.nom.charAt(0).toUpperCase()}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:700;color:#0f1f16;font-size:14px;">${cl.nom}</div>
+          <div style="font-size:10px;color:#6b8c7a;margin-top:1px;">${s.nbVentes} achat${s.nbVentes>1?"s":""} · CA : ${fmt(s.totalAchete)}${cl.telephone?" · "+cl.telephone:""}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          ${hasDebt
+            ? `<div style="font-size:14px;font-weight:900;color:#dc2626;">−${fmt(s.soldeDu)}</div><div style="font-size:9px;color:#6b8c7a;">Dû</div>`
+            : `<div style="font-size:12px;font-weight:700;color:#166534;">✓ Soldé</div>`
+          }
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function filtrerClients(search) {
+  const filtre = document.getElementById("clientFilter")?.value || "tous";
+  const s = search !== undefined ? search : (document.getElementById("clientSearch")?.value || "");
+  const nomsVentes = [...new Set(ventes.map(v=>v.client).filter(Boolean))];
+  const clientsConnus = clients.length ? clients : nomsVentes.map(n=>({id:n,nom:n,telephone:"",adresse:"",notes:""}));
+  const el = document.getElementById("clientsList");
+  if(el) el.innerHTML = renderClientsList(clientsConnus, filtre, s);
+}
+
+// ── Fiche client ──────────────────────────────────────────────────────────────
+function voirFicheClient(nom) {
+  const cl = clients.find(c=>c.nom===nom) || {id:nom,nom,telephone:"",adresse:"",notes:""};
+  const s = getStatsClient(nom);
+  const avatarColors = ["#f47820","#0369a1","#166534","#7c3aed","#dc2626","#0891b2","#65a30d"];
+  const col = avatarColors[nom.charCodeAt(0) % avatarColors.length];
+
+  const ventesTriees = s.ventesC.slice().sort((a,b)=>b.date?.localeCompare(a.date||""));
+
+  const lignesVentes = ventesTriees.map(v => {
+    const total = v.quantite * v.prix_vente;
+    const paye = v.mode_paiement==="Crédit" ? (v.montant_paye||0) : total;
+    const du = total - paye;
+    return `<div style="background:#f8faf8;border:1.5px solid #e4ede7;border-radius:10px;padding:10px 12px;margin-bottom:6px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-weight:700;font-size:12px;color:#0f1f16;">${getProduitIcon(v.produit)||"🌿"} ${v.produit} × ${v.quantite}</div>
+          <div style="font-size:10px;color:#6b8c7a;">${v.date} · ${v.mode_paiement}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:13px;font-weight:900;color:#0f1f16;">${fmt(total)}</div>
+          ${du>0?`<div style="font-size:10px;color:#dc2626;font-weight:700;">Dû : ${fmt(du)}</div>`
+               :`<div style="font-size:10px;color:#166534;font-weight:700;">✓ Soldé</div>`}
+        </div>
+      </div>
+      ${du>0&&isAdmin?`<div style="margin-top:8px;display:flex;justify-content:flex-end;">
+        <button onclick="enregistrerReglement('${v.id}','${nom.replace(/'/g,"\\'")}',${du})" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#166534;border-radius:8px;padding:5px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">💰 Encaisser</button>
+      </div>`:""}
+    </div>`;
+  }).join("");
+
+  const waLink = localStorage.getItem("va_wa_link");
+  const msgRelance = encodeURIComponent(
+    "Bonjour "+nom+",\nNous vous rappelons que vous avez un solde impayé de "+fmt(s.soldeDu)+" F sur vos achats de légumes.\nMerci de régulariser.\n— VerdApp CI"
+  );
+  const waUrl = cl.telephone
+    ? "https://wa.me/225"+cl.telephone.replace(/\D/g,"")+"?text="+msgRelance
+    : (waLink ? waLink+"?text="+msgRelance : null);
+
+  showModal(
+    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div style="width:48px;height:48px;background:${col};border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:900;color:#fff;">${nom.charAt(0).toUpperCase()}</div>
+        <div>
+          <div style="font-size:16px;font-weight:800;color:#0f1f16;">${nom}</div>
+          <div style="font-size:11px;color:#6b8c7a;">${cl.telephone||"Pas de téléphone"} ${cl.adresse?"· "+cl.adresse:""}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;">
+        ${isAdmin?`<button onclick="ouvrirModifierClient('${nom.replace(/'/g,"\\'")}');closeModal();" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:9px;padding:6px 10px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">✏</button>`:""}
+        <button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">
+      <div style="background:#eff6ff;border-radius:10px;padding:10px;text-align:center;">
+        <div style="font-size:14px;font-weight:900;color:#1d4ed8;">${fmt(s.totalAchete)}</div>
+        <div style="font-size:9px;color:#6b8c7a;">CA total</div>
+      </div>
+      <div style="background:#f0fdf4;border-radius:10px;padding:10px;text-align:center;">
+        <div style="font-size:14px;font-weight:900;color:#166534;">${fmt(s.totalPaye)}</div>
+        <div style="font-size:9px;color:#6b8c7a;">Total payé</div>
+      </div>
+      <div style="background:${s.soldeDu>0?"#fef2f2":"#f0fdf4"};border-radius:10px;padding:10px;text-align:center;">
+        <div style="font-size:14px;font-weight:900;color:${s.soldeDu>0?"#dc2626":"#166534"};">${fmt(s.soldeDu)}</div>
+        <div style="font-size:9px;color:#6b8c7a;">Solde dû</div>
+      </div>
+    </div>
+
+    ${s.soldeDu>0&&waUrl?`<button onclick="window.open('${waUrl}','_blank')" style="width:100%;background:#25d366;color:#fff;border:none;border-radius:12px;padding:11px;cursor:pointer;font-family:inherit;font-weight:700;font-size:13px;margin-bottom:12px;">📱 Relancer sur WhatsApp (${fmt(s.soldeDu)} F dû)</button>`:""}
+
+    <div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Historique des achats</div>
+    ${lignesVentes || `<div style="text-align:center;padding:20px;color:#6b8c7a;font-size:12px;">Aucun achat enregistré.</div>`}
+    ${cl.notes?`<div style="background:#fffbeb;border:1.5px solid #fde68a;border-radius:10px;padding:10px;margin-top:8px;font-size:12px;color:#92400e;"><strong>Note :</strong> ${cl.notes}</div>`:""}
+  `);
+}
+
+// ── Enregistrer un règlement ──────────────────────────────────────────────────
+function enregistrerReglement(venteId, nomClient, montantDu) {
+  showModal(
+    `<div style="font-size:16px;font-weight:800;color:#0f1f16;margin-bottom:4px;">💰 Encaisser un paiement</div>
+    <div style="font-size:12px;color:#6b8c7a;margin-bottom:16px;">Client : ${nomClient} · Solde dû : ${fmt(montantDu)}</div>
+    <div style="margin-bottom:12px;">
+      <label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Montant encaissé *</label>
+      <input type="number" id="reg_montant" min="1" max="${montantDu}" value="${montantDu}"
+        style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-size:18px;text-align:center;font-family:inherit;font-weight:700;color:#166534;"/>
+    </div>
+    <div style="margin-bottom:12px;">
+      <label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Mode de paiement</label>
+      <select id="reg_mode" style="width:100%;padding:11px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:13px;">
+        ${["Espèces","Wave","Orange Money","MTN Money","Moov Money","Virement"].map(m=>`<option>${m}</option>`).join("")}
+      </select>
+    </div>
+    <div style="margin-bottom:16px;">
+      <label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Note (optionnel)</label>
+      <input type="text" id="reg_note" placeholder="Ex : paiement partiel, promesse…"
+        style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/>
+    </div>
+    <div id="reg_msg" style="display:none;margin-bottom:10px;font-size:12px;font-weight:700;text-align:center;"></div>
+    <div style="display:flex;gap:10px;">
+      <button onclick="confirmerReglement('${venteId}','${nomClient.replace(/'/g,"\\'")}',${montantDu})"
+        style="flex:1;padding:13px;background:#0d3d1a;color:#fff;border:none;border-radius:12px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">✓ Confirmer</button>
+      <button onclick="closeModal()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>
+    </div>`
+  );
+}
+
+async function confirmerReglement(venteId, nomClient, montantDu) {
+  const montant = +document.getElementById("reg_montant").value || 0;
+  const mode    = document.getElementById("reg_mode").value;
+  const note    = document.getElementById("reg_note").value.trim();
+  const msg     = document.getElementById("reg_msg");
+
+  if(!montant || montant <= 0) {
+    msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Saisissez un montant valide."; return;
+  }
+  msg.style.cssText="display:block;color:#166534;"; msg.textContent="Enregistrement…";
+
+  try {
+    // Mettre à jour la vente : incrémenter montant_paye
+    const vente = ventes.find(v=>v.id===venteId);
+    if(!vente) throw new Error("Vente introuvable");
+
+    const ancienPaye = vente.montant_paye || 0;
+    const nouveauPaye = Math.min(ancienPaye + montant, vente.quantite * vente.prix_vente);
+    const total = vente.quantite * vente.prix_vente;
+    const soldeFinal = total - nouveauPaye;
+
+    await sbUpdate("ventes", venteId, {
+      montant_paye: nouveauPaye,
+      mode_paiement: soldeFinal <= 0 ? mode : "Crédit"
+    });
+
+    ventes = ventes.map(v => v.id===venteId ? {...v, montant_paye:nouveauPaye} : v);
+    saveLocal();
+
+    // Enregistrer dans reglements_clients
+    try {
+      await sbSaveReglement({
+        id: genId(),
+        vente_id: venteId,
+        client: nomClient,
+        montant,
+        mode_paiement: mode,
+        note,
+        date: new Date().toISOString().slice(0,10),
+        enregistre_par: currentUser?.nom || "Admin"
+      });
+    } catch(e) { /* table peut ne pas exister encore */ }
+
+    logAdminAction("REGLEMENT_CLIENT", nomClient+" · "+fmt(montant)+" F · "+mode);
+    showToast("✓ Paiement de "+fmt(montant)+" F enregistré");
+    closeModal();
+    renderClients();
+
+  } catch(e) {
+    msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Erreur : "+errMsg(e);
+  }
+}
+
+// ── Tous les impayés ──────────────────────────────────────────────────────────
+function voirTousImpayes() {
+  const nomsVentes = [...new Set(ventes.map(v=>v.client).filter(Boolean))];
+  const clientsConnus = clients.length ? clients : nomsVentes.map(n=>({id:n,nom:n,telephone:"",adresse:"",notes:""}));
+  const impayes = clientsConnus
+    .map(cl => ({cl, s:getStatsClient(cl.nom)}))
+    .filter(({s}) => s.soldeDu > 0)
+    .sort((a,b) => b.s.soldeDu - a.s.soldeDu);
+
+  const total = impayes.reduce((s,{s:st})=>s+st.soldeDu, 0);
+  const avatarColors = ["#f47820","#0369a1","#166534","#7c3aed","#dc2626","#0891b2","#65a30d"];
+
+  showModal(
+    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <div>
+        <div style="font-size:17px;font-weight:800;color:#dc2626;">⚠ Impayés clients</div>
+        <div style="font-size:11px;color:#3d5c48;margin-top:2px;">${impayes.length} client${impayes.length>1?"s":" "} · Total : ${fmt(total)} F</div>
+      </div>
+      <button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>
+    </div>
+    <div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:12px;padding:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-size:12px;color:#dc2626;font-weight:700;">Total impayés</div>
+      <div style="font-size:18px;font-weight:900;color:#dc2626;">${fmt(total)} F</div>
+    </div>
+    ${impayes.map(({cl,s},i) => {
+      const col = avatarColors[i % avatarColors.length];
+      const waLink = localStorage.getItem("va_wa_link");
+      const msgRelance = encodeURIComponent("Bonjour "+cl.nom+",\nSolde impayé : "+fmt(s.soldeDu)+" F\nMerci de régulariser.\n— VerdApp CI");
+      const waUrl = cl.telephone
+        ? "https://wa.me/225"+cl.telephone.replace(/\D/g,"")+"?text="+msgRelance
+        : null;
+      return `<div style="background:#fff;border:1.5px solid #fecaca;border-radius:12px;padding:12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+        <div style="display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="closeModal();setTimeout(()=>voirFicheClient('${cl.nom.replace(/'/g,"\\'")}'),100)">
+          <div style="width:36px;height:36px;background:${col};border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:900;color:#fff;">${cl.nom.charAt(0).toUpperCase()}</div>
+          <div>
+            <div style="font-weight:700;color:#0f1f16;font-size:13px;">${cl.nom}</div>
+            <div style="font-size:10px;color:#6b8c7a;">${s.nbVentes} achat${s.nbVentes>1?"s":""} · Dernier : ${s.derniereVisite||"—"}</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="text-align:right;">
+            <div style="font-size:14px;font-weight:900;color:#dc2626;">${fmt(s.soldeDu)}</div>
+            <div style="font-size:9px;color:#6b8c7a;">F dû</div>
+          </div>
+          ${waUrl?`<button onclick="window.open('${waUrl}','_blank')" style="background:#25d366;color:#fff;border:none;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;font-weight:700;">📱</button>`:""}
+        </div>
+      </div>`;
+    }).join("")}
+  `);
+}
+
+// ── Créer / modifier un client ────────────────────────────────────────────────
+function ouvrirNouveauClient() {
+  _ouvrirFormClient({});
+}
+function ouvrirModifierClient(nom) {
+  const cl = clients.find(c=>c.nom===nom) || {nom,telephone:"",adresse:"",notes:""};
+  _ouvrirFormClient(cl);
+}
+
+function _ouvrirFormClient(cl) {
+  const isNew = !cl.id;
+  showModal(
+    `<div style="font-size:16px;font-weight:800;color:#0f1f16;margin-bottom:4px;">${isNew?"+ Nouveau client":"✏ Modifier le client"}</div>
+    <div style="font-size:12px;color:#6b8c7a;margin-bottom:16px;">${isNew?"Créez une fiche client":"Mettez à jour la fiche"}</div>
+    <div style="margin-bottom:12px;">
+      <label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Nom / Raison sociale *</label>
+      <input type="text" id="cl_nom" value="${cl.nom||""}" placeholder="Ex : Marché Cocody - Awa"
+        style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:14px;"/>
+    </div>
+    <div style="margin-bottom:12px;">
+      <label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Téléphone (pour WhatsApp)</label>
+      <input type="tel" id="cl_tel" value="${cl.telephone||""}" placeholder="07 XX XX XX XX"
+        style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:14px;"/>
+    </div>
+    <div style="margin-bottom:12px;">
+      <label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Adresse / Marché</label>
+      <input type="text" id="cl_adresse" value="${cl.adresse||""}" placeholder="Ex : Marché de Cocody"
+        style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:14px;"/>
+    </div>
+    <div style="margin-bottom:16px;">
+      <label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Notes</label>
+      <input type="text" id="cl_notes" value="${cl.notes||""}" placeholder="Client régulier, préférences…"
+        style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/>
+    </div>
+    <div id="cl_msg" style="display:none;margin-bottom:10px;font-size:12px;font-weight:700;text-align:center;"></div>
+    <div style="display:flex;gap:10px;">
+      <button onclick="sauvegarderClient('${cl.id||""}')" style="flex:1;padding:13px;background:#0d3d1a;color:#fff;border:none;border-radius:12px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">✓ ${isNew?"Créer":"Enregistrer"}</button>
+      <button onclick="closeModal()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>
+    </div>`
+  );
+  setTimeout(()=>document.getElementById("cl_nom")?.focus(), 200);
+}
+
+async function sauvegarderClient(id) {
+  const nom     = document.getElementById("cl_nom").value.trim();
+  const tel     = document.getElementById("cl_tel").value.trim();
+  const adresse = document.getElementById("cl_adresse").value.trim();
+  const notes   = document.getElementById("cl_notes").value.trim();
+  const msg     = document.getElementById("cl_msg");
+
+  if(!nom){ msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Le nom est obligatoire."; return; }
+  msg.style.cssText="display:block;color:#166534;"; msg.textContent="Sauvegarde…";
+
+  try {
+    if(id) {
+      await sbUpdateClient(id, {nom, telephone:tel, adresse, notes});
+      clients = clients.map(c=>c.id===id ? {...c,nom,telephone:tel,adresse,notes} : c);
+    } else {
+      const payload = {id:genId(), nom, telephone:tel, adresse, notes};
+      await sbSaveClient(payload);
+      clients.push(payload);
+    }
+    saveClients();
+    showToast("✓ Client enregistré");
+    closeModal();
+    renderClients();
+  } catch(e) {
+    msg.style.cssText="display:block;color:#dc2626;"; msg.textContent=errMsg(e);
+  }
+}
+
 function renderDashboard(){
   // Calculs financiers via fonctions centralisées
   const totalA   = totalAchats();
@@ -1941,6 +2410,7 @@ function renderDashboard(){
   html+=`<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
     <div class="section-title" style="margin-bottom:0;">📊 Tableau de bord</div>
     <div style="display:flex;gap:8px;">
+      ${isAdmin?`<button onclick="switchTab('clients')" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">👥 Clients</button>`:""}
       ${isAdmin?`<button onclick="bilanFinancier()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">💼 Bilan</button>
       <button onclick="voirCommissionAdmin()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">💰 Commissions</button>
       <button onclick="exportDashboardCSV()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">⬇ CSV</button>`:""}
@@ -4991,6 +5461,8 @@ async function supprimerUtilisateur(id, nom) {
   } catch(e) { showToast(errMsg(e),"error"); }
 }
 
+// Charger clients depuis localStorage
+try{ const cl=localStorage.getItem("va_clients"); if(cl) clients=JSON.parse(cl); }catch(e){}
 // Restaurer le journal admin
 try{ adminLog.push(...JSON.parse(localStorage.getItem("va_admin_log")||"[]")); }catch(e){ console.warn("[VerdApp] Restauration journal admin échouée:", e.message); }
 // Migration PIN

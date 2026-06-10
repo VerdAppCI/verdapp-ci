@@ -893,15 +893,17 @@ async function syncAll(silent=false){
     syncFournisseurs().catch(()=>{});
     syncCommPaie().catch(()=>{});
     syncFournisseurs().catch(()=>{});
-    const [a,v,d,p,cfg]=await Promise.all([
+    const [a,v,d,p,fc_cfg,cfg]=await Promise.all([
       sbGet("achats"),sbGet("ventes"),sbGet("demandes"),
       fetch(`${SB_URL}/rest/v1/produits?order=nom.asc`,{headers:HDR}).then(r=>r.json()),
+      fetch(`${SB_URL}/rest/v1/config?cle=eq.fond_commerce`,{headers:HDR}).then(r=>r.json()),
       fetch(`${SB_URL}/rest/v1/config?cle=eq.admin_pin`,{headers:HDR}).then(r=>r.json())
     ]);
     achats=a||[]; localStorage.setItem("va_achats",JSON.stringify(achats));
     ventes=v||[]; localStorage.setItem("va_ventes",JSON.stringify(ventes));
     demandes=d||[]; localStorage.setItem("va_demandes",JSON.stringify(demandes));
     if(p&&p.length){produits=p; localStorage.setItem("va_produits",JSON.stringify(p));}
+    if(fc_cfg&&fc_cfg.length){ localStorage.setItem("va_fond_commerce", fc_cfg[0].valeur); }
     if(cfg&&cfg.length){
       const pinVal = cfg[0].valeur;
       if(pinVal && pinVal.length < 64){
@@ -3333,6 +3335,208 @@ function renderDemandes(){
 }
 
 // ─── PARAMÈTRES / GESTION PRODUITS ──────────────────────────────────────────
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE CAISSE & TRÉSORERIE
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Calcule la trésorerie complète de l'activité.
+ *
+ * FOND DE COMMERCE   = capital initial (saisi par l'admin, ne change pas)
+ * TRÉSORERIE ACTIVITÉ:
+ *   + Ventes encaissées (ventes non crédit + montants payés sur crédit)
+ *   − Achats payés (avances fournisseurs)
+ *   − Commissions versées aux utilisateurs
+ * CAISSE TOTALE = fond de commerce + trésorerie activité
+ *
+ * MARGE NETTE RÉELLE = marge nette FIFO − commissions versées
+ */
+function calculerCaisse() {
+  // Fond de commerce (stocké dans config Supabase ou localStorage)
+  const fondCommerce = parseFloat(localStorage.getItem("va_fond_commerce") || "0");
+
+  // Ventes encaissées
+  const ventesEncaissees = ventes.reduce((s, v) => {
+    if(v.mode_paiement === "Crédit") return s + (v.montant_paye || 0);
+    return s + v.quantite * v.prix_vente;
+  }, 0);
+
+  // Achats payés (avances fournisseurs uniquement)
+  const achatsPaies = achats.reduce((s, a) => s + (a.avance_paye || 0), 0);
+
+  // Commissions versées
+  const commissionsVersees = commissionsPaiements.reduce((s, p) => s + p.montant, 0);
+
+  // Trésorerie activité
+  const tresorerieActivite = ventesEncaissees - achatsPaies - commissionsVersees;
+
+  // Caisse totale
+  const caisseTotale = fondCommerce + tresorerieActivite;
+
+  // Marge nette réelle (après commissions)
+  const margeNetteReelle = margenette() - commissionsVersees;
+  const tauxMargeReelle  = totalVentes() ? Math.round(margeNetteReelle/totalVentes()*100) : 0;
+
+  // Dettes fournisseurs restantes
+  const detteFournisseurs = totalAchats() - achatsPaies;
+
+  // Créances clients (ventes à crédit non encore payées)
+  const creancesClients = ventes.reduce((s, v) => {
+    if(v.mode_paiement !== "Crédit") return s;
+    const du = v.quantite*v.prix_vente - (v.montant_paye||0);
+    return s + Math.max(0, du);
+  }, 0);
+
+  return {
+    fondCommerce,
+    ventesEncaissees,
+    achatsPaies,
+    commissionsVersees,
+    tresorerieActivite,
+    caisseTotale,
+    margeNetteReelle,
+    tauxMargeReelle,
+    detteFournisseurs,
+    creancesClients
+  };
+}
+
+// ── Affichage module Caisse (admin) ──────────────────────────────────────────
+function voirCaisse() {
+  if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
+
+  const t = calculerCaisse();
+  const historique = [...commissionsPaiements]
+    .sort((a,b)=>(b.date||"").localeCompare(a.date||""))
+    .slice(0, 10);
+
+  showModal(
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
+    +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">💼 Caisse & Trésorerie</div>'
+    +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">Situation financière en temps réel</div></div>'
+    +'<div style="display:flex;gap:6px;">'
+      +'<button onclick="modifierFondCommerce()" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:9px;padding:6px 10px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">✏ Fond</button>'
+      +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+    +'</div>'
+    +'</div>'
+
+    // Caisse totale — chiffre principal
+    +'<div style="background:linear-gradient(135deg,#0d3d1a,#166534);border-radius:16px;padding:20px;text-align:center;margin-bottom:14px;">'
+      +'<div style="font-size:10px;font-weight:700;color:#86efac;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;">Caisse totale</div>'
+      +'<div style="font-size:32px;font-weight:900;color:#fff;">'+(t.caisseTotale>=0?"+":"")+fmt(t.caisseTotale)+' F</div>'
+      +'<div style="font-size:11px;color:rgba(255,255,255,.55);margin-top:6px;">Fond de commerce : '+fmt(t.fondCommerce)+' F  ·  Activité : '+(t.tresorerieActivite>=0?"+":"")+fmt(t.tresorerieActivite)+' F</div>'
+    +'</div>'
+
+    // Décomposition 2×2
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">'
+
+      +'<div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:12px;padding:12px;">'
+        +'<div style="font-size:9px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">Fond de commerce</div>'
+        +'<div style="font-size:16px;font-weight:900;color:#166534;">'+fmt(t.fondCommerce)+'</div>'
+        +'<div style="font-size:10px;color:#6b8c7a;margin-top:2px;">Capital initial</div>'
+      +'</div>'
+
+      +'<div style="background:'+(t.tresorerieActivite>=0?"#f0fdf4":"#fef2f2")+';border:1.5px solid '+(t.tresorerieActivite>=0?"#bbf7d0":"#fecaca")+';border-radius:12px;padding:12px;">'
+        +'<div style="font-size:9px;font-weight:700;color:'+(t.tresorerieActivite>=0?"#166534":"#dc2626")+';text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">Trésorerie activité</div>'
+        +'<div style="font-size:16px;font-weight:900;color:'+(t.tresorerieActivite>=0?"#166534":"#dc2626")+'">'+(t.tresorerieActivite>=0?"+":"")+fmt(t.tresorerieActivite)+'</div>'
+        +'<div style="font-size:10px;color:#6b8c7a;margin-top:2px;">Ventes − Achats − Commissions</div>'
+      +'</div>'
+
+      +'<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:12px;">'
+        +'<div style="font-size:9px;font-weight:700;color:#c2410c;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">Dettes fournisseurs</div>'
+        +'<div style="font-size:16px;font-weight:900;color:#c2410c;">'+fmt(t.detteFournisseurs)+'</div>'
+        +'<div style="font-size:10px;color:#6b8c7a;margin-top:2px;">Achats non encore payés</div>'
+      +'</div>'
+
+      +'<div style="background:#eff6ff;border:1.5px solid #bfdbfe;border-radius:12px;padding:12px;">'
+        +'<div style="font-size:9px;font-weight:700;color:#1d4ed8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">Créances clients</div>'
+        +'<div style="font-size:16px;font-weight:900;color:#1d4ed8;">'+fmt(t.creancesClients)+'</div>'
+        +'<div style="font-size:10px;color:#6b8c7a;margin-top:2px;">Ventes à crédit non encaissées</div>'
+      +'</div>'
+
+    +'</div>'
+
+    // Décomposition trésorerie activité
+    +'<div style="background:#f8faf8;border:1.5px solid #e4ede7;border-radius:12px;padding:14px;margin-bottom:14px;">'
+      +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Décomposition trésorerie activité</div>'
+      +'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e4ede7;font-size:12px;">'
+        +'<span style="color:#3d5c48;">+ Ventes encaissées</span><span style="color:#166534;font-weight:700;">+'+fmt(t.ventesEncaissees)+'</span>'
+      +'</div>'
+      +'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e4ede7;font-size:12px;">'
+        +'<span style="color:#3d5c48;">− Achats payés (avances)</span><span style="color:#dc2626;font-weight:700;">−'+fmt(t.achatsPaies)+'</span>'
+      +'</div>'
+      +'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e4ede7;font-size:12px;">'
+        +'<span style="color:#3d5c48;">− Commissions versées</span><span style="color:#dc2626;font-weight:700;">−'+fmt(t.commissionsVersees)+'</span>'
+      +'</div>'
+      +'<div style="display:flex;justify-content:space-between;padding:8px 0 0;font-size:13px;font-weight:900;">'
+        +'<span style="color:#0f1f16;">= Trésorerie activité</span>'
+        +'<span style="color:'+(t.tresorerieActivite>=0?"#166534":"#dc2626")+'">'+(t.tresorerieActivite>=0?"+":"")+fmt(t.tresorerieActivite)+'</span>'
+      +'</div>'
+    +'</div>'
+
+    // Marge nette réelle (après commissions)
+    +'<div style="background:'+(t.margeNetteReelle>=0?"#f0fdf4":"#fef2f2")+';border:1.5px solid '+(t.margeNetteReelle>=0?"#bbf7d0":"#fecaca")+';border-radius:12px;padding:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;">'
+      +'<div>'
+        +'<div style="font-size:11px;font-weight:700;color:#0f1f16;">Marge nette réelle</div>'
+        +'<div style="font-size:10px;color:#6b8c7a;margin-top:2px;">Après déduction des commissions versées</div>'
+      +'</div>'
+      +'<div style="text-align:right;">'
+        +'<div style="font-size:18px;font-weight:900;color:'+(t.margeNetteReelle>=0?"#166534":"#dc2626")+'">'+(t.margeNetteReelle>=0?"+":"")+fmt(t.margeNetteReelle)+'</div>'
+        +'<div style="font-size:10px;color:#6b8c7a;">'+t.tauxMargeReelle+'% du CA</div>'
+      +'</div>'
+    +'</div>'
+
+    // Historique derniers mouvements
+    +(historique.length
+      ? '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Derniers versements commissions</div>'
+        + historique.map(p=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:#fef2f2;border:1.5px solid #fecaca;border-radius:9px;margin-bottom:5px;font-size:12px;">'
+          +'<div><div style="font-weight:700;color:#dc2626;">−'+fmt(p.montant)+' F</div>'
+            +'<div style="font-size:10px;color:#6b8c7a;">'+p.utilisateur+' · '+p.date+' · '+p.mode_paiement+'</div>'
+          +'</div>'
+          +'<div style="font-size:10px;color:#6b8c7a;font-style:italic;">'+(p.note||"")+'</div>'
+        +'</div>').join('')
+      : "")
+  );
+}
+
+// ── Modifier le fond de commerce ──────────────────────────────────────────────
+function modifierFondCommerce() {
+  const actuel = parseFloat(localStorage.getItem("va_fond_commerce")||"0");
+  showModal(
+    '<div style="font-size:16px;font-weight:800;color:#0f1f16;margin-bottom:4px;">✏ Fond de commerce</div>'
+    +'<div style="font-size:12px;color:#6b8c7a;margin-bottom:16px;">Capital initial de l\'activité — ne change pas au fil des opérations</div>'
+    +'<div style="margin-bottom:16px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Montant du fond de commerce (FCFA)</label>'
+      +'<input type="number" id="fc_montant" value="'+actuel+'" min="0" placeholder="200000"'
+        +' style="width:100%;padding:14px;border:1.5px solid #d4edda;border-radius:12px;font-size:20px;text-align:center;font-family:inherit;font-weight:900;color:#0d3d1a;"/>'
+    +'</div>'
+    +'<div style="background:#fffbeb;border:1.5px solid #fde68a;border-radius:10px;padding:10px;margin-bottom:16px;font-size:11px;color:#92400e;">'
+      +'Ce montant représente le capital que vous avez investi pour démarrer l\'activité. Il est séparé de la trésorerie générée par les ventes.'
+    +'</div>'
+    +'<div style="display:flex;gap:10px;">'
+      +'<button onclick="sauvegarderFondCommerce()" style="flex:1;padding:13px;background:#0d3d1a;color:#fff;border:none;border-radius:12px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">✓ Enregistrer</button>'
+      +'<button onclick="closeModal()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>'
+    +'</div>'
+  );
+  setTimeout(()=>document.getElementById("fc_montant")?.focus(), 200);
+}
+
+async function sauvegarderFondCommerce() {
+  const montant = parseFloat(document.getElementById("fc_montant").value)||0;
+  localStorage.setItem("va_fond_commerce", montant);
+  // Sauvegarder aussi dans Supabase config
+  try {
+    await fetch(SB_URL+"/rest/v1/config", {
+      method:"POST", headers:{...HDR,"Prefer":"resolution=merge-duplicates"},
+      body:JSON.stringify({cle:"fond_commerce", valeur:montant.toString()})
+    });
+  } catch(e) {}
+  showToast("✓ Fond de commerce mis à jour : "+fmt(montant)+" F");
+  closeModal();
+  voirCaisse();
+}
+
 function renderParams(){
   if(!isAdmin){
     document.getElementById("page-params").innerHTML=`<div class="card" style="background:#fff7ed;border:1.5px solid #fed7aa;text-align:center;padding:30px;">
@@ -3347,6 +3551,7 @@ function renderParams(){
     <button class="btn btn-green" onclick="showAddProduit()" style="margin-bottom:10px;">+ Ajouter un produit</button>
     <button class="btn btn-ghost" onclick="showChangePIN()" style="margin-bottom:10px;">🔑 Changer le code PIN admin</button>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+      <button onclick="voirCaisse()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#166534;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">💼 Caisse & Trésorerie</button>
       <button onclick="renderGestionUtilisateurs()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">👥 Gérer les utilisateurs</button>
       <button onclick="voirCommissionAdmin()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">💰 Commissions équipe</button>
       <button onclick="voirJournalAdmin()" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">🔐 Journal admin</button>

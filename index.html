@@ -823,6 +823,11 @@ async function syncAll(silent=false){
 
 // ─── ADMIN ───────────────────────────────────────────────────────────────────
 function toggleAdmin(){
+  // Le mode admin n'est plus accessible via ce bouton — géré par le compte utilisateur
+  if(currentUser?.role !== "admin") {
+    showToast("Accès réservé aux administrateurs","error");
+    return;
+  }
   if(isAdmin){
     logAdminAction("LOGOUT","Déconnexion admin");
     isAdmin=false;
@@ -1241,11 +1246,16 @@ async function saveVenteModal(){
 }
 
 async function marquerRecu(id){
-  logAdminAction("MARQUER_RECU", "Achat ID:"+id);
+  if(!currentUser){ showToast("Connectez-vous d'abord","error"); return; }
+  logAdminAction("MARQUER_RECU", "Achat ID:"+id+" par "+currentUser.nom);
   try{
     await sbUpdate("achats",id,{statut:"recu"});
     achats=achats.map(a=>a.id===id?{...a,statut:"recu"}:a);
-    saveLocal(); render(); showToast("✓ Marqué comme reçu");
+    saveLocal(); render(); showToast("✓ Marchandise reçue à Abidjan");
+    // Afficher la commission si utilisateur non-admin
+    if(!isAdmin && currentUser?.nom) {
+      setTimeout(()=>voirCommission(), 800);
+    }
   }catch(e){showToast("Erreur : "+e.message,"error");}
 }
 
@@ -1504,50 +1514,257 @@ function calculerCommission(nomUtilisateur) {
   return {lots: resultats, totalMargeNette, totalCommission};
 }
 
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE COMMISSION — Vue utilisateur (par date de vente) + Admin (par lot)
+// ════════════════════════════════════════════════════════════════════════════
+
 function voirCommission() {
-  const nom = currentUser?.nom;
+  if(isAdmin) {
+    voirCommissionAdmin();
+  } else {
+    voirCommissionUtilisateur(currentUser?.nom);
+  }
+}
+
+// ── VUE UTILISATEUR : commissions par date de vente ──────────────────────────
+function voirCommissionUtilisateur(nom) {
   if(!nom) return showToast("Connectez-vous d'abord","error");
 
-  const {lots, totalMargeNette, totalCommission} = calculerCommission(nom);
+  // Lots enregistrés par cet utilisateur (reçus)
+  const lotsUser = achats.filter(a =>
+    a.statut === "recu" &&
+    ((a.enregistre_par||"") === nom)
+  );
 
-  const lignes = lots.filter(r=>r.qteVendue>0).map(r=>
-    '<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:10px;padding:10px 12px;margin-bottom:6px;">'
-    +'<div style="display:flex;justify-content:space-between;align-items:center;">'
-      +'<div>'
-        +'<div style="font-weight:700;color:#0f1f16;font-size:12px;">'+(getProduitIcon(r.produit)||"🌿")+' '+r.produit+' — '+r.fournisseur+'</div>'
-        +'<div style="font-size:10px;color:#6b8c7a;">'+r.date+' · '+r.qteVendue+'/'+r.qteInitiale+' u. vendues</div>'
+  if(!lotsUser.length) {
+    showModal(
+      '<div style="text-align:center;padding:32px;">'
+      +'<div style="font-size:40px;margin-bottom:12px;">💰</div>'
+      +'<div style="font-weight:800;color:#0f1f16;font-size:15px;margin-bottom:8px;">Aucun lot enregistré</div>'
+      +'<div style="font-size:12px;color:#6b8c7a;">Tes commissions apparaîtront ici quand tes lots seront vendus.</div>'
       +'</div>'
-      +'<div style="text-align:right;">'
-        +'<div style="font-size:13px;font-weight:900;color:#f47820;">'+fmt(r.commission)+'</div>'
-        +'<div style="font-size:9px;color:#6b8c7a;">10% de '+fmt(r.margeNette)+'</div>'
+    );
+    return;
+  }
+
+  // Identifier les produits de l'utilisateur
+  const produitsUser = [...new Set(lotsUser.map(l=>l.produit))];
+
+  // Grouper les ventes par date, pour chaque produit de l'utilisateur
+  const parDate = {};
+  ventes
+    .filter(v => produitsUser.includes(v.produit))
+    .sort((a,b) => new Date(a.date)-new Date(b.date))
+    .forEach(v => {
+      const j = (v.date||"").slice(0,10);
+      if(!j) return;
+      if(!parDate[j]) parDate[j] = [];
+      parDate[j].push(v);
+    });
+
+  const dates = Object.keys(parDate).sort().reverse();
+
+  // Calculer la commission par date
+  // Pour chaque date, identifier quels lots (de l'utilisateur) ont été consommés
+  let totalCommission = 0;
+  let totalMargeNette = 0;
+
+  const lignesParDate = dates.map(j => {
+    const ventesJ = parDate[j];
+    let commissionJ = 0;
+    let margeNetteJ = 0;
+    const lotsImputes = [];
+
+    // Pour chaque vente de ce jour, calculer la part qui consomme les lots de l'utilisateur
+    ventesJ.forEach(v => {
+      const fifo = calculerFIFO(v.produit);
+      const ventesAvant = ventes
+        .filter(x => x.produit===v.produit && new Date(x.date)<new Date(v.date))
+        .sort((a,b)=>new Date(a.date)-new Date(b.date));
+
+      // Simuler le FIFO jusqu'à cette vente
+      let qteDejaVendue = ventesAvant.reduce((s,x)=>s+x.quantite,0);
+      const lotsRecu = achats
+        .filter(a=>a.produit===v.produit&&a.statut==="recu")
+        .sort((a,b)=>new Date(a.date_reception||a.date)-new Date(b.date_reception||b.date));
+
+      let aConsommer = qteDejaVendue;
+      const etatLots = lotsRecu.map(lot => {
+        const consomme = Math.min(aConsommer, lot.quantite);
+        aConsommer = Math.max(0, aConsommer - lot.quantite);
+        return { ...lot, qteRestante: lot.quantite - consomme };
+      }).filter(l=>l.qteRestante>0);
+
+      // Appliquer la vente sur les lots restants
+      let aVendre = v.quantite;
+      etatLots.forEach(lot => {
+        if(aVendre<=0) return;
+        const pris = Math.min(aVendre, lot.qteRestante);
+        aVendre -= pris;
+
+        // Ce lot appartient-il à l'utilisateur ?
+        if((lot.enregistre_par||"")===nom && pris>0) {
+          // Calculer la marge nette sur cette portion
+          const venteVirtuelle = {...v, quantite: pris};
+          const mn = margenette([venteVirtuelle]);
+          margeNetteJ += mn;
+          commissionJ += Math.max(0, mn * 0.10);
+          // Ajouter ce lot à la liste des lots imputés si pas déjà dedans
+          if(!lotsImputes.find(l=>l.id===lot.id)) {
+            lotsImputes.push({...lot, qteVendueCeJour:0, mnCeJour:0, commCeJour:0});
+          }
+          const li = lotsImputes.find(l=>l.id===lot.id);
+          if(li){ li.qteVendueCeJour+=pris; li.mnCeJour+=mn; li.commCeJour+=Math.max(0,mn*0.10); }
+        }
+      });
+    });
+
+    totalCommission += commissionJ;
+    totalMargeNette += margeNetteJ;
+
+    if(commissionJ<=0 && margeNetteJ===0) return null;
+
+    const dateAff = new Date(j).toLocaleDateString("fr-CI",{weekday:"long",day:"numeric",month:"long"});
+    const lotsHtml = lotsImputes.map(l=>
+      '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:#f8faf8;border-radius:8px;margin-top:4px;">'
+        +'<div>'
+          +'<div style="font-size:11px;font-weight:700;color:#0f1f16;">'+(getProduitIcon(l.produit)||"🌿")+' '+l.produit+' — '+l.fournisseur+'</div>'
+          +'<div style="font-size:10px;color:#6b8c7a;">Lot reçu le '+(l.date_reception||l.date)+' · '+l.qteVendueCeJour+' u. vendues ce jour</div>'
+        +'</div>'
+        +'<div style="text-align:right;">'
+          +'<div style="font-size:12px;font-weight:900;color:#f47820;">+'+fmt(l.commCeJour)+'</div>'
+          +'<div style="font-size:9px;color:#6b8c7a;">10% de '+fmt(l.mnCeJour)+'</div>'
+        +'</div>'
       +'</div>'
-    +'</div>'
-    +'</div>'
-  ).join('');
+    ).join('');
+
+    return '<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:12px;padding:12px;margin-bottom:8px;">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">'
+        +'<div>'
+          +'<div style="font-weight:700;color:#0f1f16;font-size:13px;">'+dateAff+'</div>'
+          +'<div style="font-size:10px;color:#6b8c7a;">'+ventesJ.length+' vente'+(ventesJ.length>1?'s':'')+'</div>'
+        +'</div>'
+        +'<div style="text-align:right;">'
+          +'<div style="font-size:15px;font-weight:900;color:#f47820;">+'+fmt(commissionJ)+'</div>'
+          +'<div style="font-size:9px;color:#6b8c7a;">10% de '+fmt(margeNetteJ)+'</div>'
+        +'</div>'
+      +'</div>'
+      +lotsHtml
+    +'</div>';
+  }).filter(Boolean);
 
   showModal(
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
     +'<div>'
-      +'<div style="font-size:17px;font-weight:800;color:#0f1f16;">💰 Ma commission</div>'
-      +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">10% de la marge nette · Lots enregistrés par '+nom+'</div>'
+      +'<div style="font-size:17px;font-weight:800;color:#0f1f16;">💰 Mes commissions</div>'
+      +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">10% de la marge nette · '+nom+'</div>'
     +'</div>'
     +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
     +'</div>'
+
+    // KPI total
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">'
-      +'<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:14px;text-align:center;">'
-        +'<div style="font-size:11px;font-weight:700;color:#c2410c;text-transform:uppercase;letter-spacing:.06em;">Marge nette totale</div>'
+      +'<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:12px;text-align:center;">'
+        +'<div style="font-size:10px;font-weight:700;color:#c2410c;text-transform:uppercase;letter-spacing:.06em;">Marge nette totale</div>'
         +'<div style="font-size:18px;font-weight:900;color:#0f1f16;margin-top:4px;">'+fmt(totalMargeNette)+'</div>'
       +'</div>'
-      +'<div style="background:linear-gradient(135deg,#0d3d1a,#166534);border-radius:12px;padding:14px;text-align:center;">'
-        +'<div style="font-size:11px;font-weight:700;color:#86efac;text-transform:uppercase;letter-spacing:.06em;">Ma commission (10%)</div>'
+      +'<div style="background:linear-gradient(135deg,#0d3d1a,#166534);border-radius:12px;padding:12px;text-align:center;">'
+        +'<div style="font-size:10px;font-weight:700;color:#86efac;text-transform:uppercase;letter-spacing:.06em;">Ma commission totale</div>'
         +'<div style="font-size:22px;font-weight:900;color:#fff;margin-top:4px;">'+fmt(totalCommission)+'</div>'
       +'</div>'
     +'</div>'
-    +(lots.filter(r=>r.qteVendue>0).length
-      ? '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Détail par lot</div>'+lignes
-      : '<div style="text-align:center;padding:24px;color:#6b8c7a;font-size:12px;">Aucun lot vendu pour le moment.</div>')
+
+    // Détail par date
+    +(lignesParDate.length
+      ? '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Par date de vente</div>'
+        +lignesParDate.join('')
+      : '<div style="text-align:center;padding:24px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;">Aucune vente sur tes lots pour le moment.</div>'
+    )
   );
 }
+
+// ── VUE ADMIN : commissions par utilisateur et par lot ───────────────────────
+function voirCommissionAdmin() {
+  // Obtenir tous les utilisateurs ayant enregistré des lots
+  const usersAvecLots = [...new Set(
+    achats.filter(a=>a.statut==="recu"&&a.enregistre_par).map(a=>a.enregistre_par)
+  )];
+
+  if(!usersAvecLots.length) {
+    showModal('<div style="text-align:center;padding:32px;color:#6b8c7a;font-size:12px;">Aucun lot n\'a encore été associé à un utilisateur.</div>');
+    return;
+  }
+
+  // Pour chaque utilisateur, calculer la commission par lot
+  const usersHtml = usersAvecLots.map(nom => {
+    const lotsUser = achats.filter(a=>a.statut==="recu"&&a.enregistre_par===nom);
+    let totalCommUser = 0;
+
+    const lotsHtml = lotsUser.map(lot => {
+      const fifo = calculerFIFO(lot.produit);
+      const lotFifo = fifo.lots.find(l=>l.id===lot.id);
+      if(!lotFifo || !lotFifo.qteConsommee) return null;
+
+      // Ventes imputées à ce lot
+      const lotsAvant = fifo.lots.slice(0, fifo.lots.indexOf(lotFifo));
+      const qteAvant = lotsAvant.reduce((s,l)=>s+l.qteInitiale,0);
+      let aSkip=qteAvant, aPrendre=lotFifo.qteConsommee;
+      const ventesTriees = ventes
+        .filter(v=>v.produit===lot.produit)
+        .sort((a,b)=>new Date(a.date)-new Date(b.date));
+      const ventesImputees = [];
+      for(const v of ventesTriees){
+        if(aPrendre<=0) break;
+        if(aSkip>=v.quantite){aSkip-=v.quantite;continue;}
+        const skip=aSkip; aSkip=0;
+        const pris=Math.min(aPrendre,v.quantite-skip);
+        aPrendre-=pris;
+        ventesImputees.push({...v,quantite:pris});
+      }
+      const mn = margenette(ventesImputees);
+      const comm = Math.max(0, mn*0.10);
+      totalCommUser += comm;
+
+      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:#f8faf8;border-radius:8px;margin-top:4px;font-size:11px;">'
+        +'<div>'
+          +'<div style="font-weight:700;color:#0f1f16;">'+(getProduitIcon(lot.produit)||"🌿")+' '+lot.produit+' — '+lot.fournisseur+'</div>'
+          +'<div style="font-size:10px;color:#6b8c7a;">'+(lot.date_reception||lot.date)+' · '+lotFifo.qteConsommee+'/'+lot.quantite+' u. vendues</div>'
+        +'</div>'
+        +'<div style="text-align:right;">'
+          +'<div style="font-weight:900;color:#f47820;">+'+fmt(comm)+'</div>'
+          +'<div style="font-size:9px;color:#6b8c7a;">MN: '+fmt(mn)+'</div>'
+        +'</div>'
+      +'</div>';
+    }).filter(Boolean).join('');
+
+    const col = ["#f47820","#0369a1","#166534","#7c3aed","#dc2626"][usersAvecLots.indexOf(nom)%5];
+    return '<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:14px;padding:14px;margin-bottom:10px;">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
+        +'<div style="display:flex;align-items:center;gap:10px;">'
+          +'<div style="width:36px;height:36px;background:'+col+';border-radius:999px;display:flex;align-items:center;justify-content:center;font-weight:900;color:#fff;font-size:16px;">'+nom.charAt(0).toUpperCase()+'</div>'
+          +'<div><div style="font-weight:800;color:#0f1f16;font-size:14px;">'+nom+'</div>'
+          +'<div style="font-size:10px;color:#6b8c7a;">'+lotsUser.length+' lot'+(lotsUser.length>1?'s':'')+'</div></div>'
+        +'</div>'
+        +'<div style="background:linear-gradient(135deg,#0d3d1a,#166534);border-radius:10px;padding:8px 14px;text-align:center;">'
+          +'<div style="font-size:14px;font-weight:900;color:#fff;">'+fmt(totalCommUser)+'</div>'
+          +'<div style="font-size:9px;color:#86efac;">Commission</div>'
+        +'</div>'
+      +'</div>'
+      +lotsHtml
+    +'</div>';
+  }).join('');
+
+  showModal(
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
+    +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">💰 Commissions équipe</div>'
+    +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">10% marge nette · Par utilisateur · Par lot</div></div>'
+    +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+    +'</div>'
+    +usersHtml
+  );
+}
+
 
 function renderDashboard(){
   // Calculs financiers via fonctions centralisées
@@ -1637,8 +1854,9 @@ function renderDashboard(){
   html+=`<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
     <div class="section-title" style="margin-bottom:0;">📊 Tableau de bord</div>
     <div style="display:flex;gap:8px;">
-      <button onclick="bilanFinancier()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">💼 Bilan financier</button>
-      <button onclick="exportDashboardCSV()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">⬇ Export CSV</button>
+      ${isAdmin?`<button onclick="bilanFinancier()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">💼 Bilan</button>
+      <button onclick="voirCommissionAdmin()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">💰 Commissions</button>
+      <button onclick="exportDashboardCSV()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">⬇ CSV</button>`:""}
     </div>
   </div>
   <div class="grid-4" style="margin-bottom:14px;">
@@ -1859,8 +2077,12 @@ function renderAchats(){
 
   let html=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
     <button class="btn btn-green" onclick="showAchatForm()" style="flex-shrink:0;">+ Nouvel achat</button>
-    <button onclick="exportAchatsCSV()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;flex-shrink:0;">⬇ Export CSV</button>
-    <button onclick="bilanJour()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;flex-shrink:0;">📊 Bilan du jour</button>
+    ${isAdmin?`
+      <button onclick="exportAchatsCSV()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;flex-shrink:0;">⬇ Export CSV</button>
+
+    `:`
+      <button onclick="voirCommission()" style="background:linear-gradient(135deg,#0d3d1a,#166534);color:#fff;border:none;border-radius:10px;padding:8px 16px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;flex-shrink:0;display:flex;align-items:center;gap:6px;">💰 Ma commission</button>
+    `}
   </div>
   <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
     <button class="filter-btn ${filterAchats==="tous"?"f-active":"f-inactive"}" onclick="setFilter('tous')">Tous</button>
@@ -1905,7 +2127,7 @@ function renderAchats(){
           ${a.notes?`<div style="font-size:11px;color:var(--gray-500);font-style:italic;margin-top:4px;">${a.notes}</div>`:""}
         </div>
         <div style="display:flex;flex-direction:column;gap:6px;">
-          ${a.statut==="en_cours"?(isAdmin||currentUser)?`<button onclick="marquerRecu('${a.id}')" class="icon-btn-green" title="Accuser réception">✓ Reçu</button>`:""  :""}
+          ${a.statut==="en_cours" && currentUser?`<button onclick="marquerRecu('${a.id}')" class="icon-btn-green" title="Accuser réception">✓ Reçu</button>`:""}
           ${isAdmin&&!hasPending?`<button onclick="demandeModifAchat('${a.id}')" class="icon-btn-orange" title="Modifier">✏️</button>`:""}
           ${isAdmin&&!hasPending?`<button onclick="demandeSupprAchat('${a.id}')" class="icon-btn" title="Supprimer">🗑</button>`:""}
         </div>
@@ -1927,7 +2149,7 @@ function renderVentes(){
   let html=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
     <button class="btn btn-green" onclick="showVenteForm()" style="flex-shrink:0;">+ Nouvelle vente</button>
     <button onclick="exportVentesCSV()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;flex-shrink:0;">⬇ Export CSV</button>
-    <button onclick="bilanJour()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;flex-shrink:0;">📊 Bilan du jour</button>
+
   </div>
   <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
     <select onchange="filtreVenteDate=this.value;renderVentes()" style="flex:1;min-width:120px;padding:7px 10px;border-radius:10px;border:1.5px solid var(--gray-200);font-family:inherit;font-size:12px;background:#fff;color:#0f1f16;">
@@ -2065,6 +2287,225 @@ function coutFIFOUnitaire(produit) {
   return fifo.prochainLot.coutRevient;
 }
 
+
+// ════════════════════════════════════════════════════════════════════════════
+// CONSTATATION DE PERTE PAR LOT
+// ════════════════════════════════════════════════════════════════════════════
+
+// pertes_lots : stockage local des pertes par lot
+// Structure : [{id, lotId, produit, fournisseur, qtePerte, coutUnitaire,
+//               valeurPerte, date, constatePar, note}]
+let pertesLots = JSON.parse(localStorage.getItem("va_pertes_lots")||"[]");
+
+function savePertesLots(){
+  localStorage.setItem("va_pertes_lots", JSON.stringify(pertesLots));
+}
+
+/**
+ * Modal de constatation de perte sur un lot spécifique.
+ */
+function modalConstatePerte(lotId, produit, fournisseur, qteRestante, coutRevient, prixAchat) {
+  if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
+
+  const valeurMax = qteRestante * coutRevient;
+
+  showModal(
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
+    +'<div>'
+      +'<div style="font-size:16px;font-weight:800;color:#0f1f16;">⚠ Constater une perte</div>'
+      +'<div style="font-size:11px;color:#6b8c7a;margin-top:2px;">Lot : '+fournisseur+' · '+produit+'</div>'
+    +'</div>'
+    +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+    +'</div>'
+
+    // Info lot
+    +'<div style="background:#f8faf8;border:1.5px solid #e4ede7;border-radius:12px;padding:12px;margin-bottom:16px;">'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center;">'
+        +'<div><div style="font-size:13px;font-weight:900;color:#1d4ed8;">'+qteRestante+'</div><div style="font-size:9px;color:#6b8c7a;">Qté restante</div></div>'
+        +'<div><div style="font-size:13px;font-weight:900;color:#c2410c;">'+fmt(prixAchat)+'</div><div style="font-size:9px;color:#6b8c7a;">Px achat/u</div></div>'
+        +'<div><div style="font-size:13px;font-weight:900;color:#dc2626;">'+fmt(coutRevient)+'</div><div style="font-size:9px;color:#6b8c7a;">Coût revient/u</div></div>'
+      +'</div>'
+    +'</div>'
+
+    // Saisie
+    +'<div style="margin-bottom:12px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Quantité constatée en perte *</label>'
+      +'<input type="number" id="cp_qte" min="1" max="'+qteRestante+'" placeholder="0" oninput="updatePerteCalc('+coutRevient+','+prixAchat+')" '
+        +'style="width:100%;padding:12px;border:1.5px solid #fecaca;border-radius:12px;font-size:18px;text-align:center;font-family:inherit;font-weight:700;color:#dc2626;"/>'
+      +'<div style="font-size:10px;color:#6b8c7a;margin-top:4px;text-align:center;">Maximum : '+qteRestante+' unités</div>'
+    +'</div>'
+
+    // Calcul dynamique
+    +'<div id="cp_calcul" style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:12px;padding:12px;margin-bottom:12px;display:none;">'
+      +'<div style="font-size:11px;font-weight:700;color:#0f1f16;margin-bottom:8px;">Valorisation de la perte</div>'
+      +'<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid #fecaca;">'
+        +'<span style="color:#6b8c7a;">Au prix d\'achat</span>'
+        +'<span id="cp_valAchat" style="font-weight:700;color:#c2410c;"></span>'
+      +'</div>'
+      +'<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;">'
+        +'<span style="color:#6b8c7a;">Au coût de revient (avec frais)</span>'
+        +'<span id="cp_valRevient" style="font-weight:700;color:#dc2626;"></span>'
+      +'</div>'
+    +'</div>'
+
+    // Note optionnelle
+    +'<div style="margin-bottom:16px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Motif (optionnel)</label>'
+      +'<input type="text" id="cp_note" placeholder="Ex : avarie, mévente, vol…" '
+        +'style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/>'
+    +'</div>'
+
+    // Choix de valorisation
+    +'<div style="margin-bottom:16px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Valoriser la perte au</label>'
+      +'<div style="display:flex;gap:8px;">'
+        +'<label style="flex:1;background:#fff;border:1.5px solid #e4ede7;border-radius:10px;padding:10px;cursor:pointer;display:flex;align-items:center;gap:8px;">'
+          +'<input type="radio" name="cp_valMode" value="achat" checked style="accent-color:#0d3d1a;"/>'
+          +'<span style="font-size:12px;font-weight:600;color:#0f1f16;">Prix d\'achat</span>'
+        +'</label>'
+        +'<label style="flex:1;background:#fff;border:1.5px solid #e4ede7;border-radius:10px;padding:10px;cursor:pointer;display:flex;align-items:center;gap:8px;">'
+          +'<input type="radio" name="cp_valMode" value="revient" style="accent-color:#0d3d1a;"/>'
+          +'<span style="font-size:12px;font-weight:600;color:#0f1f16;">Coût de revient</span>'
+        +'</label>'
+      +'</div>'
+    +'</div>'
+
+    +'<div id="cp_msg" style="display:none;margin-bottom:10px;font-size:12px;font-weight:700;text-align:center;"></div>'
+    +'<div style="display:flex;gap:10px;">'
+      +'<button onclick="enregistrerPerteLot(\''+lotId+'\',\''+produit+'\',\''+fournisseur+'\','+qteRestante+','+coutRevient+','+prixAchat+')" '
+        +'style="flex:1;padding:13px;background:#dc2626;color:#fff;border:none;border-radius:12px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">Enregistrer la perte</button>'
+      +'<button onclick="closeModal()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>'
+    +'</div>'
+  );
+
+  setTimeout(()=>document.getElementById("cp_qte")?.focus(), 200);
+}
+
+function updatePerteCalc(coutRevient, prixAchat) {
+  const qte = parseInt(document.getElementById("cp_qte")?.value)||0;
+  const calcDiv = document.getElementById("cp_calcul");
+  if(!calcDiv) return;
+  if(!qte){ calcDiv.style.display="none"; return; }
+  calcDiv.style.display="block";
+  const elAchat = document.getElementById("cp_valAchat");
+  const elRevient = document.getElementById("cp_valRevient");
+  if(elAchat) elAchat.textContent = "−"+fmt(qte*prixAchat)+" F";
+  if(elRevient) elRevient.textContent = "−"+fmt(qte*coutRevient)+" F";
+}
+
+async function enregistrerPerteLot(lotId, produit, fournisseur, qteRestante, coutRevient, prixAchat) {
+  const qteEl = document.getElementById("cp_qte");
+  const noteEl = document.getElementById("cp_note");
+  const modeEl = document.querySelector('input[name="cp_valMode"]:checked');
+  const msg = document.getElementById("cp_msg");
+
+  const qte = parseInt(qteEl?.value)||0;
+  if(!qte || qte<=0){ msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Saisissez une quantité."; return; }
+  if(qte>qteRestante){ msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Quantité supérieure au stock disponible ("+qteRestante+" u.)"; return; }
+
+  const mode = modeEl?.value || "achat";
+  const coutUnitaire = mode==="revient" ? coutRevient : prixAchat;
+  const valeurPerte = qte * coutUnitaire;
+  const note = noteEl?.value.trim()||"";
+  const date = new Date().toISOString().slice(0,10);
+
+  msg.style.cssText="display:block;color:#166534;"; msg.textContent="Enregistrement…";
+
+  try {
+    // Enregistrer dans pertes_lots (Supabase)
+    const payload = {
+      id: genId(),
+      lot_id: lotId,
+      produit,
+      fournisseur,
+      qte_perte: qte,
+      cout_unitaire: coutUnitaire,
+      valeur_perte: valeurPerte,
+      mode_valorisation: mode,
+      note,
+      date,
+      constate_par: currentUser?.nom || "Admin"
+    };
+
+    // Essayer d'enregistrer dans Supabase (table pertes_lots)
+    try {
+      await sbInsert("pertes_lots", payload);
+    } catch(e) {
+      // La table n'existe peut-être pas encore — stocker en local
+      console.warn("Table pertes_lots inexistante, stockage local:", e.message);
+    }
+
+    // Mettre à jour pertes[] local (total par produit)
+    pertesLots.unshift(payload);
+    savePertesLots();
+    // Incrémenter le compteur de pertes global du produit
+    pertes[produit] = (pertes[produit]||0) + qte;
+    await updatePerte(produit, pertes[produit]);
+
+    logAdminAction("PERTE_LOT", produit+" · "+qte+"u · "+fmt(valeurPerte)+"F (lot:"+lotId+")");
+
+    showToast("✓ Perte enregistrée : "+qte+" u. · "+fmt(valeurPerte)+" F");
+    closeModal();
+    renderStock();
+
+  } catch(e) {
+    msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Erreur : "+e.message;
+  }
+}
+
+/**
+ * Vue admin : historique des pertes par lot.
+ */
+function voirPertesLots() {
+  if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
+
+  const all = pertesLots.slice().sort((a,b)=>b.date.localeCompare(a.date));
+
+  const totalVal = all.reduce((s,p)=>s+p.valeur_perte,0);
+  const totalQte = all.reduce((s,p)=>s+p.qte_perte,0);
+
+  const lignes = all.map(p=>
+    '<div style="background:#fff;border:1.5px solid #fecaca;border-radius:10px;padding:10px 12px;margin-bottom:6px;">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;">'
+      +'<div>'
+        +'<div style="font-weight:700;color:#0f1f16;font-size:12px;">'+(getProduitIcon(p.produit)||"🌿")+' '+p.produit+' — '+p.fournisseur+'</div>'
+        +'<div style="font-size:10px;color:#6b8c7a;">'+p.date+' · Constaté par : '+p.constate_par+'</div>'
+        +(p.note?'<div style="font-size:10px;color:#6b8c7a;font-style:italic;">'+p.note+'</div>':'')
+      +'</div>'
+      +'<div style="text-align:right;flex-shrink:0;">'
+        +'<div style="font-size:13px;font-weight:900;color:#dc2626;">−'+p.qte_perte+' u.</div>'
+        +'<div style="font-size:11px;font-weight:700;color:#c2410c;">−'+fmt(p.valeur_perte)+' F</div>'
+        +'<div style="font-size:9px;color:#6b8c7a;">Au '+( p.mode_valorisation==="revient"?"coût revient":"prix achat")+' : '+fmt(p.cout_unitaire)+'/u</div>'
+      +'</div>'
+    +'</div>'
+    +'</div>'
+  ).join('');
+
+  showModal(
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
+    +'<div>'
+      +'<div style="font-size:17px;font-weight:800;color:#0f1f16;">📋 Pertes constatées par lot</div>'
+      +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">'+all.length+' constatation'+(all.length>1?'s':'')+' · Valeur totale : '+fmt(totalVal)+' F</div>'
+    +'</div>'
+    +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+    +'</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">'
+      +'<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:12px;padding:12px;text-align:center;">'
+        +'<div style="font-size:11px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:.06em;">Quantité perdue</div>'
+        +'<div style="font-size:20px;font-weight:900;color:#0f1f16;margin-top:4px;">'+totalQte+' u.</div>'
+      +'</div>'
+      +'<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:12px;padding:12px;text-align:center;">'
+        +'<div style="font-size:11px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:.06em;">Valeur perdue</div>'
+        +'<div style="font-size:20px;font-weight:900;color:#dc2626;margin-top:4px;">−'+fmt(totalVal)+' F</div>'
+      +'</div>'
+    +'</div>'
+    +(all.length
+      ? '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Détail</div>'+lignes
+      : '<div style="text-align:center;padding:24px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;">Aucune perte constatée.</div>'
+    )
+  );
+}
+
 function renderStock(){
   const produitsListe=[...new Set(achats.filter(a=>a.statut==="recu").map(a=>a.produit))];
   const pageEl = document.getElementById("page-stock");
@@ -2100,7 +2541,10 @@ function renderStock(){
       +'<div style="font-size:13px;font-weight:800;color:#0f1f16;">📦 Stock FIFO</div>'
       +'<div style="font-size:10px;color:#6b8c7a;margin-top:2px;">Méthode Premier Entré · Premier Sorti</div>'
     +'</div>'
-    +'<button onclick="voirHistoPrix()" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:10px;padding:7px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">📈 Historique des prix</button>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;">'
+      +(isAdmin?'<button onclick="voirPertesLots()" style="background:#fef2f2;border:1.5px solid #fecaca;color:#dc2626;border-radius:10px;padding:7px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">📋 Pertes</button>':'')
+      +'<button onclick="voirHistoPrix()" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:10px;padding:7px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">📈 Historique</button>'
+    +'</div>'
   +'</div>';
 
   // ── Résumé global FIFO ──
@@ -2205,6 +2649,19 @@ function renderStock(){
                 +'<span>Consommé : '+lot.qteConsommee+' u.</span>'
                 +'<span>Coût revient/u : '+fmt(lot.coutRevient)+'</span>'
               +'</div>'
+              // Bouton constatation perte — admin seulement, lots non épuisés avec stock
+              +(isAdmin && lot.qteRestante>0 && lot.statut!=="epuise"
+                ? '<div style="margin-top:8px;display:flex;justify-content:flex-end;">'
+                  +'<button class="btn-perte-lot"'
+                    +' data-lot-id="'+lot.id+'"'
+                    +' data-produit="'+lot.produit+'"'
+                    +' data-fourn="'+lot.fournisseur+'"'
+                    +' data-qte="'+lot.qteRestante+'"'
+                    +' data-cout="'+lot.coutRevient+'"'
+                    +' data-prix="'+lot.prix_unitaire+'"'
+                    +' style="background:#fef2f2;border:1.5px solid #fecaca;color:#dc2626;border-radius:8px;padding:5px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">⚠ Constater une perte</button>'
+                  +'</div>'
+                : '')
             +'</div>';
           }).join("")
         +'</div>'
@@ -2278,6 +2735,7 @@ function renderParams(){
     <button class="btn btn-ghost" onclick="showChangePIN()" style="margin-bottom:10px;">🔑 Changer le code PIN admin</button>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
       <button onclick="renderGestionUtilisateurs()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">👥 Gérer les utilisateurs</button>
+      <button onclick="voirCommissionAdmin()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">💰 Commissions équipe</button>
       <button onclick="voirJournalAdmin()" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">🔐 Journal admin</button>
       <button onclick="verifierIntegriteDonnees()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#166534;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">🔍 Vérifier les données</button>
     </div>
@@ -3088,9 +3546,22 @@ let bilanOnglet = "jour";
 document.addEventListener("click", function(e) {
   const cell = e.target.closest(".marge-cell");
   if(cell) showDetailMargeJour(cell.dataset.j);
+
+  const btnPerte = e.target.closest(".btn-perte-lot");
+  if(btnPerte) {
+    modalConstatePerte(
+      btnPerte.dataset.lotId,
+      btnPerte.dataset.produit,
+      btnPerte.dataset.fourn,
+      parseFloat(btnPerte.dataset.qte),
+      parseFloat(btnPerte.dataset.cout),
+      parseFloat(btnPerte.dataset.prix)
+    );
+  }
 });
 
 function bilanFinancier(onglet) {
+  if(!isAdmin){ showToast("Accès réservé à l'administrateur","error"); return; }
   if(onglet) bilanOnglet = onglet;
 
   // ── Onglets ──
@@ -4129,12 +4600,11 @@ function afficherApp() {
   // Cacher/montrer bouton admin selon le rôle
   const adminBtn = getEl("adminBtn");
   if(adminBtn) {
+    // Le bouton 🔐 est toujours masqué : l'accès admin se gère via le compte utilisateur
+    adminBtn.style.display = "none";
     if(currentUser?.role === "admin") {
-      // Admin connecté = déjà admin, cacher le bouton de bascule
-      adminBtn.style.display = "none";
       isAdmin = true;
     } else {
-      adminBtn.style.display = "inline-flex";
       isAdmin = false;
     }
   }

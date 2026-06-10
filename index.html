@@ -255,7 +255,7 @@ select option{background:var(--white);color:var(--text);}
   <button class="nav-item active" id="nav-dashboard" onclick="switchTab('dashboard')" data-role="admin"><span class="nav-icon">⊞</span>Tableau de bord</button>
   <button class="nav-item" id="nav-achats" onclick="switchTab('achats')" data-role="all"><span class="nav-icon">⬡</span>Achats terrain</button>
   <button class="nav-item" id="nav-ventes" onclick="switchTab('ventes')" data-role="admin"><span class="nav-icon">$</span>Ventes Abidjan</button>
-  <button class="nav-item" id="nav-clients" onclick="switchTab('clients')" data-role="admin"><span class="nav-icon">👥</span>Clients<span id="clientsDotSide" class="notif-dot" style="display:none;"></span></button>
+  <button class="nav-item" id="nav-tiers" onclick="switchTab('tiers')" data-role="admin"><span class="nav-icon">🤝</span>Tiers<span id="tiersDotSide" class="notif-dot" style="display:none;"></span></button>
   <button class="nav-item" id="nav-stock" onclick="switchTab('stock')" data-role="admin"><span class="nav-icon">◈</span>Stock</button>
   <button class="nav-item" id="nav-demandes" onclick="switchTab('demandes')" data-role="admin"><span class="nav-icon">📋</span>Demandes<span id="demandesDotSide" class="notif-dot" style="display:none;"></span></button>
   <button class="nav-item" id="nav-chat" onclick="switchTab('chat')" data-role="all"><span class="nav-icon">💬</span>Chat équipe<span id="chatDotSide" class="notif-dot" style="display:none;"></span></button>
@@ -267,7 +267,7 @@ select option{background:var(--white);color:var(--text);}
   <button class="bnav-item active" id="bnav-dashboard" onclick="switchTab('dashboard')" data-role="admin"><span class="bnav-icon">⊞</span>Bord</button>
   <button class="bnav-item" id="bnav-achats" onclick="switchTab('achats')" data-role="all"><span class="bnav-icon">⬡</span>Achats</button>
   <button class="bnav-item" id="bnav-ventes" onclick="switchTab('ventes')" data-role="admin"><span class="bnav-icon">$</span>Ventes</button>
-  <button class="bnav-item" id="bnav-clients" onclick="switchTab('clients')" data-role="admin"><span class="bnav-icon">👥</span>Clients<span id="clientsDot" class="notif-dot" style="display:none;"></span></button>
+  <button class="bnav-item" id="bnav-tiers" onclick="switchTab('tiers')" data-role="admin"><span class="bnav-icon">🤝</span>Tiers<span id="tiersDot" class="notif-dot" style="display:none;"></span></button>
   <button class="bnav-item" id="bnav-stock" onclick="switchTab('stock')" data-role="admin"><span class="bnav-icon">◈</span>Stock</button>
   <button class="bnav-item" id="bnav-demandes" onclick="switchTab('demandes')" data-role="admin"><span class="bnav-icon">📋</span>Dem.<span id="demandesDot" class="notif-dot" style="display:none;"></span></button>
   <button class="bnav-item" id="bnav-chat" onclick="switchTab('chat')" data-role="all"><span class="bnav-icon">💬</span>Chat<span id="chatDot" class="notif-dot" style="display:none;"></span></button>
@@ -316,7 +316,7 @@ select option{background:var(--white);color:var(--text);}
   <div id="page-dashboard"></div>
   <div id="page-achats" style="display:none;"></div>
   <div id="page-ventes" style="display:none;"></div>
-  <div id="page-clients" style="display:none;"></div>
+  <div id="page-tiers" style="display:none;"></div>
   <div id="page-stock" style="display:none;"></div>
   <div id="page-demandes" style="display:none;"></div>
   <div id="page-chat" style="display:none;"></div>
@@ -888,8 +888,10 @@ async function syncAll(silent=false){
   const btn = getEl("syncBtn");
   if(!silent && btn){ btn.innerHTML='<span class="spinner"></span>'; btn.disabled=true; }
   try{
-    // Sync clients en parallèle
+    // Sync tiers en parallèle
     syncClients().catch(()=>{});
+    syncFournisseurs().catch(()=>{});
+    syncFournisseurs().catch(()=>{});
     const [a,v,d,p,cfg]=await Promise.all([
       sbGet("achats"),sbGet("ventes"),sbGet("demandes"),
       fetch(`${SB_URL}/rest/v1/produits?order=nom.asc`,{headers:HDR}).then(r=>r.json()),
@@ -908,7 +910,7 @@ async function syncAll(silent=false){
       }
     }
     updateDemandesBadge();
-    updateClientsBadge();
+    updateTiersBadge();
     render();
     if(!silent) showToast("✓ Synchronisé");
     // Indicateur dernière sync
@@ -995,7 +997,7 @@ function closeModal(){getEl("modalOverlay").style.display="none";}
 function closeModalOutside(e){if(e.target===getEl("modalOverlay")) closeModal();}
 
 // ─── DEMANDES BADGE ──────────────────────────────────────────────────────────
-function updateClientsBadge(){
+function updateTiersBadge(){
   const nomsVentes = [...new Set(ventes.map(v=>v.client).filter(Boolean))];
   const nbImpayes = nomsVentes.filter(nom => {
     const ventesC = ventes.filter(v=>v.client===nom);
@@ -1003,7 +1005,7 @@ function updateClientsBadge(){
     const paye = ventesC.reduce((s,v)=>v.mode_paiement==="Crédit"?s+(v.montant_paye||0):s+v.quantite*v.prix_vente, 0);
     return total - paye > 0;
   }).length;
-  ["clientsDot","clientsDotSide"].forEach(id=>{
+  ["tiersDot","tiersDotSide"].forEach(id=>{
     const el = getEl(id);
     if(el){ el.style.display = nbImpayes>0&&currentTab!=="clients"?"inline-block":"none"; el.textContent=nbImpayes; }
   });
@@ -1396,7 +1398,7 @@ async function updatePerte(produit,val){
 // ════════════════════════════════════════════════════════════════════════════
 function tabsAutorisés(){
   return (isAdmin || currentUser?.role==="admin")
-    ? ["dashboard","achats","ventes","clients","stock","demandes","chat","params"]
+    ? ["dashboard","achats","ventes","tiers","stock","demandes","chat","params"]
     : ["achats","chat"];
 }
 
@@ -1415,7 +1417,7 @@ function switchTab(tab){
     tab="achats";
   }
   currentTab=tab;
-  ["dashboard","achats","ventes","clients","stock","demandes","chat","params"].forEach(t=>{
+  ["dashboard","achats","ventes","tiers","stock","demandes","chat","params"].forEach(t=>{
     const page=document.getElementById("page-"+t);
     if(page) page.style.display=t===tab?"block":"none";
     const nav=document.getElementById("nav-"+t);
@@ -1445,7 +1447,7 @@ function render(){
   if(currentTab==="dashboard") renderDashboard();
   else if(currentTab==="achats") renderAchats();
   else if(currentTab==="ventes") renderVentes();
-  else if(currentTab==="clients") renderClients();
+  else if(currentTab==="tiers") renderTiers();
   else if(currentTab==="stock") renderStock();
   else if(currentTab==="demandes") renderDemandes();
   else if(currentTab==="params") renderParams();
@@ -1943,684 +1945,593 @@ function getStatsClient(nomClient) {
 }
 
 // ── PAGE CLIENTS ──────────────────────────────────────────────────────────────
-function renderClients() {
-  const page = document.getElementById("page-clients");
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE TIERS — Clients & Fournisseurs unifiés + Facturation PDF
+// ════════════════════════════════════════════════════════════════════════════
+let tiersOnglet = "clients"; // "clients" | "fournisseurs" | "impayes"
+
+// ══════════════════════════════════════
+// SECTION A — CLIENTS
+// ══════════════════════════════════════
+
+function getStatsClient(nomClient) {
+  const ventesC = ventes.filter(v => (v.client||"").toLowerCase() === nomClient.toLowerCase());
+  const totalAchete = ventesC.reduce((s,v) => s+v.quantite*v.prix_vente, 0);
+  const totalPaye = ventesC.reduce((s,v) =>
+    v.mode_paiement==="Crédit" ? s+(v.montant_paye||0) : s+v.quantite*v.prix_vente, 0);
+  const soldeDu = totalAchete - totalPaye;
+  const nbVentes = ventesC.length;
+  const derniereVisite = ventesC.length
+    ? [...ventesC].sort((a,b)=>(b.date||"").localeCompare(a.date||""))[0].date : null;
+  const produitsAchetes = [...new Set(ventesC.map(v=>v.produit))];
+  return {totalAchete, totalPaye, soldeDu, nbVentes, derniereVisite, produitsAchetes, ventesC};
+}
+
+// ══════════════════════════════════════
+// SECTION B — FOURNISSEURS
+// ══════════════════════════════════════
+
+let fournisseurs = JSON.parse(localStorage.getItem("va_fournisseurs")||"[]");
+function saveFournisseurs(){ localStorage.setItem("va_fournisseurs", JSON.stringify(fournisseurs)); }
+
+async function syncFournisseurs(){
+  try{
+    const r=await fetch(SB_URL+"/rest/v1/fournisseurs?order=nom.asc",{headers:HDR});
+    if(r.ok){ fournisseurs=await r.json(); saveFournisseurs(); }
+  }catch(e){}
+}
+
+async function sbSaveFournisseur(payload){
+  const r=await fetch(SB_URL+"/rest/v1/fournisseurs",{method:"POST",headers:HDR,body:JSON.stringify(payload)});
+  if(!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function sbUpdateFournisseur(id,data){
+  const r=await fetch(SB_URL+"/rest/v1/fournisseurs?id=eq."+id,{method:"PATCH",headers:HDR,body:JSON.stringify(data)});
+  if(!r.ok) throw new Error(await r.text());
+}
+
+function getStatsFournisseur(nomFourn){
+  const achatsF = achats.filter(a=>(a.fournisseur||"").toLowerCase()===nomFourn.toLowerCase());
+  const totalAchete  = achatsF.reduce((s,a)=>s+a.quantite*a.prix_unitaire,0);
+  const totalAvances = achatsF.reduce((s,a)=>s+(a.avance_paye||0),0);
+  const totalDu      = totalAchete - totalAvances;
+  const nbLots       = achatsF.length;
+  const dernierAchat = achatsF.length ? [...achatsF].sort((a,b)=>(b.date||"").localeCompare(a.date||""))[0].date : null;
+  const produits     = [...new Set(achatsF.map(a=>a.produit))];
+  return {totalAchete, totalAvances, totalDu, nbLots, dernierAchat, produits, achatsF};
+}
+
+// ══════════════════════════════════════
+// SECTION C — PAGE TIERS PRINCIPALE
+// ══════════════════════════════════════
+
+function renderTiers(ong) {
+  if(ong) tiersOnglet = ong;
+  const page = document.getElementById("page-tiers");
   if(!page) return;
 
-  // Construire la liste des clients depuis les ventes + table clients
-  const nomsVentes = [...new Set(ventes.map(v=>v.client).filter(Boolean))];
-  const clientsConnus = clients.length ? clients : nomsVentes.map(n=>({id:n,nom:n,telephone:"",adresse:"",notes:""}));
+  // KPIs
+  const nomsClients = [...new Set(ventes.map(v=>v.client).filter(Boolean))];
+  const clientsList2 = clients.length ? clients : nomsClients.map(n=>({id:n,nom:n,telephone:"",adresse:"",notes:""}));
+  let totalDuClients=0, totalCAClients=0;
+  clientsList2.forEach(cl=>{const s=getStatsClient(cl.nom);totalDuClients+=s.soldeDu;totalCAClients+=s.totalAchete;});
+  const nbImpayes = clientsList2.filter(cl=>getStatsClient(cl.nom).soldeDu>0).length;
 
-  // Stats globales
-  let totalDuGlobal = 0, totalCAGlobal = 0;
-  clientsConnus.forEach(cl => {
-    const s = getStatsClient(cl.nom);
-    totalDuGlobal += s.soldeDu;
-    totalCAGlobal += s.totalAchete;
+  const nomsFourn = [...new Set(achats.map(a=>a.fournisseur).filter(Boolean))];
+  const fournList = fournisseurs.length ? fournisseurs : nomsFourn.map(n=>({id:n,nom:n,telephone:"",adresse:"",notes:""}));
+  let totalDuFourn=0, totalCAFourn=0;
+  fournList.forEach(f=>{const s=getStatsFournisseur(f.nom);totalDuFourn+=s.totalDu;totalCAFourn+=s.totalAchete;});
+
+  // Onglets
+  const ongletsHtml =
+    '<div style="display:flex;gap:6px;background:#f0f5f1;border-radius:12px;padding:4px;margin-bottom:16px;">'
+    +[["clients","👥 Clients"],["fournisseurs","🏪 Fournisseurs"],["impayes","⚠ Impayés"]].map(([k,l])=>
+      '<button onclick="renderTiers(\''+k+'\')" style="flex:1;padding:8px 4px;border:none;border-radius:9px;cursor:pointer;font-family:inherit;font-size:12px;font-weight:700;transition:all .2s;'
+      +(tiersOnglet===k?'background:#0d3d1a;color:#fff;':'background:none;color:#3d5c48;')+'">'+l+(k==="impayes"&&nbImpayes>0?' ('+nbImpayes+')':'')+'</button>'
+    ).join('')
+    +'</div>';
+
+  // KPI bar
+  const kpiHtml =
+    '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:16px;">'
+    +'<div style="background:linear-gradient(135deg,#14532d,#166534);border-radius:12px;padding:12px;text-align:center;">'
+      +'<div style="font-size:9px;font-weight:700;color:#86efac;text-transform:uppercase;letter-spacing:.1em;">CA clients</div>'
+      +'<div style="font-size:16px;font-weight:900;color:#fff;margin-top:3px;">'+fmt(totalCAClients)+'</div>'
+      +'<div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:2px;">Dû : '+fmt(totalDuClients)+'</div>'
+    +'</div>'
+    +'<div style="background:linear-gradient(135deg,#1e3a5f,#1a2e4a);border-radius:12px;padding:12px;text-align:center;">'
+      +'<div style="font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;letter-spacing:.1em;">Total achats fourn.</div>'
+      +'<div style="font-size:16px;font-weight:900;color:#fff;margin-top:3px;">'+fmt(totalCAFourn)+'</div>'
+      +'<div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:2px;">Dû : '+fmt(totalDuFourn)+'</div>'
+    +'</div>'
+    +'</div>';
+
+  let contenu = "";
+
+  // ── ONGLET CLIENTS ──
+  if(tiersOnglet==="clients") {
+    const btns = isAdmin
+      ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">'
+        +'<button onclick="ouvrirNouveauTiers(\'client\')" style="background:#0d3d1a;color:#fff;border:none;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">+ Nouveau client</button>'
+        +(nbImpayes>0?'<button onclick="voirTousImpayes()" style="background:#fef2f2;border:1.5px solid #fecaca;color:#dc2626;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">⚠ Impayés ('+nbImpayes+')</button>':'')
+        +'</div>'
+      : '';
+    contenu = btns
+      + '<input type="text" placeholder="Rechercher un client…" oninput="filtrerTiers(\'client\',this.value)" style="width:100%;padding:9px 12px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;margin-bottom:10px;"/>'
+      + '<div id="tiersClientList">' + renderListeClients(clientsList2) + '</div>';
+  }
+
+  // ── ONGLET FOURNISSEURS ──
+  else if(tiersOnglet==="fournisseurs") {
+    const btns = isAdmin
+      ? '<div style="margin-bottom:12px;"><button onclick="ouvrirNouveauTiers(\'fournisseur\')" style="background:#0d3d1a;color:#fff;border:none;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">+ Nouveau fournisseur</button></div>'
+      : '';
+    contenu = btns
+      + '<input type="text" placeholder="Rechercher un fournisseur…" oninput="filtrerTiers(\'fournisseur\',this.value)" style="width:100%;padding:9px 12px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;margin-bottom:10px;"/>'
+      + '<div id="tiersFournList">' + renderListeFournisseurs(fournList) + '</div>';
+  }
+
+  // ── ONGLET IMPAYÉS ──
+  else if(tiersOnglet==="impayes") {
+    const impayes = clientsList2
+      .map(cl=>({cl,s:getStatsClient(cl.nom)}))
+      .filter(({s})=>s.soldeDu>0)
+      .sort((a,b)=>b.s.soldeDu-a.s.soldeDu);
+    const total = impayes.reduce((s,{s:st})=>s+st.soldeDu,0);
+    const avatarColors = ["#f47820","#0369a1","#166534","#7c3aed","#dc2626","#0891b2","#65a30d"];
+    contenu = !impayes.length
+      ? '<div style="text-align:center;padding:40px;color:#166534;font-size:14px;">Aucun impayé en cours.</div>'
+      : '<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:12px;padding:12px;margin-bottom:12px;display:flex;justify-content:space-between;">'
+        +'<div style="font-size:12px;color:#dc2626;font-weight:700;">'+impayes.length+' client'+(impayes.length>1?"s":"")+'</div>'
+        +'<div style="font-size:16px;font-weight:900;color:#dc2626;">'+fmt(total)+' F</div>'
+        +'</div>'
+        + impayes.map(({cl,s},i)=>{
+          const col = avatarColors[i%avatarColors.length];
+          const waLink = localStorage.getItem("va_wa_link");
+          const msg = encodeURIComponent("Bonjour "+cl.nom+",\nSolde impayé : "+fmt(s.soldeDu)+" F\nMerci de régulariser.\n— VerdApp CI");
+          const waUrl = cl.telephone ? "https://wa.me/225"+cl.telephone.replace(/\D/g,"")+"?text="+msg : (waLink||null);
+          return '<div style="background:#fff;border:1.5px solid #fecaca;border-radius:12px;padding:12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;" onclick="voirFicheClient(\''+cl.nom.replace(/'/g,"\\'")+'\')">'
+            +'<div style="display:flex;align-items:center;gap:10px;">'
+              +'<div style="width:36px;height:36px;background:'+col+';border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:900;color:#fff;">'+cl.nom.charAt(0).toUpperCase()+'</div>'
+              +'<div><div style="font-weight:700;font-size:13px;color:#0f1f16;">'+cl.nom+'</div>'
+                +'<div style="font-size:10px;color:#6b8c7a;">Dernier achat : '+(s.derniereVisite||"—")+'</div>'
+              +'</div>'
+            +'</div>'
+            +'<div style="display:flex;align-items:center;gap:8px;">'
+              +'<div style="text-align:right;"><div style="font-size:14px;font-weight:900;color:#dc2626;">'+fmt(s.soldeDu)+'</div><div style="font-size:9px;color:#6b8c7a;">F dû</div></div>'
+              +(waUrl?'<button onclick="event.stopPropagation();window.open(\''+waUrl+'\',\'_blank\')" style="background:#25d366;color:#fff;border:none;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;font-weight:700;">📱</button>':"")
+            +'</div>'
+          +'</div>';
+        }).join('');
+  }
+
+  page.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">'
+    +'<div><div class="section-title" style="margin-bottom:0;">🤝 Tiers</div>'
+    +'<div style="font-size:11px;color:#6b8c7a;margin-top:2px;">'+clientsList2.length+' client'+(clientsList2.length>1?"s":"")+" · "+fournList.length+' fournisseur'+(fournList.length>1?"s":"")+'</div>'
+    +'</div>'
+    +'</div>'
+    + ongletsHtml + kpiHtml + contenu;
+}
+
+function renderListeClients(liste, search="") {
+  if(search) liste=liste.filter(cl=>cl.nom.toLowerCase().includes(search.toLowerCase()));
+  if(!liste.length) return '<div style="text-align:center;padding:30px;color:#6b8c7a;font-size:13px;">Aucun client.</div>';
+  const avatarColors=["#f47820","#0369a1","#166534","#7c3aed","#dc2626","#0891b2","#65a30d"];
+  return liste.map((cl,i)=>{
+    const s=getStatsClient(cl.nom);
+    const col=avatarColors[i%avatarColors.length];
+    return '<div style="background:#fff;border:1.5px solid '+(s.soldeDu>0?"#fecaca":"#e4ede7")+';border-radius:14px;padding:12px;margin-bottom:7px;cursor:pointer;" onclick="voirFicheClient(\''+cl.nom.replace(/'/g,"\\'")+'\')">'
+      +'<div style="display:flex;align-items:center;gap:10px;">'
+        +'<div style="width:38px;height:38px;background:'+col+';border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:900;color:#fff;">'+cl.nom.charAt(0).toUpperCase()+'</div>'
+        +'<div style="flex:1;min-width:0;">'
+          +'<div style="font-weight:700;color:#0f1f16;font-size:13px;">'+cl.nom+'</div>'
+          +'<div style="font-size:10px;color:#6b8c7a;">'+s.nbVentes+' achat'+(s.nbVentes>1?"s":"")+(cl.telephone?" · "+cl.telephone:"")+'</div>'
+        +'</div>'
+        +'<div style="text-align:right;flex-shrink:0;">'
+          +(s.soldeDu>0?'<div style="font-size:13px;font-weight:900;color:#dc2626;">−'+fmt(s.soldeDu)+'</div><div style="font-size:9px;color:#6b8c7a;">Dû</div>'
+                       :'<div style="font-size:11px;font-weight:700;color:#166534;">✓ Soldé</div>')
+        +'</div>'
+      +'</div>'
+    +'</div>';
+  }).join('');
+}
+
+function renderListeFournisseurs(liste, search="") {
+  if(search) liste=liste.filter(f=>f.nom.toLowerCase().includes(search.toLowerCase()));
+  if(!liste.length) return '<div style="text-align:center;padding:30px;color:#6b8c7a;font-size:13px;">Aucun fournisseur.</div>';
+  const avatarColors=["#0369a1","#166534","#7c3aed","#f47820","#dc2626","#0891b2","#65a30d"];
+  return liste.map((f,i)=>{
+    const s=getStatsFournisseur(f.nom);
+    const col=avatarColors[i%avatarColors.length];
+    return '<div style="background:#fff;border:1.5px solid '+(s.totalDu>0?"#fed7aa":"#e4ede7")+';border-radius:14px;padding:12px;margin-bottom:7px;cursor:pointer;" onclick="voirFicheFournisseur(\''+f.nom.replace(/'/g,"\\'")+'\')">'
+      +'<div style="display:flex;align-items:center;gap:10px;">'
+        +'<div style="width:38px;height:38px;background:'+col+';border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:900;color:#fff;">'+f.nom.charAt(0).toUpperCase()+'</div>'
+        +'<div style="flex:1;min-width:0;">'
+          +'<div style="font-weight:700;color:#0f1f16;font-size:13px;">'+f.nom+'</div>'
+          +'<div style="font-size:10px;color:#6b8c7a;">'+s.nbLots+' lot'+(s.nbLots>1?"s":"")+(f.telephone?" · "+f.telephone:"")+'</div>'
+        +'</div>'
+        +'<div style="text-align:right;flex-shrink:0;">'
+          +(s.totalDu>0?'<div style="font-size:13px;font-weight:900;color:#c2410c;">−'+fmt(s.totalDu)+'</div><div style="font-size:9px;color:#6b8c7a;">Dû</div>'
+                       :'<div style="font-size:11px;font-weight:700;color:#166534;">✓ Soldé</div>')
+        +'</div>'
+      +'</div>'
+    +'</div>';
+  }).join('');
+}
+
+function filtrerTiers(type, search) {
+  if(type==="client") {
+    const nomsC=[...new Set(ventes.map(v=>v.client).filter(Boolean))];
+    const cl=clients.length?clients:nomsC.map(n=>({id:n,nom:n,telephone:"",adresse:"",notes:""}));
+    const el=document.getElementById("tiersClientList");
+    if(el) el.innerHTML=renderListeClients(cl,search);
+  } else {
+    const nomsF=[...new Set(achats.map(a=>a.fournisseur).filter(Boolean))];
+    const fl=fournisseurs.length?fournisseurs:nomsF.map(n=>({id:n,nom:n,telephone:"",adresse:"",notes:""}));
+    const el=document.getElementById("tiersFournList");
+    if(el) el.innerHTML=renderListeFournisseurs(fl,search);
+  }
+}
+
+function updateTiersBadge(){
+  const nomsVentes=[...new Set(ventes.map(v=>v.client).filter(Boolean))];
+  const nbImpayes=nomsVentes.filter(nom=>{
+    const vc=ventes.filter(v=>v.client===nom);
+    const total=vc.reduce((s,v)=>s+v.quantite*v.prix_vente,0);
+    const paye=vc.reduce((s,v)=>v.mode_paiement==="Crédit"?s+(v.montant_paye||0):s+v.quantite*v.prix_vente,0);
+    return total-paye>0;
+  }).length;
+  ["tiersDot","tiersDotSide"].forEach(id=>{
+    const el=getEl(id);
+    if(el){el.style.display=nbImpayes>0&&currentTab!=="tiers"?"inline-block":"none";el.textContent=nbImpayes;}
   });
-
-  const nbImpayes = clientsConnus.filter(cl => getStatsClient(cl.nom).soldeDu > 0).length;
-
-  let html = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
-      <div>
-        <div class="section-title" style="margin-bottom:0;">👥 Clients</div>
-        <div style="font-size:11px;color:#6b8c7a;margin-top:2px;">${clientsConnus.length} client${clientsConnus.length>1?"s":""} · ${nbImpayes} impayé${nbImpayes>1?"s":""}</div>
-      </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        ${isAdmin?`<button onclick="ouvrirNouveauClient()" style="background:#0d3d1a;color:#fff;border:none;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">+ Nouveau client</button>`:""}
-        ${isAdmin&&nbImpayes>0?`<button onclick="voirTousImpayes()" style="background:#fef2f2;border:1.5px solid #fecaca;color:#dc2626;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">⚠ Impayés (${nbImpayes})</button>`:""}
-      </div>
-    </div>`;
-
-  // KPI globaux
-  html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;">
-    <div style="background:linear-gradient(135deg,#1e3a5f,#1a2e4a);border-radius:12px;padding:12px;text-align:center;">
-      <div style="font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;letter-spacing:.1em;">CA clients</div>
-      <div style="font-size:18px;font-weight:900;color:#fff;margin-top:4px;">${fmt(totalCAGlobal)}</div>
-    </div>
-    <div style="background:${totalDuGlobal>0?"linear-gradient(135deg,#7f1d1d,#991b1b)":"linear-gradient(135deg,#14532d,#166534)"};border-radius:12px;padding:12px;text-align:center;">
-      <div style="font-size:9px;font-weight:700;color:${totalDuGlobal>0?"#fca5a5":"#86efac"};text-transform:uppercase;letter-spacing:.1em;">Total impayés</div>
-      <div style="font-size:18px;font-weight:900;color:#fff;margin-top:4px;">${fmt(totalDuGlobal)}</div>
-    </div>
-  </div>`;
-
-  // Filtre
-  html += `<div style="display:flex;gap:8px;margin-bottom:12px;">
-    <input type="text" id="clientSearch" placeholder="Rechercher un client…" oninput="filtrerClients(this.value)"
-      style="flex:1;padding:9px 12px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/>
-    <select id="clientFilter" onchange="filtrerClients()" style="padding:9px 12px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:12px;background:#fff;">
-      <option value="tous">Tous</option>
-      <option value="impayes">Avec impayés</option>
-      <option value="solde">Soldés</option>
-    </select>
-  </div>`;
-
-  html += `<div id="clientsList">` + renderClientsList(clientsConnus) + `</div>`;
-  page.innerHTML = html;
 }
 
-function renderClientsList(clientsListe, filtre="tous", search="") {
-  let liste = clientsListe;
-  if(search) liste = liste.filter(cl => cl.nom.toLowerCase().includes(search.toLowerCase()));
-  if(filtre==="impayes") liste = liste.filter(cl => getStatsClient(cl.nom).soldeDu > 0);
-  if(filtre==="solde") liste = liste.filter(cl => getStatsClient(cl.nom).soldeDu <= 0);
+// ══════════════════════════════════════
+// SECTION D — FICHES DÉTAIL
+// ══════════════════════════════════════
 
-  if(!liste.length) return `<div style="text-align:center;padding:40px;color:#6b8c7a;font-size:13px;">Aucun client trouvé.</div>`;
-
-  const avatarColors = ["#f47820","#0369a1","#166534","#7c3aed","#dc2626","#0891b2","#65a30d"];
-
-  return liste.map((cl, i) => {
-    const s = getStatsClient(cl.nom);
-    const col = avatarColors[i % avatarColors.length];
-    const hasDebt = s.soldeDu > 0;
-    return `<div style="background:#fff;border:1.5px solid ${hasDebt?"#fecaca":"#e4ede7"};border-radius:14px;padding:13px 14px;margin-bottom:8px;cursor:pointer;" onclick="voirFicheClient('${cl.nom.replace(/'/g,"\\'")}')">
-      <div style="display:flex;align-items:center;gap:10px;">
-        <div style="width:40px;height:40px;background:${col};border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:900;color:#fff;flex-shrink:0;">${cl.nom.charAt(0).toUpperCase()}</div>
-        <div style="flex:1;min-width:0;">
-          <div style="font-weight:700;color:#0f1f16;font-size:14px;">${cl.nom}</div>
-          <div style="font-size:10px;color:#6b8c7a;margin-top:1px;">${s.nbVentes} achat${s.nbVentes>1?"s":""} · CA : ${fmt(s.totalAchete)}${cl.telephone?" · "+cl.telephone:""}</div>
-        </div>
-        <div style="text-align:right;flex-shrink:0;">
-          ${hasDebt
-            ? `<div style="font-size:14px;font-weight:900;color:#dc2626;">−${fmt(s.soldeDu)}</div><div style="font-size:9px;color:#6b8c7a;">Dû</div>`
-            : `<div style="font-size:12px;font-weight:700;color:#166534;">✓ Soldé</div>`
-          }
-        </div>
-      </div>
-    </div>`;
-  }).join("");
-}
-
-function filtrerClients(search) {
-  const filtre = document.getElementById("clientFilter")?.value || "tous";
-  const s = search !== undefined ? search : (document.getElementById("clientSearch")?.value || "");
-  const nomsVentes = [...new Set(ventes.map(v=>v.client).filter(Boolean))];
-  const clientsConnus = clients.length ? clients : nomsVentes.map(n=>({id:n,nom:n,telephone:"",adresse:"",notes:""}));
-  const el = document.getElementById("clientsList");
-  if(el) el.innerHTML = renderClientsList(clientsConnus, filtre, s);
-}
-
-// ── Fiche client ──────────────────────────────────────────────────────────────
 function voirFicheClient(nom) {
-  const cl = clients.find(c=>c.nom===nom) || {id:nom,nom,telephone:"",adresse:"",notes:""};
-  const s = getStatsClient(nom);
-  const avatarColors = ["#f47820","#0369a1","#166534","#7c3aed","#dc2626","#0891b2","#65a30d"];
-  const col = avatarColors[nom.charCodeAt(0) % avatarColors.length];
-
-  const ventesTriees = s.ventesC.slice().sort((a,b)=>b.date?.localeCompare(a.date||""));
-
-  const lignesVentes = ventesTriees.map(v => {
-    const total = v.quantite * v.prix_vente;
-    const paye = v.mode_paiement==="Crédit" ? (v.montant_paye||0) : total;
-    const du = total - paye;
-    return `<div style="background:#f8faf8;border:1.5px solid #e4ede7;border-radius:10px;padding:10px 12px;margin-bottom:6px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <div>
-          <div style="font-weight:700;font-size:12px;color:#0f1f16;">${getProduitIcon(v.produit)||"🌿"} ${v.produit} × ${v.quantite}</div>
-          <div style="font-size:10px;color:#6b8c7a;">${v.date} · ${v.mode_paiement}</div>
-        </div>
-        <div style="text-align:right;">
-          <div style="font-size:13px;font-weight:900;color:#0f1f16;">${fmt(total)}</div>
-          ${du>0?`<div style="font-size:10px;color:#dc2626;font-weight:700;">Dû : ${fmt(du)}</div>`
-               :`<div style="font-size:10px;color:#166534;font-weight:700;">✓ Soldé</div>`}
-        </div>
-      </div>
-      ${du>0&&isAdmin?`<div style="margin-top:8px;display:flex;justify-content:flex-end;">
-        <button onclick="enregistrerReglement('${v.id}','${nom.replace(/'/g,"\\'")}',${du})" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#166534;border-radius:8px;padding:5px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">💰 Encaisser</button>
-      </div>`:""}
-    </div>`;
-  }).join("");
-
-  const waLink = localStorage.getItem("va_wa_link");
-  const msgRelance = encodeURIComponent(
-    "Bonjour "+nom+",\nNous vous rappelons que vous avez un solde impayé de "+fmt(s.soldeDu)+" F sur vos achats de légumes.\nMerci de régulariser.\n— VerdApp CI"
-  );
-  const waUrl = cl.telephone
-    ? "https://wa.me/225"+cl.telephone.replace(/\D/g,"")+"?text="+msgRelance
-    : (waLink ? waLink+"?text="+msgRelance : null);
+  const cl=clients.find(c=>c.nom===nom)||{id:nom,nom,telephone:"",adresse:"",notes:""};
+  const s=getStatsClient(nom);
+  const avatarColors=["#f47820","#0369a1","#166534","#7c3aed","#dc2626","#0891b2","#65a30d"];
+  const col=avatarColors[nom.charCodeAt(0)%avatarColors.length];
+  const ventesTriees=[...s.ventesC].sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  const waLink=localStorage.getItem("va_wa_link");
+  const msgRelance=encodeURIComponent("Bonjour "+nom+",\nSolde impayé : "+fmt(s.soldeDu)+" F\nMerci de régulariser.\n— VerdApp CI");
+  const waUrl=cl.telephone?"https://wa.me/225"+cl.telephone.replace(/\D/g,"")+"?text="+msgRelance:(waLink||null);
 
   showModal(
-    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-      <div style="display:flex;align-items:center;gap:10px;">
-        <div style="width:48px;height:48px;background:${col};border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:900;color:#fff;">${nom.charAt(0).toUpperCase()}</div>
-        <div>
-          <div style="font-size:16px;font-weight:800;color:#0f1f16;">${nom}</div>
-          <div style="font-size:11px;color:#6b8c7a;">${cl.telephone||"Pas de téléphone"} ${cl.adresse?"· "+cl.adresse:""}</div>
-        </div>
-      </div>
-      <div style="display:flex;gap:6px;">
-        ${isAdmin?`<button onclick="ouvrirModifierClient('${nom.replace(/'/g,"\\'")}');closeModal();" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:9px;padding:6px 10px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">✏</button>`:""}
-        <button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>
-      </div>
-    </div>
-
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">
-      <div style="background:#eff6ff;border-radius:10px;padding:10px;text-align:center;">
-        <div style="font-size:14px;font-weight:900;color:#1d4ed8;">${fmt(s.totalAchete)}</div>
-        <div style="font-size:9px;color:#6b8c7a;">CA total</div>
-      </div>
-      <div style="background:#f0fdf4;border-radius:10px;padding:10px;text-align:center;">
-        <div style="font-size:14px;font-weight:900;color:#166534;">${fmt(s.totalPaye)}</div>
-        <div style="font-size:9px;color:#6b8c7a;">Total payé</div>
-      </div>
-      <div style="background:${s.soldeDu>0?"#fef2f2":"#f0fdf4"};border-radius:10px;padding:10px;text-align:center;">
-        <div style="font-size:14px;font-weight:900;color:${s.soldeDu>0?"#dc2626":"#166534"};">${fmt(s.soldeDu)}</div>
-        <div style="font-size:9px;color:#6b8c7a;">Solde dû</div>
-      </div>
-    </div>
-
-    ${s.soldeDu>0&&waUrl?`<button onclick="window.open('${waUrl}','_blank')" style="width:100%;background:#25d366;color:#fff;border:none;border-radius:12px;padding:11px;cursor:pointer;font-family:inherit;font-weight:700;font-size:13px;margin-bottom:12px;">📱 Relancer sur WhatsApp (${fmt(s.soldeDu)} F dû)</button>`:""}
-
-    <div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Historique des achats</div>
-    ${lignesVentes || `<div style="text-align:center;padding:20px;color:#6b8c7a;font-size:12px;">Aucun achat enregistré.</div>`}
-    ${cl.notes?`<div style="background:#fffbeb;border:1.5px solid #fde68a;border-radius:10px;padding:10px;margin-top:8px;font-size:12px;color:#92400e;"><strong>Note :</strong> ${cl.notes}</div>`:""}
-  `);
-}
-
-// ── Enregistrer un règlement ──────────────────────────────────────────────────
-function enregistrerReglement(venteId, nomClient, montantDu) {
-  showModal(
-    `<div style="font-size:16px;font-weight:800;color:#0f1f16;margin-bottom:4px;">💰 Encaisser un paiement</div>
-    <div style="font-size:12px;color:#6b8c7a;margin-bottom:16px;">Client : ${nomClient} · Solde dû : ${fmt(montantDu)}</div>
-    <div style="margin-bottom:12px;">
-      <label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Montant encaissé *</label>
-      <input type="number" id="reg_montant" min="1" max="${montantDu}" value="${montantDu}"
-        style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-size:18px;text-align:center;font-family:inherit;font-weight:700;color:#166534;"/>
-    </div>
-    <div style="margin-bottom:12px;">
-      <label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Mode de paiement</label>
-      <select id="reg_mode" style="width:100%;padding:11px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:13px;">
-        ${["Espèces","Wave","Orange Money","MTN Money","Moov Money","Virement"].map(m=>`<option>${m}</option>`).join("")}
-      </select>
-    </div>
-    <div style="margin-bottom:16px;">
-      <label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Note (optionnel)</label>
-      <input type="text" id="reg_note" placeholder="Ex : paiement partiel, promesse…"
-        style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/>
-    </div>
-    <div id="reg_msg" style="display:none;margin-bottom:10px;font-size:12px;font-weight:700;text-align:center;"></div>
-    <div style="display:flex;gap:10px;">
-      <button onclick="confirmerReglement('${venteId}','${nomClient.replace(/'/g,"\\'")}',${montantDu})"
-        style="flex:1;padding:13px;background:#0d3d1a;color:#fff;border:none;border-radius:12px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">✓ Confirmer</button>
-      <button onclick="closeModal()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>
-    </div>`
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
+    +'<div style="display:flex;align-items:center;gap:10px;">'
+      +'<div style="width:46px;height:46px;background:'+col+';border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:900;color:#fff;">'+nom.charAt(0).toUpperCase()+'</div>'
+      +'<div><div style="font-size:15px;font-weight:800;color:#0f1f16;">'+nom+'</div>'
+        +'<div style="font-size:11px;color:#6b8c7a;">'+(cl.telephone||"Pas de téléphone")+(cl.adresse?" · "+cl.adresse:"")+'</div>'
+      +'</div>'
+    +'</div>'
+    +'<div style="display:flex;gap:6px;">'
+      +(isAdmin?'<button onclick="ouvrirModifierTiers(\'client\',\''+nom.replace(/'/g,"\\'")+'\')" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:9px;padding:6px 10px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">✏</button>':"")
+      +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+    +'</div>'
+    +'</div>'
+    +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;">'
+      +'<div style="background:#eff6ff;border-radius:10px;padding:10px;text-align:center;"><div style="font-size:13px;font-weight:900;color:#1d4ed8;">'+fmt(s.totalAchete)+'</div><div style="font-size:9px;color:#6b8c7a;">CA total</div></div>'
+      +'<div style="background:#f0fdf4;border-radius:10px;padding:10px;text-align:center;"><div style="font-size:13px;font-weight:900;color:#166534;">'+fmt(s.totalPaye)+'</div><div style="font-size:9px;color:#6b8c7a;">Total payé</div></div>'
+      +'<div style="background:'+(s.soldeDu>0?"#fef2f2":"#f0fdf4")+';border-radius:10px;padding:10px;text-align:center;"><div style="font-size:13px;font-weight:900;color:'+(s.soldeDu>0?"#dc2626":"#166534")+';">'+fmt(s.soldeDu)+'</div><div style="font-size:9px;color:#6b8c7a;">Solde dû</div></div>'
+    +'</div>'
+    +(s.soldeDu>0&&waUrl?'<button onclick="window.open(\''+waUrl+'\',\'_blank\')" style="width:100%;background:#25d366;color:#fff;border:none;border-radius:12px;padding:11px;cursor:pointer;font-family:inherit;font-weight:700;font-size:13px;margin-bottom:12px;">📱 Relancer WhatsApp ('+fmt(s.soldeDu)+' F dû)</button>':"")
+    +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Historique</div>'
+    +ventesTriees.map(v=>{
+      const total=v.quantite*v.prix_vente;
+      const paye=v.mode_paiement==="Crédit"?(v.montant_paye||0):total;
+      const du=total-paye;
+      return '<div style="background:#f8faf8;border:1.5px solid #e4ede7;border-radius:10px;padding:10px;margin-bottom:6px;">'
+        +'<div style="display:flex;justify-content:space-between;align-items:center;">'
+          +'<div><div style="font-weight:700;font-size:12px;color:#0f1f16;">'+(getProduitIcon(v.produit)||"🌿")+" "+v.produit+" × "+v.quantite+'</div>'
+            +'<div style="font-size:10px;color:#6b8c7a;">'+v.date+" · "+v.mode_paiement+'</div>'
+          +'</div>'
+          +'<div style="text-align:right;">'
+            +'<div style="font-size:13px;font-weight:900;color:#0f1f16;">'+fmt(total)+'</div>'
+            +(du>0?'<div style="font-size:10px;color:#dc2626;font-weight:700;">Dû : '+fmt(du)+'</div>'
+                  :'<div style="font-size:10px;color:#166534;font-weight:700;">✓ Soldé</div>')
+          +'</div>'
+        +'</div>'
+        +(du>0&&isAdmin?'<div style="margin-top:7px;display:flex;gap:6px;justify-content:flex-end;">'
+          +'<button onclick="genererFacturePDF(\''+v.id+'\')" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:8px;padding:5px 11px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">📄 Facture</button>'
+          +'<button onclick="enregistrerReglement(\''+v.id+'\',\''+nom.replace(/'/g,"\\'")+'\',' +du+')" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#166534;border-radius:8px;padding:5px 11px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">💰 Encaisser</button>'
+          +'</div>':'')
+      +'</div>';
+    }).join('')
+    +(cl.notes?'<div style="background:#fffbeb;border:1.5px solid #fde68a;border-radius:10px;padding:10px;margin-top:8px;font-size:12px;color:#92400e;"><strong>Note :</strong> '+cl.notes+'</div>':"")
   );
 }
 
-async function confirmerReglement(venteId, nomClient, montantDu) {
-  const montant = +document.getElementById("reg_montant").value || 0;
-  const mode    = document.getElementById("reg_mode").value;
-  const note    = document.getElementById("reg_note").value.trim();
-  const msg     = document.getElementById("reg_msg");
-
-  if(!montant || montant <= 0) {
-    msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Saisissez un montant valide."; return;
-  }
-  msg.style.cssText="display:block;color:#166534;"; msg.textContent="Enregistrement…";
-
-  try {
-    // Mettre à jour la vente : incrémenter montant_paye
-    const vente = ventes.find(v=>v.id===venteId);
-    if(!vente) throw new Error("Vente introuvable");
-
-    const ancienPaye = vente.montant_paye || 0;
-    const nouveauPaye = Math.min(ancienPaye + montant, vente.quantite * vente.prix_vente);
-    const total = vente.quantite * vente.prix_vente;
-    const soldeFinal = total - nouveauPaye;
-
-    await sbUpdate("ventes", venteId, {
-      montant_paye: nouveauPaye,
-      mode_paiement: soldeFinal <= 0 ? mode : "Crédit"
-    });
-
-    ventes = ventes.map(v => v.id===venteId ? {...v, montant_paye:nouveauPaye} : v);
-    saveLocal();
-
-    // Enregistrer dans reglements_clients
-    try {
-      await sbSaveReglement({
-        id: genId(),
-        vente_id: venteId,
-        client: nomClient,
-        montant,
-        mode_paiement: mode,
-        note,
-        date: new Date().toISOString().slice(0,10),
-        enregistre_par: currentUser?.nom || "Admin"
-      });
-    } catch(e) { /* table peut ne pas exister encore */ }
-
-    logAdminAction("REGLEMENT_CLIENT", nomClient+" · "+fmt(montant)+" F · "+mode);
-    showToast("✓ Paiement de "+fmt(montant)+" F enregistré");
-    closeModal();
-    renderClients();
-
-  } catch(e) {
-    msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Erreur : "+errMsg(e);
-  }
-}
-
-// ── Tous les impayés ──────────────────────────────────────────────────────────
-function voirTousImpayes() {
-  const nomsVentes = [...new Set(ventes.map(v=>v.client).filter(Boolean))];
-  const clientsConnus = clients.length ? clients : nomsVentes.map(n=>({id:n,nom:n,telephone:"",adresse:"",notes:""}));
-  const impayes = clientsConnus
-    .map(cl => ({cl, s:getStatsClient(cl.nom)}))
-    .filter(({s}) => s.soldeDu > 0)
-    .sort((a,b) => b.s.soldeDu - a.s.soldeDu);
-
-  const total = impayes.reduce((s,{s:st})=>s+st.soldeDu, 0);
-  const avatarColors = ["#f47820","#0369a1","#166534","#7c3aed","#dc2626","#0891b2","#65a30d"];
+function voirFicheFournisseur(nom) {
+  const f=fournisseurs.find(x=>x.nom===nom)||{id:nom,nom,telephone:"",adresse:"",notes:""};
+  const s=getStatsFournisseur(nom);
+  const avatarColors=["#0369a1","#166534","#7c3aed","#f47820","#dc2626","#0891b2","#65a30d"];
+  const col=avatarColors[nom.charCodeAt(0)%avatarColors.length];
+  const achatsTriees=[...s.achatsF].sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  const waLink=localStorage.getItem("va_wa_link");
+  const msgBalance=encodeURIComponent("Bonjour "+nom+",\nSolde restant dû : "+fmt(s.totalDu)+" F\nMerci.\n— VerdApp CI");
+  const waUrl=f.telephone?"https://wa.me/225"+f.telephone.replace(/\D/g,"")+"?text="+msgBalance:(waLink||null);
 
   showModal(
-    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-      <div>
-        <div style="font-size:17px;font-weight:800;color:#dc2626;">⚠ Impayés clients</div>
-        <div style="font-size:11px;color:#3d5c48;margin-top:2px;">${impayes.length} client${impayes.length>1?"s":" "} · Total : ${fmt(total)} F</div>
-      </div>
-      <button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>
-    </div>
-    <div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:12px;padding:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;">
-      <div style="font-size:12px;color:#dc2626;font-weight:700;">Total impayés</div>
-      <div style="font-size:18px;font-weight:900;color:#dc2626;">${fmt(total)} F</div>
-    </div>
-    ${impayes.map(({cl,s},i) => {
-      const col = avatarColors[i % avatarColors.length];
-      const waLink = localStorage.getItem("va_wa_link");
-      const msgRelance = encodeURIComponent("Bonjour "+cl.nom+",\nSolde impayé : "+fmt(s.soldeDu)+" F\nMerci de régulariser.\n— VerdApp CI");
-      const waUrl = cl.telephone
-        ? "https://wa.me/225"+cl.telephone.replace(/\D/g,"")+"?text="+msgRelance
-        : null;
-      return `<div style="background:#fff;border:1.5px solid #fecaca;border-radius:12px;padding:12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
-        <div style="display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="closeModal();setTimeout(()=>voirFicheClient('${cl.nom.replace(/'/g,"\\'")}'),100)">
-          <div style="width:36px;height:36px;background:${col};border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:900;color:#fff;">${cl.nom.charAt(0).toUpperCase()}</div>
-          <div>
-            <div style="font-weight:700;color:#0f1f16;font-size:13px;">${cl.nom}</div>
-            <div style="font-size:10px;color:#6b8c7a;">${s.nbVentes} achat${s.nbVentes>1?"s":""} · Dernier : ${s.derniereVisite||"—"}</div>
-          </div>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <div style="text-align:right;">
-            <div style="font-size:14px;font-weight:900;color:#dc2626;">${fmt(s.soldeDu)}</div>
-            <div style="font-size:9px;color:#6b8c7a;">F dû</div>
-          </div>
-          ${waUrl?`<button onclick="window.open('${waUrl}','_blank')" style="background:#25d366;color:#fff;border:none;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;font-weight:700;">📱</button>`:""}
-        </div>
-      </div>`;
-    }).join("")}
-  `);
-}
-
-// ── Créer / modifier un client ────────────────────────────────────────────────
-function ouvrirNouveauClient() {
-  _ouvrirFormClient({});
-}
-function ouvrirModifierClient(nom) {
-  const cl = clients.find(c=>c.nom===nom) || {nom,telephone:"",adresse:"",notes:""};
-  _ouvrirFormClient(cl);
-}
-
-function _ouvrirFormClient(cl) {
-  const isNew = !cl.id;
-  showModal(
-    `<div style="font-size:16px;font-weight:800;color:#0f1f16;margin-bottom:4px;">${isNew?"+ Nouveau client":"✏ Modifier le client"}</div>
-    <div style="font-size:12px;color:#6b8c7a;margin-bottom:16px;">${isNew?"Créez une fiche client":"Mettez à jour la fiche"}</div>
-    <div style="margin-bottom:12px;">
-      <label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Nom / Raison sociale *</label>
-      <input type="text" id="cl_nom" value="${cl.nom||""}" placeholder="Ex : Marché Cocody - Awa"
-        style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:14px;"/>
-    </div>
-    <div style="margin-bottom:12px;">
-      <label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Téléphone (pour WhatsApp)</label>
-      <input type="tel" id="cl_tel" value="${cl.telephone||""}" placeholder="07 XX XX XX XX"
-        style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:14px;"/>
-    </div>
-    <div style="margin-bottom:12px;">
-      <label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Adresse / Marché</label>
-      <input type="text" id="cl_adresse" value="${cl.adresse||""}" placeholder="Ex : Marché de Cocody"
-        style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:14px;"/>
-    </div>
-    <div style="margin-bottom:16px;">
-      <label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Notes</label>
-      <input type="text" id="cl_notes" value="${cl.notes||""}" placeholder="Client régulier, préférences…"
-        style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/>
-    </div>
-    <div id="cl_msg" style="display:none;margin-bottom:10px;font-size:12px;font-weight:700;text-align:center;"></div>
-    <div style="display:flex;gap:10px;">
-      <button onclick="sauvegarderClient('${cl.id||""}')" style="flex:1;padding:13px;background:#0d3d1a;color:#fff;border:none;border-radius:12px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">✓ ${isNew?"Créer":"Enregistrer"}</button>
-      <button onclick="closeModal()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>
-    </div>`
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
+    +'<div style="display:flex;align-items:center;gap:10px;">'
+      +'<div style="width:46px;height:46px;background:'+col+';border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:900;color:#fff;">'+nom.charAt(0).toUpperCase()+'</div>'
+      +'<div><div style="font-size:15px;font-weight:800;color:#0f1f16;">'+nom+'</div>'
+        +'<div style="font-size:11px;color:#6b8c7a;">'+(f.telephone||"Pas de téléphone")+(f.adresse?" · "+f.adresse:"")+'</div>'
+      +'</div>'
+    +'</div>'
+    +'<div style="display:flex;gap:6px;">'
+      +(isAdmin?'<button onclick="ouvrirModifierTiers(\'fournisseur\',\''+nom.replace(/'/g,"\\'")+'\')" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:9px;padding:6px 10px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">✏</button>':"")
+      +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+    +'</div>'
+    +'</div>'
+    +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;">'
+      +'<div style="background:#eff6ff;border-radius:10px;padding:10px;text-align:center;"><div style="font-size:13px;font-weight:900;color:#1d4ed8;">'+fmt(s.totalAchete)+'</div><div style="font-size:9px;color:#6b8c7a;">Total achats</div></div>'
+      +'<div style="background:#f0fdf4;border-radius:10px;padding:10px;text-align:center;"><div style="font-size:13px;font-weight:900;color:#166534;">'+fmt(s.totalAvances)+'</div><div style="font-size:9px;color:#6b8c7a;">Avances payées</div></div>'
+      +'<div style="background:'+(s.totalDu>0?"#fff7ed":"#f0fdf4")+';border-radius:10px;padding:10px;text-align:center;"><div style="font-size:13px;font-weight:900;color:'+(s.totalDu>0?"#c2410c":"#166534")+';">'+fmt(s.totalDu)+'</div><div style="font-size:9px;color:#6b8c7a;">Reste dû</div></div>'
+    +'</div>'
+    +(s.totalDu>0&&waUrl?'<button onclick="window.open(\''+waUrl+'\',\'_blank\')" style="width:100%;background:#25d366;color:#fff;border:none;border-radius:12px;padding:11px;cursor:pointer;font-family:inherit;font-weight:700;font-size:13px;margin-bottom:12px;">📱 WhatsApp ('+fmt(s.totalDu)+' F restant)</button>':"")
+    +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Lots achetés</div>'
+    +achatsTriees.map(a=>{
+      const total=a.quantite*a.prix_unitaire;
+      const avance=a.avance_paye||0;
+      const restant=total-avance;
+      return '<div style="background:#f8faf8;border:1.5px solid #e4ede7;border-radius:10px;padding:10px;margin-bottom:6px;">'
+        +'<div style="display:flex;justify-content:space-between;align-items:center;">'
+          +'<div><div style="font-weight:700;font-size:12px;color:#0f1f16;">'+(getProduitIcon(a.produit)||"🌿")+" "+a.produit+" × "+a.quantite+'</div>'
+            +'<div style="font-size:10px;color:#6b8c7a;">'+a.date+" · "+a.statut+'</div>'
+          +'</div>'
+          +'<div style="text-align:right;">'
+            +'<div style="font-size:13px;font-weight:900;color:#0f1f16;">'+fmt(total)+'</div>'
+            +(restant>0?'<div style="font-size:10px;color:#c2410c;font-weight:700;">Restant : '+fmt(restant)+'</div>'
+                      :'<div style="font-size:10px;color:#166534;font-weight:700;">✓ Soldé</div>')
+          +'</div>'
+        +'</div>'
+      +'</div>';
+    }).join('')
+    +(f.notes?'<div style="background:#fffbeb;border:1.5px solid #fde68a;border-radius:10px;padding:10px;margin-top:8px;font-size:12px;color:#92400e;"><strong>Note :</strong> '+f.notes+'</div>':"")
   );
-  setTimeout(()=>document.getElementById("cl_nom")?.focus(), 200);
 }
 
-async function sauvegarderClient(id) {
-  const nom     = document.getElementById("cl_nom").value.trim();
-  const tel     = document.getElementById("cl_tel").value.trim();
-  const adresse = document.getElementById("cl_adresse").value.trim();
-  const notes   = document.getElementById("cl_notes").value.trim();
-  const msg     = document.getElementById("cl_msg");
+// ══════════════════════════════════════
+// SECTION E — FORMULAIRES CRÉATION/MODIF
+// ══════════════════════════════════════
 
-  if(!nom){ msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Le nom est obligatoire."; return; }
-  msg.style.cssText="display:block;color:#166534;"; msg.textContent="Sauvegarde…";
+function ouvrirNouveauTiers(type){ _ouvrirFormTiers(type, {}); }
+function ouvrirModifierTiers(type, nom){
+  const lst = type==="client" ? clients : fournisseurs;
+  const item = lst.find(x=>x.nom===nom)||{nom,telephone:"",adresse:"",notes:""};
+  _ouvrirFormTiers(type, item);
+}
 
-  try {
-    if(id) {
-      await sbUpdateClient(id, {nom, telephone:tel, adresse, notes});
-      clients = clients.map(c=>c.id===id ? {...c,nom,telephone:tel,adresse,notes} : c);
+function _ouvrirFormTiers(type, item){
+  const isNew = !item.id;
+  const label = type==="client" ? "client" : "fournisseur";
+  showModal(
+    '<div style="font-size:16px;font-weight:800;color:#0f1f16;margin-bottom:4px;">'+(isNew?"+ Nouveau ":"✏ Modifier ")+(type==="client"?"client":"fournisseur")+'</div>'
+    +'<input type="hidden" id="tf_type" value="'+type+'"/>'
+    +'<input type="hidden" id="tf_id" value="'+(item.id||"")+'"/>'
+    +'<div style="margin-bottom:12px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Nom *</label>'
+      +'<input type="text" id="tf_nom" value="'+(item.nom||"")+'" placeholder="Nom ou raison sociale" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:14px;"/></div>'
+    +'<div style="margin-bottom:12px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Téléphone (WhatsApp)</label>'
+      +'<input type="tel" id="tf_tel" value="'+(item.telephone||"")+'" placeholder="07 XX XX XX XX" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:14px;"/></div>'
+    +'<div style="margin-bottom:12px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Adresse / Marché / Localité</label>'
+      +'<input type="text" id="tf_adresse" value="'+(item.adresse||"")+'" placeholder="Ex : Marché de Bouaké" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:14px;"/></div>'
+    +'<div style="margin-bottom:16px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Notes</label>'
+      +'<input type="text" id="tf_notes" value="'+(item.notes||"")+'" placeholder="Remarques, spécialités..." style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/></div>'
+    +'<div id="tf_msg" style="display:none;margin-bottom:10px;font-size:12px;font-weight:700;text-align:center;"></div>'
+    +'<div style="display:flex;gap:10px;">'
+      +'<button onclick="sauvegarderTiers()" style="flex:1;padding:13px;background:#0d3d1a;color:#fff;border:none;border-radius:12px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">✓ '+(isNew?"Créer":"Enregistrer")+'</button>'
+      +'<button onclick="closeModal()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>'
+    +'</div>'
+  );
+  setTimeout(()=>document.getElementById("tf_nom")?.focus(), 200);
+}
+
+async function sauvegarderTiers(){
+  const type=document.getElementById("tf_type").value;
+  const id=document.getElementById("tf_id").value;
+  const nom=document.getElementById("tf_nom").value.trim();
+  const tel=document.getElementById("tf_tel").value.trim();
+  const adresse=document.getElementById("tf_adresse").value.trim();
+  const notes=document.getElementById("tf_notes").value.trim();
+  const msg=document.getElementById("tf_msg");
+  if(!nom){msg.style.cssText="display:block;color:#dc2626;";msg.textContent="Le nom est obligatoire.";return;}
+  msg.style.cssText="display:block;color:#166534;";msg.textContent="Sauvegarde…";
+  const table=type==="client"?"clients":"fournisseurs";
+  try{
+    if(id){
+      await fetch(SB_URL+"/rest/v1/"+table+"?id=eq."+id,{method:"PATCH",headers:HDR,body:JSON.stringify({nom,telephone:tel,adresse,notes})});
+      if(type==="client") clients=clients.map(c=>c.id===id?{...c,nom,telephone:tel,adresse,notes}:c);
+      else fournisseurs=fournisseurs.map(f=>f.id===id?{...f,nom,telephone:tel,adresse,notes}:f);
     } else {
-      const payload = {id:genId(), nom, telephone:tel, adresse, notes};
-      await sbSaveClient(payload);
-      clients.push(payload);
+      const payload={id:genId(),nom,telephone:tel,adresse,notes};
+      await fetch(SB_URL+"/rest/v1/"+table,{method:"POST",headers:HDR,body:JSON.stringify(payload)});
+      if(type==="client") clients.push(payload); else fournisseurs.push(payload);
     }
-    saveClients();
-    showToast("✓ Client enregistré");
+    if(type==="client") saveClients(); else saveFournisseurs();
+    showToast("✓ "+(type==="client"?"Client":"Fournisseur")+" enregistré");
     closeModal();
-    renderClients();
-  } catch(e) {
-    msg.style.cssText="display:block;color:#dc2626;"; msg.textContent=errMsg(e);
-  }
+    renderTiers();
+  }catch(e){msg.style.cssText="display:block;color:#dc2626;";msg.textContent=errMsg(e);}
 }
 
-function renderDashboard(){
-  // Calculs financiers via fonctions centralisées
-  const totalA   = totalAchats();
-  const totalAv  = totalAvances();
-  const totalV   = totalVentes();
-  const totalDus = totalA - totalAv;
-  const marge       = margebrute();          // CA − coût marchandise pur
-  const margeNette  = margenette();          // CA − (marchandise + frais)
-  const fraisTerrain = marge - margeNette;   // frais terrain imputés
-  const taux    = totalV ? Math.round(marge/totalV*100) : 0;
-  const tauxNet = totalV ? Math.round(margeNette/totalV*100) : 0;
-  const pending=demandes.filter(d=>d.statut==="en_attente").length;
-  const nbAchats=achats.length, nbVentes=ventes.length;
-  const nbTransit=achats.filter(a=>a.statut==="en_cours").length;
-  const nbRecus=achats.filter(a=>a.statut==="recu").length;
+// ══════════════════════════════════════
+// SECTION F — RÈGLEMENTS CLIENTS
+// ══════════════════════════════════════
 
-  // Données par produit
-  const byP={};
-  ventes.forEach(v=>{byP[v.produit]=(byP[v.produit]||0)+v.quantite*v.prix_vente;});
-  const topProduits=Object.entries(byP).sort((a,b)=>b[1]-a[1]);
+function enregistrerReglement(venteId, nomClient, montantDu){
+  showModal(
+    '<div style="font-size:16px;font-weight:800;color:#0f1f16;margin-bottom:4px;">💰 Encaisser un paiement</div>'
+    +'<div style="font-size:12px;color:#6b8c7a;margin-bottom:16px;">Client : '+nomClient+' · Solde dû : '+fmt(montantDu)+'</div>'
+    +'<div style="margin-bottom:12px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Montant encaissé *</label>'
+      +'<input type="number" id="reg_montant" min="1" max="'+montantDu+'" value="'+montantDu+'" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-size:18px;text-align:center;font-family:inherit;font-weight:700;color:#166534;"/></div>'
+    +'<div style="margin-bottom:12px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Mode de paiement</label>'
+      +'<select id="reg_mode" style="width:100%;padding:11px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:13px;">'
+      +["Espèces","Wave","Orange Money","MTN Money","Moov Money","Virement"].map(m=>'<option>'+m+'</option>').join("")
+      +'</select></div>'
+    +'<div style="margin-bottom:16px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Note (optionnel)</label>'
+      +'<input type="text" id="reg_note" placeholder="Ex : paiement partiel…" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/></div>'
+    +'<div id="reg_msg" style="display:none;margin-bottom:10px;font-size:12px;font-weight:700;text-align:center;"></div>'
+    +'<div style="display:flex;gap:10px;">'
+      +'<button onclick="confirmerReglement(\''+venteId+'\',\''+nomClient.replace(/'/g,"\\'")+'\',' +montantDu+')" style="flex:1;padding:13px;background:#0d3d1a;color:#fff;border:none;border-radius:12px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">✓ Confirmer</button>'
+      +'<button onclick="closeModal()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>'
+    +'</div>'
+  );
+}
 
-  // Données achats par produit
-  const byPA={};
-  achats.forEach(a=>{byPA[a.produit]=(byPA[a.produit]||0)+a.quantite*a.prix_unitaire;});
+async function confirmerReglement(venteId, nomClient, montantDu){
+  const montant=+document.getElementById("reg_montant").value||0;
+  const mode=document.getElementById("reg_mode").value;
+  const note=document.getElementById("reg_note").value.trim();
+  const msg=document.getElementById("reg_msg");
+  if(!montant||montant<=0){msg.style.cssText="display:block;color:#dc2626;";msg.textContent="Saisissez un montant valide.";return;}
+  msg.style.cssText="display:block;color:#166534;";msg.textContent="Enregistrement…";
+  try{
+    const vente=ventes.find(v=>v.id===venteId);
+    if(!vente) throw new Error("Vente introuvable");
+    const total=vente.quantite*vente.prix_vente;
+    const nouveauPaye=Math.min((vente.montant_paye||0)+montant,total);
+    await sbUpdate("ventes",venteId,{montant_paye:nouveauPaye,mode_paiement:nouveauPaye>=total?mode:"Crédit"});
+    ventes=ventes.map(v=>v.id===venteId?{...v,montant_paye:nouveauPaye}:v);
+    saveLocal();
+    try{ await sbSaveReglement({id:genId(),vente_id:venteId,client:nomClient,montant,mode_paiement:mode,note,date:new Date().toISOString().slice(0,10),enregistre_par:currentUser?.nom||"Admin"}); }catch(e){}
+    logAdminAction("REGLEMENT_CLIENT",nomClient+" · "+fmt(montant)+" F · "+mode);
+    showToast("✓ "+fmt(montant)+" F encaissé");
+    closeModal();
+    renderTiers();
+  }catch(e){msg.style.cssText="display:block;color:#dc2626;";msg.textContent=errMsg(e);}
+}
 
-  // Évolution 7 jours
-  const evol={};
-  const now=new Date();
-  for(let i=6;i>=0;i--){const d=new Date(now);d.setDate(d.getDate()-i);evol[d.toISOString().slice(0,10)]=0;}
-  ventes.forEach(v=>{if(evol.hasOwnProperty(v.date)) evol[v.date]+=v.quantite*v.prix_vente;});
-  const evolDays=Object.keys(evol), evolVals=Object.values(evol);
-  const maxEvol=Math.max(...evolVals,1);
+// ══════════════════════════════════════
+// SECTION G — FACTURATION PDF
+// ══════════════════════════════════════
 
-  // Fournisseurs dus
-  const dusFourn={};
-  achats.forEach(a=>{const d=a.quantite*a.prix_unitaire-(a.avance_paye||0);if(d>0) dusFourn[a.fournisseur]=(dusFourn[a.fournisseur]||0)+d;});
+function genererFacturePDF(venteId){
+  const v=ventes.find(x=>x.id===venteId);
+  if(!v){showToast("Vente introuvable","error");return;}
+  const total=v.quantite*v.prix_vente;
+  const paye=v.mode_paiement==="Crédit"?(v.montant_paye||0):total;
+  const du=total-paye;
+  const numFact="FAC-"+new Date().getFullYear()+"-"+venteId.slice(-6).toUpperCase();
+  const date=new Date().toLocaleDateString("fr-CI",{day:"numeric",month:"long",year:"numeric"});
 
-  // Jauge SVG taux marge
-  const GAUGE_R=54, GAUGE_CX=70, GAUGE_CY=70;
-  const angle=Math.min(Math.max(taux,0),100)/100*180;
-  const toRad=a=>a*Math.PI/180;
-  const gx=GAUGE_CX+GAUGE_R*Math.cos(Math.PI-toRad(angle));
-  const gy=GAUGE_CY-GAUGE_R*Math.sin(Math.PI-toRad(angle));
-  const gaugeColor=taux>=20?"#bef264":taux>=10?"#fbbf24":"#f87171";
-
-  // Camembert SVG produits
-  function buildPie(data){
-    if(!data.length) return "";
-    const total=data.reduce((s,[,v])=>s+v,0);
-    let startAngle=-Math.PI/2;
-    const R=55, CX=70, CY=70;
-    let slices="";
-    data.slice(0,6).forEach(([name,val],i)=>{
-      const pct=val/total;
-      const end=startAngle+pct*2*Math.PI;
-      const x1=CX+R*Math.cos(startAngle), y1=CY+R*Math.sin(startAngle);
-      const x2=CX+R*Math.cos(end), y2=CY+R*Math.sin(end);
-      const large=pct>0.5?1:0;
-      const col=CHART_COLORS[i%CHART_COLORS.length];
-      const mx=CX+(R+14)*Math.cos((startAngle+end)/2);
-      const my=CY+(R+14)*Math.sin((startAngle+end)/2);
-      slices+=`<path d="M${CX},${CY} L${x1},${y1} A${R},${R} 0 ${large},1 ${x2},${y2} Z" fill="${col}" opacity="0.9"/>`;
-      if(pct>0.08) slices+=`<text x="${mx}" y="${my}" text-anchor="middle" dominant-baseline="middle" font-size="8" fill="#0c0a09" font-weight="700">${Math.round(pct*100)}%</text>`;
-      startAngle=end;
-    });
-    return slices;
-  }
-
-  const notifHtml=notifications.length&&!isAdmin?`<div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:12px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;">
-    <span style="font-size:18px;">🔔</span>
-    <div style="flex:1;">
-      <div style="font-size:11px;color:#15803d;font-weight:700;">${notifications[0].msg}</div>
-      ${notifications.length>1?`<div style="font-size:10px;color:#3d5c48;margin-top:2px;">+${notifications.length-1} autres notifications</div>`:""}
+  // Générer le HTML de la facture
+  const factureHTML = `<!DOCTYPE html>
+<html lang="fr">
+<head><meta charset="UTF-8"/>
+<style>
+  body{font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#0f1f16;}
+  .header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;padding-bottom:16px;border-bottom:3px solid #0d3d1a;}
+  .logo{font-size:28px;font-weight:900;color:#0d3d1a;}
+  .logo span{color:#f47820;}
+  .badge{background:#0d3d1a;color:#fff;padding:6px 14px;border-radius:999px;font-size:14px;font-weight:700;}
+  .meta{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px;}
+  .meta-box{background:#f8faf8;border-radius:10px;padding:14px;}
+  .meta-box label{font-size:10px;font-weight:700;color:#6b8c7a;text-transform:uppercase;letter-spacing:.08em;display:block;margin-bottom:4px;}
+  .meta-box span{font-size:14px;font-weight:700;color:#0f1f16;}
+  table{width:100%;border-collapse:collapse;margin-bottom:20px;}
+  th{background:#0d3d1a;color:#fff;padding:10px;font-size:12px;text-align:left;}
+  td{padding:10px;border-bottom:1px solid #e4ede7;font-size:13px;}
+  .total-section{background:#f8faf8;border-radius:10px;padding:16px;}
+  .total-row{display:flex;justify-content:space-between;padding:6px 0;font-size:13px;border-bottom:1px solid #e4ede7;}
+  .total-final{display:flex;justify-content:space-between;padding:10px 0 0;font-size:16px;font-weight:900;color:#0d3d1a;}
+  .du{color:#dc2626;font-weight:900;}
+  .footer{text-align:center;margin-top:32px;padding-top:16px;border-top:1px solid #e4ede7;font-size:11px;color:#6b8c7a;}
+</style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div class="logo">VerdApp <span>CI</span></div>
+      <div style="font-size:12px;color:#6b8c7a;margin-top:4px;">Gestion Grossiste Légumes</div>
     </div>
-    <button onclick="notifications=[];saveLocal();render();" style="background:none;border:none;color:#3d5c48;font-size:18px;cursor:pointer;">×</button>
-  </div>`:"";
+    <span class="badge">FACTURE</span>
+  </div>
 
-  let html=notifHtml;
-
-  if(!achats.length&&!ventes.length){
-    html+=`<div style="text-align:center;padding:60px 0;"><div style="font-size:56px;margin-bottom:16px;">🥬</div><div style="color:#3d5c48;font-weight:600;font-size:14px;">Aucune donnée encore</div><div style="color:#2a3d32;font-size:12px;margin-top:8px;">Commence par enregistrer un achat terrain</div></div>`;
-    document.getElementById("page-dashboard").innerHTML=html; return;
-  }
-
-  // ── LIGNE 1 : 4 KPI CARDS ──
-  html+=`<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
-    <div class="section-title" style="margin-bottom:0;">📊 Tableau de bord</div>
-    <div style="display:flex;gap:8px;">
-      ${isAdmin?`<button onclick="switchTab('clients')" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">👥 Clients</button>`:""}
-      ${isAdmin?`<button onclick="bilanFinancier()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">💼 Bilan</button>
-      <button onclick="voirCommissionAdmin()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">💰 Commissions</button>
-      <button onclick="exportDashboardCSV()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">⬇ CSV</button>`:""}
+  <div class="meta">
+    <div class="meta-box">
+      <label>Numéro de facture</label>
+      <span>${numFact}</span>
+    </div>
+    <div class="meta-box">
+      <label>Date</label>
+      <span>${date}</span>
+    </div>
+    <div class="meta-box">
+      <label>Client</label>
+      <span>${v.client||"Client"}</span>
+    </div>
+    <div class="meta-box">
+      <label>Date de vente</label>
+      <span>${v.date||date}</span>
     </div>
   </div>
-  <div class="grid-4" style="margin-bottom:14px;">
-    <div style="background:linear-gradient(135deg,#1e3a5f,#1a2e4a);border:none;border-radius:14px;padding:14px;box-shadow:0 3px 12px rgba(30,58,95,.3);">
-      <div style="font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;letter-spacing:.1em;">Total achats</div>
-      <div style="font-size:17px;font-weight:900;color:#fff;margin-top:4px;line-height:1.1;">${fmt(totalA)}</div>
-      <div style="font-size:10px;color:#60a5fa;margin-top:4px;">${nbAchats} lot${nbAchats>1?"s":""}  ·  ${nbRecus} reçu${nbRecus>1?"s":""}</div>
-      <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:2px;">Coût vendu FIFO : ${fmt(totalV-marge)}</div>
+
+  <table>
+    <thead>
+      <tr><th>Désignation</th><th>Qté</th><th>Prix unit.</th><th>Total</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>${v.produit}</td>
+        <td>${v.quantite} ${v.unite||"u."}</td>
+        <td>${fmt(v.prix_vente)} F</td>
+        <td>${fmt(total)} F</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="total-section">
+    <div class="total-row"><span>Sous-total</span><span>${fmt(total)} F</span></div>
+    <div class="total-row"><span>Mode de paiement</span><span>${v.mode_paiement}</span></div>
+    ${paye>0?'<div class="total-row"><span>Montant payé</span><span>'+fmt(paye)+' F</span></div>':""}
+    <div class="total-final">
+      <span>${du>0?"Solde restant dû":"Total payé"}</span>
+      <span class="${du>0?"du":""}">${fmt(du>0?du:total)} F</span>
     </div>
-    <div style="background:linear-gradient(135deg,#14532d,#166534);border:none;border-radius:14px;padding:14px;box-shadow:0 3px 12px rgba(20,83,45,.3);">
-      <div style="font-size:9px;font-weight:700;color:#86efac;text-transform:uppercase;letter-spacing:.1em;">Total ventes</div>
-      <div style="font-size:17px;font-weight:900;color:#fff;margin-top:4px;line-height:1.1;">${fmt(totalV)}</div>
-      <div style="font-size:10px;color:#4ade80;margin-top:4px;">${nbVentes} vente${nbVentes>1?"s":""}</div>
-      <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:2px;">Brute : ${fmt(marge)}  ·  Nette : ${fmt(margeNette)}</div>
-    </div>
-    <div style="background:${totalDus>0?"linear-gradient(135deg,#7f1d1d,#991b1b)":"linear-gradient(135deg,#14532d,#166534)"};border:none;border-radius:14px;padding:14px;box-shadow:0 3px 12px rgba(0,0,0,.15);">
-      <div style="font-size:9px;font-weight:700;color:${totalDus>0?"#fca5a5":"#86efac"};text-transform:uppercase;letter-spacing:.1em;">Dû fournisseurs</div>
-      <div style="font-size:17px;font-weight:900;color:#fff;margin-top:4px;line-height:1.1;">${fmt(totalDus)}</div>
-      <div style="font-size:10px;color:${totalDus>0?"#f87171":"#4ade80"};margin-top:4px;">${totalDus>0?"⚠ À régler":"✓ Tout soldé"}</div>
-    </div>
-    <div style="background:linear-gradient(135deg,#78350f,#92400e);border:none;border-radius:14px;padding:14px;box-shadow:0 3px 12px rgba(120,53,15,.3);">
-      <div style="font-size:9px;font-weight:700;color:#fdba74;text-transform:uppercase;letter-spacing:.1em;">Stocks transit</div>
-      <div style="font-size:17px;font-weight:900;color:#fff;margin-top:4px;line-height:1.1;">${nbTransit}</div>
-      <div style="font-size:10px;color:#c2410c;margin-top:4px;">En route vers Abidjan</div>
-      <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:2px;">${nbRecus} reçu${nbRecus>1?"s":""}</div>
-    </div>
-  </div>`;
+  </div>
 
-  // Alerte demandes
-  if(isAdmin&&pending>0){
-    html+=`<div onclick="switchTab('demandes')" style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:10px 14px;margin-bottom:10px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
-      <div style="color:#c2410c;font-weight:700;font-size:12px;">⏳ ${pending} demande${pending>1?"s":""} en attente de validation</div>
-      <div style="color:#3d5c48;font-size:11px;">Voir →</div>
-    </div>`;
-  }
+  ${v.notes?'<div style="background:#fffbeb;border-radius:8px;padding:12px;margin-top:16px;font-size:12px;"><strong>Note :</strong> '+v.notes+'</div>':""}
 
-  // ── LIGNE 2 : JAUGE + SANTÉ ──
-  html+=`<div class="dash-row" style="margin-bottom:12px;">
-    <div class="card" style="margin-bottom:0;cursor:pointer;transition:box-shadow .2s;" onclick="detailMarge()" title="Voir le détail de la marge">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-        <div class="label" style="margin-bottom:0;">📊 Marge</div>
-        <span style="font-size:10px;color:#0369a1;font-weight:700;background:#eff6ff;padding:2px 8px;border-radius:999px;border:1px solid #bfdbfe;">Détail →</span>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
-        <div style="background:${taux>=20?'#f0fdf4':taux>=10?'#fff7ed':'#fef2f2'};border:1.5px solid ${taux>=20?'#bbf7d0':taux>=10?'#fed7aa':'#fecaca'};border-radius:12px;padding:10px;text-align:center;">
-          <div style="font-size:20px;font-weight:900;color:${gaugeColor};">${taux}%</div>
-          <div style="font-size:10px;color:#3d5c48;font-weight:700;margin-top:2px;">Taux brut</div>
-          <div style="font-size:12px;font-weight:800;color:${gaugeColor};margin-top:3px;">${fmt(marge)}</div>
-        </div>
-        <div style="background:${margeNette>=0?'#f0fdf4':'#fef2f2'};border:1.5px solid ${margeNette>=0?'#bbf7d0':'#fecaca'};border-radius:12px;padding:10px;text-align:center;">
-          <div style="font-size:20px;font-weight:900;color:${margeNette>=0?'#166534':'#dc2626'};">${tauxNet}%</div>
-          <div style="font-size:10px;color:#3d5c48;font-weight:700;margin-top:2px;">Taux net</div>
-          <div style="font-size:12px;font-weight:800;color:${margeNette>=0?'#166534':'#dc2626'};margin-top:3px;">${fmt(margeNette)}</div>
-        </div>
-      </div>
-      <div style="height:6px;background:#e2ece7;border-radius:999px;overflow:hidden;">
-        <div style="height:100%;background:${gaugeColor};border-radius:999px;width:${Math.min(taux,100)}%;transition:width .5s;"></div>
-      </div>
-      <div style="font-size:9px;color:#6b8c7a;text-align:center;margin-top:6px;">Frais terrain : −${fmt(fraisTerrain)}</div>
-    </div>
-    <div class="card" style="margin-bottom:0;">
-      <div class="label" style="margin-bottom:10px;">Santé de l'activité</div>
-      <table style="width:100%;border-collapse:collapse;font-size:12px;">
-        <tr style="border-bottom:1px solid var(--gray-100);"><td style="padding:6px 0;color:var(--gray-500);">Achats</td><td style="padding:6px 0;color:#2980b9;font-weight:700;text-align:right;">${nbAchats} lots</td></tr>
-        <tr style="border-bottom:1px solid var(--gray-100);"><td style="padding:6px 0;color:var(--gray-500);">En transit</td><td style="padding:6px 0;color:var(--amber);font-weight:700;text-align:right;">${nbTransit}</td></tr>
-        <tr style="border-bottom:1px solid var(--gray-100);"><td style="padding:6px 0;color:var(--gray-500);">Reçus</td><td style="padding:6px 0;color:var(--green-600);font-weight:700;text-align:right;">${nbRecus}</td></tr>
-        <tr style="border-bottom:1px solid var(--gray-100);"><td style="padding:6px 0;color:var(--gray-500);">Ventes</td><td style="padding:6px 0;color:var(--green-600);font-weight:700;text-align:right;">${nbVentes}</td></tr>
-        <tr><td style="padding:6px 0;color:var(--gray-500);">Dû fourn.</td><td style="padding:6px 0;color:${totalDus>0?"#dc2626":"#22a356"};font-weight:700;text-align:right;">${fmt(totalDus)}</td></tr>
-      </table>
-    </div>
-  </div>`;
+  <div class="footer">
+    VerdApp CI — Gestion Grossiste Légumes — Côte d'Ivoire<br/>
+    Merci pour votre confiance.
+  </div>
+</body>
+</html>`;
 
-  // ── LIGNE 3 : COURBE ÉVOLUTION ──
-  if(evolVals.some(v=>v>0)){
-    const W=300,H=70,PAD=10;
-    const pts=evolVals.map((v,i)=>({
-      x:PAD+(i/(evolDays.length-1||1))*(W-PAD*2),
-      y:PAD+(1-(v/maxEvol))*(H-PAD*2)
-    }));
-    const polyline=pts.map(p=>`${p.x},${p.y}`).join(" ");
-    const areaPath=`M${pts[0].x},${H} `+pts.map(p=>`L${p.x},${p.y}`).join(" ")+` L${pts[pts.length-1].x},${H} Z`;
-    html+=`<div style="background:var(--white);border:1.5px solid var(--gray-200);border-radius:16px;padding:16px;margin-bottom:12px;box-shadow:var(--shadow);">
-      <div class="label" style="margin-bottom:10px;">📈 Évolution des ventes — 7 derniers jours</div>
-      <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:70px;">
-        <defs>
-          <linearGradient id="gr2" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="var(--green-500)" stop-opacity="0.25"/>
-            <stop offset="100%" stop-color="var(--green-500)" stop-opacity="0"/>
-          </linearGradient>
-        </defs>
-        <!-- Grille -->
-        ${[0,1,2,3].map(i=>`<line x1="${PAD}" y1="${PAD+(i/3)*(H-PAD*2)}" x2="${W-PAD}" y2="${PAD+(i/3)*(H-PAD*2)}" stroke="var(--gray-200)" stroke-width="0.5"/>`).join("")}
-        <path d="${areaPath}" fill="url(#gr2)"/>
-        <polyline points="${polyline}" fill="none" stroke="var(--green-600)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-        ${pts.map((p,i)=>evolVals[i]>0?`<circle cx="${p.x}" cy="${p.y}" r="3" fill="#bef264" stroke="#0c0a09" stroke-width="1.5"/>`:"").join("")}
-      </svg>
-      <div style="display:flex;justify-content:space-between;margin-top:4px;">
-        ${evolDays.map((d,i)=>`<div style="font-size:9px;color:var(--gray-500);text-align:center;flex:1;">${d.slice(5).replace("-","/")}${evolVals[i]>0?`<div style="color:#15803d;font-size:8px;">${fmt(evolVals[i]).replace(" F","")}</div>`:""}</div>`).join("")}
-      </div>
-    </div>`;
-  }
+  // Ouvrir dans un nouvel onglet pour impression/partage
+  const win=window.open("","_blank","width=650,height=800");
+  if(!win){showToast("Activez les popups pour imprimer","error");return;}
+  win.document.write(factureHTML);
+  win.document.close();
+  win.focus();
 
-  // ── LIGNE 4 : CAMEMBERT + PROGRESSION PRODUITS ──
-  if(topProduits.length){
-    const pieSlices=buildPie(topProduits);
-    html+=`<div class="dash-row" style="margin-bottom:12px;">
-      <div class="card" style="margin-bottom:0;">
-        <div class="label" style="margin-bottom:10px;">Répartition ventes</div>
-        <svg viewBox="0 0 140 140" style="width:100%;max-width:180px;display:block;margin:0 auto;height:140px;">
-          ${pieSlices}
-          <circle cx="70" cy="70" r="28" fill="#ffffff" stroke="#e2ece7" stroke-width="1"/>
-          <text x="70" y="67" text-anchor="middle" font-size="9" fill="#3d5c48">Total</text>
-          <text x="70" y="79" text-anchor="middle" font-size="8" font-weight="700" fill="#15803d">${fmt(totalV).replace(" F","")}</text>
-        </svg>
-        <div style="margin-top:8px;">
-          ${topProduits.slice(0,5).map(([p],i)=>`<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;">
-            <div style="width:10px;height:10px;background:${CHART_COLORS[i%CHART_COLORS.length]};border-radius:3px;flex-shrink:0;"></div>
-            <span style="font-size:11px;font-weight:600;color:#1a2e22;">${getProduitIcon(p)} ${p}</span>
-          </div>`).join("")}
-        </div>
-      </div>
-      <div class="card" style="margin-bottom:0;">
-        <div class="label" style="margin-bottom:12px;">Progression par produit</div>
-        ${topProduits.slice(0,5).map(([p,m],i)=>{
-          const ico=getProduitIcon(p)||"🌿";
-          const pct=Math.round((m/(topProduits[0][1]||1))*100);
-          const col=CHART_COLORS[i%CHART_COLORS.length];
-          return `<div style="margin-bottom:10px;">
-            <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:4px;">
-              <span style="color:#1a2e22;">${ico} ${p}</span>
-              <span style="color:#1a2e22;font-weight:700;">${pct}%</span>
-            </div>
-            <div style="height:8px;background:var(--gray-200);border-radius:999px;overflow:hidden;">
-              <div style="height:100%;background:${col};border-radius:999px;width:${pct}%;"></div>
-            </div>
-          </div>`;
-        }).join("")}
-      </div>
-    </div>`;
-  }
-
-  // ── LIGNE 5 : ACHATS VS VENTES ──
-  const allProduits=[...new Set([...Object.keys(byP),...Object.keys(byPA)])];
-  if(allProduits.length){
-    const maxAV=Math.max(...allProduits.map(p=>Math.max(byPA[p]||0,byP[p]||0)),1);
-    html+=`<div class="card" style="margin-bottom:12px;">
-      <div class="label" style="margin-bottom:10px;">⚖ Achats vs Ventes</div>
-      <div style="display:flex;gap:16px;margin-bottom:12px;">
-        <div style="display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:#0369a1;">
-          <div style="width:10px;height:10px;background:#60a5fa;border-radius:2px;"></div>Achats
-        </div>
-        <div style="display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:#15803d;">
-          <div style="width:10px;height:10px;background:#4ade80;border-radius:2px;"></div>Ventes
-        </div>
-      </div>
-      ${allProduits.slice(0,6).map(p=>{
-        const ico=getProduitIcon(p)||"🌿";
-        const pa=byPA[p]||0,pv=byP[p]||0;
-        const pctA=Math.round((pa/maxAV)*100),pctV=Math.round((pv/maxAV)*100);
-        return `<div style="margin-bottom:10px;">
-          <div style="font-size:12px;font-weight:600;color:#1a2e22;margin-bottom:4px;">${ico} ${p}</div>
-          <div style="height:7px;background:var(--gray-200);border-radius:999px;overflow:hidden;margin-bottom:3px;">
-            <div style="height:100%;background:#60a5fa;border-radius:999px;width:${pctA}%;"></div>
-          </div>
-          <div style="height:7px;background:var(--gray-200);border-radius:999px;overflow:hidden;">
-            <div style="height:100%;background:#4ade80;border-radius:999px;width:${pctV}%;"></div>
-          </div>
-          <div style="display:flex;justify-content:space-between;font-size:10px;font-weight:600;margin-top:3px;">
-            <span style="color:#0369a1;">${fmt(pa)}</span>
-            <span style="color:#15803d;">${fmt(pv)}</span>
-          </div>
-        </div>`;
-      }).join("")}
-    </div>`;
-  }
-
-  // ── SOLDES FOURNISSEURS avec règlements ──
-  if(Object.keys(dusFourn).length){
-    // Calculer les règlements déjà effectués
-    const regParFourn={};
-    reglements.forEach(r=>{ regParFourn[r.fournisseur]=(regParFourn[r.fournisseur]||0)+r.montant; });
-
-    html+=`<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:16px;padding:14px;margin-bottom:10px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-        <div style="font-size:9px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:.1em;">⚠ Soldes fournisseurs à payer</div>
-        <button onclick="voirReglements()" style="font-size:10px;font-weight:700;color:#0369a1;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:3px 10px;cursor:pointer;font-family:inherit;">📋 Historique</button>
-      </div>`;
-    Object.entries(dusFourn).forEach(([f,m])=>{
-      const regEffectue=regParFourn[f]||0;
-      const soldeNet=Math.max(0,m-regEffectue);
-      html+=`<div style="padding:8px 0;border-bottom:1px solid #fecaca;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-          <span style="color:#0f1f16;font-size:12px;font-weight:600;">${f}</span>
-          <div style="text-align:right;">
-            <span style="color:#dc2626;font-weight:700;font-size:12px;">${fmt(soldeNet)}</span>
-            ${regEffectue>0?`<div style="font-size:10px;color:#15803d;">Payé : ${fmt(regEffectue)}</div>`:""}
-          </div>
-        </div>
-        ${soldeNet>0&&isAdmin?`<button onclick="payerFournisseur('${f}',${soldeNet})" style="font-size:10px;font-weight:700;color:#15803d;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:3px 10px;cursor:pointer;font-family:inherit;width:100%;">✓ Marquer un paiement</button>`:""}
-      </div>`;
-    });
-    html+=`</div>`;
-  }
-
-  document.getElementById("page-dashboard").innerHTML=html;
+  // Boutons d'action dans la fenêtre
+  win.document.body.insertAdjacentHTML("beforeend",`
+    <div style="position:fixed;bottom:20px;right:20px;display:flex;gap:10px;">
+      <button onclick="window.print()" style="background:#0d3d1a;color:#fff;border:none;border-radius:12px;padding:12px 20px;font-size:14px;font-weight:700;cursor:pointer;">🖨 Imprimer</button>
+      <button onclick="window.close()" style="background:#f1f5f2;border:none;border-radius:12px;padding:12px 20px;font-size:14px;font-weight:700;cursor:pointer;color:#3d5c48;">✕ Fermer</button>
+    </div>`);
 }
+
+// Alias pour compatibilité
+function saveClients(){ localStorage.setItem("va_clients", JSON.stringify(clients)); }
+async function sbSaveClient(p){ return fetch(SB_URL+"/rest/v1/clients",{method:"POST",headers:HDR,body:JSON.stringify(p)}).then(r=>r.json()); }
+async function syncClients(){ return syncFournisseurs(); }
+async function sbSaveReglement(p){
+  await fetch(SB_URL+"/rest/v1/reglements_clients",{method:"POST",headers:HDR,body:JSON.stringify(p)});
+}
+function voirTousImpayes(){ renderTiers("impayes"); }
+
 
 function renderAchats(){
   // Filtrage combiné statut + date + produit + fournisseur
@@ -5462,8 +5373,11 @@ async function supprimerUtilisateur(id, nom) {
   } catch(e) { showToast(errMsg(e),"error"); }
 }
 
-// Charger clients depuis localStorage
+// Charger fournisseurs depuis localStorage
+try{ const fo=localStorage.getItem("va_fournisseurs"); if(fo) fournisseurs=JSON.parse(fo); }catch(e){}
+// Charger clients et fournisseurs depuis localStorage
 try{ const cl=localStorage.getItem("va_clients"); if(cl) clients=JSON.parse(cl); }catch(e){}
+try{ const ff=localStorage.getItem("va_fournisseurs"); if(ff) fournisseurs=JSON.parse(ff); }catch(e){}
 // Restaurer le journal admin
 try{ adminLog.push(...JSON.parse(localStorage.getItem("va_admin_log")||"[]")); }catch(e){ console.warn("[VerdApp] Restauration journal admin échouée:", e.message); }
 // Migration PIN

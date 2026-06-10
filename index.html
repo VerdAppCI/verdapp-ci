@@ -572,6 +572,27 @@ function toggleMontantPaye(mode) {
   if(zone) zone.style.display = mode === "Crédit" ? "" : "none";
 }
 
+
+/**
+ * Valeur totale des pertes enregistrées
+ * = quantité perdue × coût de revient unitaire FIFO
+ */
+function valeurPertes() {
+  return Object.entries(pertes).reduce((s, [produit, qte]) => {
+    if(!qte) return s;
+    const c = coutFIFOUnitaire(produit) || coutMoyen(produit);
+    return s + (c ? qte * c : 0);
+  }, 0);
+}
+
+/**
+ * Marge nette RÉELLE affichée = marge nette FIFO − commissions versées − pertes
+ */
+function margeNetteReelle() {
+  const commV = commissionsPaiements.reduce((s,p)=>s+p.montant, 0);
+  const pertesV = valeurPertes();
+  return margenette() - commV - pertesV;
+}
 // ─── UTILITAIRES CALCULS FINANCIERS ─────────────────────────────────────────
 // Ces fonctions centralisent tous les calculs répétés dans l'app.
 // Ne jamais réécrire a.quantite*a.prix_unitaire directement dans le code.
@@ -835,7 +856,7 @@ function setElProp(id, prop, val){
 
 // ─── UTILS ───────────────────────────────────────────────────────────────────
 const genId=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
-const fmt=n=>new Intl.NumberFormat("fr-CI").format(Math.round(n||0))+" F";
+const fmt=n=>Math.round(n||0).toString().replace(/\B(?=(\d{3})+(?!\d))/g,"\u202f")+" F";
 const today=()=>new Date().toISOString().slice(0,10);
 const saveLocal=()=>{
   localStorage.setItem("va_achats",JSON.stringify(achats));
@@ -1512,7 +1533,7 @@ function renderDashboard(){
       </div>
       <div style="background:${margeNette>=0?"#f0fdf4":"#fef2f2"};border:1.5px solid ${margeNette>=0?"#bbf7d0":"#fecaca"};border-radius:12px;padding:10px;text-align:center;">
         <div style="font-size:20px;font-weight:900;color:${margeNette>=0?"#166534":"#dc2626"};">${tauxNet}%</div>
-        <div style="font-size:10px;color:#3d5c48;font-weight:700;margin-top:2px;">Taux net</div>
+        <div style="font-size:10px;color:#3d5c48;font-weight:700;margin-top:2px;">Rés. net</div>
         <div style="font-size:12px;font-weight:800;color:${margeNette>=0?"#166534":"#dc2626"};margin-top:3px;">${fmt(margeNette)}</div>
       </div>
     </div>
@@ -3393,9 +3414,9 @@ function calculerCaisse() {
   // Caisse totale
   const caisseTotale = fondCommerce + tresorerieActivite;
 
-  // Marge nette réelle (après commissions)
-  const margeNetteReelle = margenette() - commissionsVersees;
-  const tauxMargeReelle  = totalVentes() ? Math.round(margeNetteReelle/totalVentes()*100) : 0;
+  // Résultat net d'exploitation (après commissions + pertes)
+  const margeNetteReelleVal = margeNetteReelle();
+  const tauxMargeReelle     = totalVentes() ? Math.round(margeNetteReelleVal/totalVentes()*100) : 0;
 
   // Dettes fournisseurs restantes
   const detteFournisseurs = totalAchats() - achatsPaies;
@@ -3414,7 +3435,7 @@ function calculerCaisse() {
     commissionsVersees,
     tresorerieActivite,
     caisseTotale,
-    margeNetteReelle,
+    margeNetteReelle:margeNetteReelleVal,
     tauxMargeReelle,
     detteFournisseurs,
     creancesClients
@@ -3494,14 +3515,14 @@ function voirCaisse() {
       +'</div>'
     +'</div>'
 
-    // Marge nette réelle (après commissions)
+    // Résultat net d'exploitation (après commissions)
     +'<div style="background:'+(t.margeNetteReelle>=0?"#f0fdf4":"#fef2f2")+';border:1.5px solid '+(t.margeNetteReelle>=0?"#bbf7d0":"#fecaca")+';border-radius:12px;padding:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;">'
       +'<div>'
-        +'<div style="font-size:11px;font-weight:700;color:#0f1f16;">Marge nette réelle</div>'
-        +'<div style="font-size:10px;color:#6b8c7a;margin-top:2px;">Après déduction des commissions versées</div>'
+        +'<div style="font-size:11px;font-weight:700;color:#0f1f16;">Résultat net exploitation</div>'
+        +'<div style="font-size:10px;color:#6b8c7a;margin-top:2px;">Marge nette − commissions − pertes</div>'
       +'</div>'
       +'<div style="text-align:right;">'
-        +'<div style="font-size:18px;font-weight:900;color:'+(t.margeNetteReelle>=0?"#166534":"#dc2626")+'">'+(t.margeNetteReelle>=0?"+":"")+fmt(t.margeNetteReelle)+'</div>'
+        +'<div style="font-size:18px;font-weight:900;color:'+(t.margeNetteReelle>=0?"#166534":"#dc2626")+'">'+(t.margeNetteReelle>=0?"+":"")+fmt(t.margeNetteReelleVal)+'</div>'
         +'<div style="font-size:10px;color:#6b8c7a;">'+t.tauxMargeReelle+'% du CA</div>'
       +'</div>'
     +'</div>'
@@ -3557,28 +3578,82 @@ async function sauvegarderFondCommerce() {
 }
 
 function renderParams(){
+  const page = document.getElementById("page-params");
   if(!isAdmin){
-    document.getElementById("page-params").innerHTML=`<div class="card" style="background:#fff7ed;border:1.5px solid #fed7aa;text-align:center;padding:30px;">
-      <div style="font-size:32px;margin-bottom:12px;">🔐</div>
-      <div style="color:#c2410c;font-weight:700;">Accès réservé à l'admin</div>
-      <div style="color:#3d5c48;font-size:12px;margin-top:8px;">Active le mode Admin pour gérer les produits</div>
-    </div>`;
+    page.innerHTML='<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:14px;text-align:center;padding:40px 20px;margin:20px 0;">'
+      +'<div style="font-size:40px;margin-bottom:12px;">🔐</div>'
+      +"<div style=\"color:#c2410c;font-weight:700;font-size:15px;\">Acces reserve a l'admin</div>"
+      +'</div>';
     return;
   }
-  let html=`
-    <div class="label" style="margin-bottom:12px;">⚙ Gestion des produits</div>
-    <button class="btn btn-green" onclick="showAddProduit()" style="margin-bottom:10px;">+ Ajouter un produit</button>
-    <button class="btn btn-ghost" onclick="showChangePIN()" style="margin-bottom:10px;">🔑 Changer le code PIN admin</button>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
-      <button onclick="voirCaisse()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#166534;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">💼 Caisse & Trésorerie</button>
-      <button onclick="renderGestionUtilisateurs()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">👥 Gérer les utilisateurs</button>
-      <button onclick="voirCommissionAdmin()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">💰 Commissions équipe</button>
-      <button onclick="voirJournalAdmin()" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">🔐 Journal admin</button>
-      <button onclick="verifierIntegriteDonnees()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#166534;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">🔍 Vérifier les données</button>
-    </div>
-    <div id="listeProduits"></div>`;
-  document.getElementById("page-params").innerHTML=html;
+
+  // ── Carte utilisateur admin ──
+  const nom = currentUser?.nom || "Admin";
+  const col = "#f47820";
+  const headerHTML =
+    '<div style="background:linear-gradient(135deg,#0d3d1a,#166534);border-radius:16px;padding:20px;margin-bottom:20px;display:flex;align-items:center;gap:14px;">'
+    +'<div style="width:50px;height:50px;background:rgba(255,255,255,.15);border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:900;color:#fff;flex-shrink:0;">'+nom.charAt(0).toUpperCase()+'</div>'
+    +'<div><div style="font-size:16px;font-weight:800;color:#fff;">'+nom+'</div>'
+      +'<div style="font-size:11px;color:rgba(255,255,255,.6);margin-top:2px;">Administrateur · Accès complet</div>'
+    +'</div>'
+    +'<button onclick="deconnecterUtilisateur()" style="margin-left:auto;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);color:#fff;border-radius:10px;padding:7px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">Déconnexion</button>'
+    +'</div>';
+
+  // ── Section Finances ──
+  const sectionFinances =
+    '<div style="margin-bottom:20px;">'
+    +'<div style="font-size:10px;font-weight:700;color:#6b8c7a;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;">Finances</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
+      +_paramBtn("💼","Caisse","Trésorerie & fond","voirCaisse()","#f0fdf4","#bbf7d0","#166534")
+      +_paramBtn("💰","Commissions","Équipe & paiements","voirCommissionAdmin()","#fff7ed","#fed7aa","#c2410c")
+      +_paramBtn("💼","Bilan","Par jour / mois / an","bilanFinancier()","#fff7ed","#fed7aa","#c2410c")
+      +_paramBtn("📊","Marge","Analyse FIFO","detailMarge()","#eff6ff","#bfdbfe","#1d4ed8")
+    +'</div>'
+    +'</div>';
+
+  // ── Section Gestion ──
+  const sectionGestion =
+    '<div style="margin-bottom:20px;">'
+    +'<div style="font-size:10px;font-weight:700;color:#6b8c7a;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;">Gestion</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
+      +_paramBtn("👥","Utilisateurs","Accès & rôles","renderGestionUtilisateurs()","#fff7ed","#fed7aa","#c2410c")
+      +_paramBtn("🌿","Produits","Ajouter / modifier","showAddProduit()","#f0fdf4","#bbf7d0","#166534")
+      +_paramBtn("🤝","Tiers","Clients & fournisseurs","switchTab('tiers')","#eff6ff","#bfdbfe","#1d4ed8")
+      +_paramBtn("📋","Demandes","Modifications en attente","switchTab('demandes')","#f8faf8","#e4ede7","#3d5c48")
+    +'</div>'
+    +'</div>';
+
+  // ── Section Sécurité ──
+  const sectionSecurite =
+    '<div style="margin-bottom:20px;">'
+    +'<div style="font-size:10px;font-weight:700;color:#6b8c7a;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;">Sécurité & Données</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
+      +_paramBtn("🔑","Changer PIN","Code d'accès admin","showChangePIN()","#fef2f2","#fecaca","#dc2626")
+      +_paramBtn("🔐","Journal","Actions admin","voirJournalAdmin()","#eff6ff","#bfdbfe","#1d4ed8")
+      +_paramBtn("🔍","Vérifier","Intégrité données","verifierIntegriteDonnees()","#f0fdf4","#bbf7d0","#166534")
+      +_paramBtn("📦","Stock FIFO","Voir les lots","switchTab('stock')","#f8faf8","#e4ede7","#3d5c48")
+    +'</div>'
+    +'</div>';
+
+  // ── Liste produits ──
+  const sectionProduits =
+    '<div>'
+    +'<div style="font-size:10px;font-weight:700;color:#6b8c7a;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;">Catalogue produits</div>'
+    +'<div id="listeProduits"></div>'
+    +'</div>';
+
+  page.innerHTML = headerHTML + sectionFinances + sectionGestion + sectionSecurite + sectionProduits;
   renderListeProduits();
+}
+
+// Helper bouton paramètre
+function _paramBtn(icon, titre, sous, action, bg, border, color) {
+  return '<button onclick="'+action+'" style="background:'+bg+';border:1.5px solid '+border+';border-radius:14px;padding:14px;cursor:pointer;font-family:inherit;text-align:left;display:flex;align-items:flex-start;gap:10px;transition:opacity .15s;">'
+    +'<div style="font-size:20px;flex-shrink:0;margin-top:1px;">'+icon+'</div>'
+    +'<div><div style="font-size:13px;font-weight:800;color:'+color+';">'+titre+'</div>'
+      +'<div style="font-size:10px;color:#6b8c7a;margin-top:2px;line-height:1.3;">'+sous+'</div>'
+    +'</div>'
+  +'</button>';
 }
 
 function showChangePIN(){
@@ -4965,6 +5040,16 @@ function detailMarge(onglet) {
 
   // ── KPI global (commun à tous les onglets) ──
   const global = calculerMarge(ventes, achats.filter(a=>a.statut==="recu")); // calculerMarge maintenu pour les vues filtrées
+  // Enrichir avec commissions et pertes
+  const commV = commissionsPaiements.reduce((s,p)=>s+p.montant,0);
+  const pertesV = valeurPertes();
+  const globalAvecCharges = {
+    ...global,
+    commissionsVersees: commV,
+    pertesValorisees: pertesV,
+    margeNetteApresCharges: global.margeN - commV - pertesV,
+    tauxNetApresCharges: global.ca ? Math.round((global.margeN-commV-pertesV)/global.ca*100) : 0
+  };
   const kpiHtml =
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px;">'
     +'<div style="background:'+bgMarge(global.tauxB)+';border:1.5px solid '+borderMarge(global.tauxB)+';border-radius:14px;padding:12px;text-align:center;">'
@@ -5096,7 +5181,7 @@ function detailMarge(onglet) {
               +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px;">'
                 +'<div style="background:#eff6ff;border-radius:8px;padding:7px;text-align:center;"><div style="font-size:11px;font-weight:700;color:#1d4ed8;">'+fmt(m.ca)+'</div><div style="font-size:9px;color:#6b8c7a;">CA</div></div>'
                 +'<div style="background:'+bgMarge(m.tauxB)+';border-radius:8px;padding:7px;text-align:center;"><div style="font-size:11px;font-weight:700;color:'+couleurMarge(m.tauxB)+';">'+m.tauxB+'%</div><div style="font-size:9px;color:#6b8c7a;">Taux brut</div></div>'
-                +'<div style="background:'+bgMarge(m.tauxN)+';border-radius:8px;padding:7px;text-align:center;"><div style="font-size:11px;font-weight:700;color:'+couleurMarge(m.tauxN)+';">'+m.tauxN+'%</div><div style="font-size:9px;color:#6b8c7a;">Taux net</div></div>'
+                +'<div style="background:'+bgMarge(m.tauxN)+';border-radius:8px;padding:7px;text-align:center;"><div style="font-size:11px;font-weight:700;color:'+couleurMarge(m.tauxN)+';">'+m.tauxN+'%</div><div style="font-size:9px;color:#6b8c7a;">Rés. net</div></div>'
               +'</div>'
               + barreMarge(m.tauxB)
             +'</div>';
@@ -5181,6 +5266,16 @@ function detailMarge(onglet) {
 
 function exportMargeCSV(){
   const global = calculerMarge(ventes, achats.filter(a=>a.statut==="recu")); // calculerMarge maintenu pour les vues filtrées
+  // Enrichir avec commissions et pertes
+  const commV = commissionsPaiements.reduce((s,p)=>s+p.montant,0);
+  const pertesV = valeurPertes();
+  const globalAvecCharges = {
+    ...global,
+    commissionsVersees: commV,
+    pertesValorisees: pertesV,
+    margeNetteApresCharges: global.margeN - commV - pertesV,
+    tauxNetApresCharges: global.ca ? Math.round((global.margeN-commV-pertesV)/global.ca*100) : 0
+  };
 
   // Par jour
   const parJour = {};

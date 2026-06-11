@@ -593,6 +593,104 @@ function margeNetteReelle() {
   const pertesV = valeurPertes();
   return margenette() - commV - pertesV;
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// PLAN COMPTABLE SYSCOHADA RÉVISÉ — VerdApp CI
+// Référence : Acte Uniforme OHADA du 26 janvier 2017
+// ════════════════════════════════════════════════════════════════════════════
+const PLAN_COMPTABLE_OHADA = {
+  // CLASSE 1 — RESSOURCES DURABLES
+  "101": { libelle: "Capital social", classe: 1, nature: "passif" },
+  "106": { libelle: "Réserves", classe: 1, nature: "passif" },
+  "120": { libelle: "Résultat net de l'exercice", classe: 1, nature: "passif" },
+  "162": { libelle: "Emprunts et dettes financières", classe: 1, nature: "passif" },
+
+  // CLASSE 3 — STOCKS
+  "311": { libelle: "Marchandises en stocks", classe: 3, nature: "actif" },
+  "6031": { libelle: "Variation de stocks de marchandises", classe: 6, nature: "charge" },
+
+  // CLASSE 4 — TIERS
+  "401": { libelle: "Fournisseurs", classe: 4, nature: "passif" },
+  "4011": { libelle: "Fournisseurs — avances versées", classe: 4, nature: "actif" },
+  "411": { libelle: "Clients", classe: 4, nature: "actif" },
+  "4111": { libelle: "Clients — effets à recevoir", classe: 4, nature: "actif" },
+  "421": { libelle: "Personnel — rémunérations dues (commissions)", classe: 4, nature: "passif" },
+  "447": { libelle: "État — taxes et impôts forfaitaires", classe: 4, nature: "passif" },
+  "471": { libelle: "Débiteurs divers", classe: 4, nature: "actif" },
+
+  // CLASSE 5 — TRÉSORERIE
+  "521": { libelle: "Banque", classe: 5, nature: "actif" },
+  "571": { libelle: "Caisse principale", classe: 5, nature: "actif" },
+  "5721": { libelle: "Caisse Mobile Money (Wave/Orange)", classe: 5, nature: "actif" },
+
+  // CLASSE 6 — CHARGES
+  "601": { libelle: "Achats de marchandises", classe: 6, nature: "charge" },
+  "6011": { libelle: "Frais accessoires d'achat (transport, droits)", classe: 6, nature: "charge" },
+  "6012": { libelle: "Droit de terre et de vente", classe: 6, nature: "charge" },
+  "613": { libelle: "Locations et charges locatives", classe: 6, nature: "charge" },
+  "641": { libelle: "Commissions versées au personnel terrain", classe: 6, nature: "charge" },
+  "645": { libelle: "Charges sociales patronales", classe: 6, nature: "charge" },
+  "658": { libelle: "Pertes sur stocks et créances", classe: 6, nature: "charge" },
+  "661": { libelle: "Charges d'intérêts financiers", classe: 6, nature: "charge" },
+  "691": { libelle: "Impôts forfaitaires sur le résultat", classe: 6, nature: "charge" },
+  "6812": { libelle: "Dotations aux amortissements — équipements", classe: 6, nature: "charge" },
+
+  // CLASSE 7 — PRODUITS
+  "701": { libelle: "Ventes de marchandises HT", classe: 7, nature: "produit" },
+  "7071": { libelle: "Produits accessoires", classe: 7, nature: "produit" },
+  "7541": { libelle: "Reprises sur pertes de valeur stocks", classe: 7, nature: "produit" },
+};
+
+/**
+ * Retourne le libellé d'un compte SYSCOHADA
+ */
+function libelleCompte(num) {
+  return PLAN_COMPTABLE_OHADA[num]?.libelle || "Compte "+num;
+}
+
+/**
+ * Génère l'écriture comptable double-entrée pour une opération
+ */
+function ecritureComptable(type, montant, reference, date, tiers) {
+  const ecritures = {
+    "ACHAT_MARCHANDISE": [
+      { compte:"601", sens:"D", montant, libelle:"Achat marchandises — "+tiers },
+      { compte:"401", sens:"C", montant, libelle:"Fournisseur — "+tiers }
+    ],
+    "FRAIS_ACHAT": [
+      { compte:"6011", sens:"D", montant, libelle:"Frais terrain — "+tiers },
+      { compte:"401", sens:"C", montant, libelle:"Fournisseur — "+tiers }
+    ],
+    "AVANCE_FOURNISSEUR": [
+      { compte:"4011", sens:"D", montant, libelle:"Avance fournisseur — "+tiers },
+      { compte:"571", sens:"C", montant, libelle:"Règlement avance" }
+    ],
+    "VENTE_MARCHANDISE": [
+      { compte:"411", sens:"D", montant, libelle:"Client — "+tiers },
+      { compte:"701", sens:"C", montant, libelle:"Vente marchandises — "+tiers }
+    ],
+    "ENCAISSEMENT_CLIENT": [
+      { compte:"571", sens:"D", montant, libelle:"Encaissement — "+tiers },
+      { compte:"411", sens:"C", montant, libelle:"Client soldé — "+tiers }
+    ],
+    "COMMISSION_VERSEE": [
+      { compte:"641", sens:"D", montant, libelle:"Commission — "+tiers },
+      { compte:"571", sens:"C", montant, libelle:"Paiement commission" }
+    ],
+    "PERTE_STOCK": [
+      { compte:"658", sens:"D", montant, libelle:"Perte stock — "+tiers },
+      { compte:"311", sens:"C", montant, libelle:"Sortie stock perte" }
+    ],
+    "IMPOT_FORFAITAIRE": [
+      { compte:"691", sens:"D", montant, libelle:"Impôt forfaitaire" },
+      { compte:"447", sens:"C", montant, libelle:"État — impôt dû" }
+    ],
+  };
+  return (ecritures[type]||[]).map(e=>({
+    ...e, reference, date: date||new Date().toISOString().slice(0,10), tiers
+  }));
+}
+
 // ─── UTILITAIRES CALCULS FINANCIERS ─────────────────────────────────────────
 // Ces fonctions centralisent tous les calculs répétés dans l'app.
 // Ne jamais réécrire a.quantite*a.prix_unitaire directement dans le code.
@@ -2666,8 +2764,13 @@ function genererFacturePDF(venteId){
 
   ${v.notes?'<div style="background:#fffbeb;border-radius:8px;padding:12px;margin-top:16px;font-size:12px;"><strong>Note :</strong> '+v.notes+'</div>':""}
 
+  <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:10px;margin-top:16px;font-size:11px;color:#166534;">
+    <strong>Exonération TVA</strong> — VerdApp CI est rattachée à la Mairie et bénéficie d'une exonération de TVA conformément au Code Général des Impôts de Côte d'Ivoire. Facture établie Hors Taxe.
+  </div>
+
   <div class="footer">
     VerdApp CI — Gestion Grossiste Légumes — Côte d'Ivoire<br/>
+    Exonérée de TVA — Rattachement Mairie — CME<br/>
     Merci pour votre confiance.
   </div>
 </body>
@@ -3636,6 +3739,1484 @@ async function sauvegarderFondCommerce() {
   voirCaisse();
 }
 
+
+// ████████████████████████████████████████████████████████████████████████████
+// MODULE COMPTABILITÉ OHADA — VerdApp CI
+// SYSCOHADA Révisé — 15 Réformes
+// ████████████████████████████████████████████████████████████████████████████
+
+// ── Variables globales OHADA ──────────────────────────────────────────────────
+let journalComptable  = JSON.parse(localStorage.getItem("va_journal")||"[]");
+let chargesFixes      = JSON.parse(localStorage.getItem("va_charges_fixes")||"[]");
+let budgetPrevisionnel= JSON.parse(localStorage.getItem("va_budget")||"[]");
+let compteurFacture   = parseInt(localStorage.getItem("va_cpt_facture")||"0");
+
+function saveJournal(){ localStorage.setItem("va_journal", JSON.stringify(journalComptable)); }
+function saveChargesFixes(){ localStorage.setItem("va_charges_fixes", JSON.stringify(chargesFixes)); }
+function saveBudget(){ localStorage.setItem("va_budget", JSON.stringify(budgetPrevisionnel)); }
+
+// ══════════════════════════════════════════════════════════════
+// RÉFORME 1 — NUMÉROTATION SÉQUENTIELLE DES FACTURES
+// ══════════════════════════════════════════════════════════════
+async function getNumeroFacture() {
+  try {
+    const r = await fetch(SB_URL+"/rest/v1/compteurs_documents?type=eq.facture", {headers:HDR});
+    const data = await r.json();
+    const current = data[0]?.valeur || 0;
+    const next = current + 1;
+    await fetch(SB_URL+"/rest/v1/compteurs_documents?type=eq.facture", {
+      method:"PATCH", headers:HDR,
+      body: JSON.stringify({valeur: next})
+    });
+    const year = new Date().getFullYear();
+    const num = String(next).padStart(4, "0");
+    localStorage.setItem("va_cpt_facture", next);
+    return `FAC-${year}-${num}`;
+  } catch(e) {
+    compteurFacture++;
+    localStorage.setItem("va_cpt_facture", compteurFacture);
+    return `FAC-${new Date().getFullYear()}-${String(compteurFacture).padStart(4,"0")}`;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// RÉFORME 2 — JOURNAL COMPTABLE OHADA
+// Enregistrement automatique des écritures
+// ══════════════════════════════════════════════════════════════
+async function enregistrerEcriture(date, libelle, compteDebit, compteCredit, montant, typeOp, sourceId, sourceTable) {
+  const ecriture = {
+    id: genId(),
+    date_op: date || new Date().toISOString().slice(0,10),
+    exercice: new Date().getFullYear(),
+    periode: new Date().getMonth() + 1,
+    libelle, compte_debit: compteDebit, compte_credit: compteCredit,
+    montant, type_op: typeOp, source_id: sourceId, source_table: sourceTable,
+    created_by: currentUser?.nom || "Système"
+  };
+  journalComptable.unshift(ecriture);
+  if(journalComptable.length > 500) journalComptable = journalComptable.slice(0,500);
+  saveJournal();
+  try {
+    await fetch(SB_URL+"/rest/v1/journal_comptable", {
+      method:"POST", headers:HDR, body: JSON.stringify(ecriture)
+    });
+  } catch(e) {}
+  return ecriture;
+}
+
+// Écritures automatiques par type d'opération
+async function ecritureAchat(achat) {
+  const montantMarch = achat.quantite * achat.prix_unitaire;
+  const frais = (achat.droit_terre||0)+(achat.transport||0)+(achat.droit_vente||0)+(achat.charrette||0);
+  const avance = achat.avance_paye || 0;
+  await enregistrerEcriture(achat.date, "Achat - "+achat.produit+" / "+achat.fournisseur,
+    "601", "401", montantMarch, "ACHAT", achat.id, "achats");
+  if(frais > 0)
+    await enregistrerEcriture(achat.date, "Frais accessoires - "+achat.produit,
+      "6011", "571", frais, "FRAIS_ACHAT", achat.id, "achats");
+  if(avance > 0)
+    await enregistrerEcriture(achat.date, "Avance fournisseur - "+achat.fournisseur,
+      "401", "571", avance, "AVANCE_FOURN", achat.id, "achats");
+}
+
+async function ecritureVente(vente) {
+  const montant = vente.quantite * vente.prix_vente;
+  const paye = vente.mode_paiement === "Crédit" ? (vente.montant_paye||0) : montant;
+  await enregistrerEcriture(vente.date, "Vente - "+vente.produit+" / "+(vente.client||"Client"),
+    "411", "701", montant, "VENTE", vente.id, "ventes");
+  if(paye > 0)
+    await enregistrerEcriture(vente.date, "Encaissement - "+(vente.client||"Client"),
+      "571", "411", paye, "ENCAISSEMENT", vente.id, "ventes");
+}
+
+async function ecritureCommission(paiement) {
+  await enregistrerEcriture(paiement.date, "Commission - "+paiement.utilisateur,
+    "641", "421", paiement.montant, "COMMISSION_DUE", paiement.id, "commissions_paiements");
+  await enregistrerEcriture(paiement.date, "Versement commission - "+paiement.utilisateur,
+    "421", "571", paiement.montant, "COMMISSION_VERSEE", paiement.id, "commissions_paiements");
+}
+
+async function ecrirePerte(perte) {
+  await enregistrerEcriture(perte.date, "Perte stock - "+perte.produit,
+    "658", "311", perte.valeur_perte, "PERTE_STOCK", perte.id, "pertes_lots");
+}
+
+// ══════════════════════════════════════════════════════════════
+// RÉFORME 3 — GRAND LIVRE (mouvements par compte)
+// ══════════════════════════════════════════════════════════════
+function calculerGrandLivre(numCompte) {
+  const mouvements = [];
+  let solde = 0;
+  const ecritures = [...journalComptable]
+    .sort((a,b) => (a.date_op||"").localeCompare(b.date_op||""));
+
+  ecritures.forEach(e => {
+    if(e.compte_debit === numCompte) {
+      solde += e.montant;
+      mouvements.push({...e, sens:"D", solde_progressif: solde});
+    }
+    if(e.compte_credit === numCompte) {
+      solde -= e.montant;
+      mouvements.push({...e, sens:"C", solde_progressif: solde});
+    }
+  });
+  return {mouvements, soldeDebiteur: Math.max(0,solde), soldeCrediteur: Math.max(0,-solde)};
+}
+
+function voirGrandLivre() {
+  if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
+  const planLocal = [
+    {numero:"601",libelle:"Achats marchandises"},
+    {numero:"6011",libelle:"Frais accessoires"},
+    {numero:"641",libelle:"Commissions"},
+    {numero:"658",libelle:"Charges diverses"},
+    {numero:"701",libelle:"Ventes"},
+    {numero:"411",libelle:"Clients"},
+    {numero:"401",libelle:"Fournisseurs"},
+    {numero:"571",libelle:"Caisse"},
+    {numero:"311",libelle:"Stocks"},
+    {numero:"421",libelle:"Personnel"},
+    {numero:"101",libelle:"Capital"},
+  ];
+  const lignes = planLocal.map(cpt => {
+    const gl = calculerGrandLivre(cpt.numero);
+    const total = gl.mouvements.length;
+    return `<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:10px;padding:10px 12px;margin-bottom:6px;cursor:pointer;" onclick="voirDetailCompte('${cpt.numero}','${cpt.libelle}')">`
+      +`<div style="display:flex;justify-content:space-between;align-items:center;">`
+        +`<div><div style="font-weight:700;font-size:12px;color:#0f1f16;">${cpt.numero} — ${cpt.libelle}</div>`
+          +`<div style="font-size:10px;color:#6b8c7a;">${total} mouvement${total>1?"s":""}</div></div>`
+        +`<div style="text-align:right;">`
+          +(gl.soldeDebiteur>0?`<div style="font-size:12px;font-weight:700;color:#1d4ed8;">Dt: ${fmt(gl.soldeDebiteur)}</div>`:"")
+          +(gl.soldeCrediteur>0?`<div style="font-size:12px;font-weight:700;color:#dc2626;">Ct: ${fmt(gl.soldeCrediteur)}</div>`:"")
+        +`</div>`
+      +`</div>`
+    +`</div>`;
+  }).join('');
+
+  showModal(
+    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">`
+    +`<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">📖 Grand Livre OHADA</div>`
+    +`<div style="font-size:11px;color:#3d5c48;margin-top:2px;">${journalComptable.length} écritures · Exercice ${new Date().getFullYear()}</div></div>`
+    +`<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>`
+    +`</div>`
+    +`<div style="font-size:10px;font-weight:700;color:#6b8c7a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Cliquer sur un compte pour voir le détail</div>`
+    +lignes
+  );
+}
+
+function voirDetailCompte(numero, libelle) {
+  const gl = calculerGrandLivre(numero);
+  const lignes = gl.mouvements.slice(0,30).map(m =>
+    `<tr style="border-bottom:1px solid #e4ede7;font-size:10px;">`
+    +`<td style="padding:5px 4px;color:#6b8c7a;">${m.date_op}</td>`
+    +`<td style="padding:5px 4px;color:#0f1f16;">${m.libelle}</td>`
+    +`<td style="padding:5px 4px;text-align:right;color:#1d4ed8;">${m.sens==="D"?fmt(m.montant):""}</td>`
+    +`<td style="padding:5px 4px;text-align:right;color:#dc2626;">${m.sens==="C"?fmt(m.montant):""}</td>`
+    +`<td style="padding:5px 4px;text-align:right;font-weight:700;color:#0f1f16;">${fmt(Math.abs(m.solde_progressif))}</td>`
+    +`</tr>`
+  ).join('');
+
+  showModal(
+    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">`
+    +`<div><div style="font-size:15px;font-weight:800;color:#0f1f16;">Compte ${numero} — ${libelle}</div>`
+    +`<div style="font-size:11px;color:#3d5c48;margin-top:2px;">`
+      +`Débiteur : ${fmt(gl.soldeDebiteur)} · Créditeur : ${fmt(gl.soldeCrediteur)}</div></div>`
+    +`<button onclick="voirGrandLivre()" style="background:#eff6ff;border:none;border-radius:10px;padding:6px 12px;cursor:pointer;font-size:12px;font-weight:700;color:#1d4ed8;font-family:inherit;">← Retour</button>`
+    +`</div>`
+    +`<div style="overflow-x:auto;">`
+    +`<table style="width:100%;border-collapse:collapse;">`
+    +`<thead><tr style="background:#f0f5f1;font-size:10px;font-weight:700;color:#6b8c7a;">`
+    +`<th style="padding:6px 4px;text-align:left;">Date</th><th style="padding:6px 4px;text-align:left;">Libellé</th>`
+    +`<th style="padding:6px 4px;text-align:right;">Débit</th><th style="padding:6px 4px;text-align:right;">Crédit</th>`
+    +`<th style="padding:6px 4px;text-align:right;">Solde</th></tr></thead>`
+    +`<tbody>${lignes}</tbody>`
+    +`</table></div>`
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// RÉFORME 4 — BALANCE DES COMPTES
+// ══════════════════════════════════════════════════════════════
+function voirBalance() {
+  if(!isAdmin) return;
+  const planLocal = [
+    {numero:"101",libelle:"Capital"},
+    {numero:"311",libelle:"Marchandises en stocks"},
+    {numero:"401",libelle:"Fournisseurs"},
+    {numero:"411",libelle:"Clients"},
+    {numero:"421",libelle:"Personnel"},
+    {numero:"571",libelle:"Caisse"},
+    {numero:"601",libelle:"Achats marchandises"},
+    {numero:"6011",libelle:"Frais accessoires achats"},
+    {numero:"641",libelle:"Commissions"},
+    {numero:"658",libelle:"Charges diverses"},
+    {numero:"701",libelle:"Ventes"},
+  ];
+
+  let totalDebit=0, totalCredit=0;
+  const lignes = planLocal.map(cpt => {
+    const gl = calculerGrandLivre(cpt.numero);
+    const mvtD = journalComptable.filter(e=>e.compte_debit===cpt.numero).reduce((s,e)=>s+e.montant,0);
+    const mvtC = journalComptable.filter(e=>e.compte_credit===cpt.numero).reduce((s,e)=>s+e.montant,0);
+    totalDebit += mvtD; totalCredit += mvtC;
+    return `<tr style="border-bottom:1px solid #e4ede7;font-size:11px;">`
+      +`<td style="padding:6px 4px;font-weight:600;color:#0f1f16;">${cpt.numero}</td>`
+      +`<td style="padding:6px 4px;color:#3d5c48;">${cpt.libelle}</td>`
+      +`<td style="padding:6px 4px;text-align:right;color:#1d4ed8;">${mvtD>0?fmt(mvtD):"-"}</td>`
+      +`<td style="padding:6px 4px;text-align:right;color:#dc2626;">${mvtC>0?fmt(mvtC):"-"}</td>`
+      +`<td style="padding:6px 4px;text-align:right;font-weight:700;color:${gl.soldeDebiteur>0?"#1d4ed8":"#dc2626"};">${gl.soldeDebiteur>0?fmt(gl.soldeDebiteur):fmt(gl.soldeCrediteur)}</td>`
+    +`</tr>`;
+  }).join('');
+
+  const equilibre = Math.abs(totalDebit - totalCredit) < 1;
+
+  showModal(
+    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">`
+    +`<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">⚖ Balance des Comptes</div>`
+    +`<div style="font-size:11px;color:#3d5c48;margin-top:2px;">SYSCOHADA Révisé · Exercice ${new Date().getFullYear()}</div></div>`
+    +`<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>`
+    +`</div>`
+    +`<div style="background:${equilibre?"#f0fdf4":"#fef2f2"};border:1.5px solid ${equilibre?"#bbf7d0":"#fecaca"};border-radius:10px;padding:10px;margin-bottom:12px;font-size:12px;font-weight:700;color:${equilibre?"#166534":"#dc2626"};text-align:center;">`
+    +`${equilibre?"✓ Balance équilibrée":"⚠ Balance non équilibrée — vérifier les écritures"}`
+    +`</div>`
+    +`<div style="overflow-x:auto;">`
+    +`<table style="width:100%;border-collapse:collapse;">`
+    +`<thead><tr style="background:#0d3d1a;">`
+    +`<th style="padding:8px 6px;text-align:left;color:#fff;font-size:10px;">N°</th>`
+    +`<th style="padding:8px 6px;text-align:left;color:#fff;font-size:10px;">Compte</th>`
+    +`<th style="padding:8px 6px;text-align:right;color:#fff;font-size:10px;">Mouv. Débit</th>`
+    +`<th style="padding:8px 6px;text-align:right;color:#fff;font-size:10px;">Mouv. Crédit</th>`
+    +`<th style="padding:8px 6px;text-align:right;color:#fff;font-size:10px;">Solde</th>`
+    +`</tr></thead>`
+    +`<tbody>${lignes}</tbody>`
+    +`<tfoot><tr style="background:#f0f5f1;font-weight:900;">`
+    +`<td colspan="2" style="padding:8px 6px;font-size:11px;">TOTAUX</td>`
+    +`<td style="padding:8px 6px;text-align:right;color:#1d4ed8;font-size:11px;">${fmt(totalDebit)}</td>`
+    +`<td style="padding:8px 6px;text-align:right;color:#dc2626;font-size:11px;">${fmt(totalCredit)}</td>`
+    +`<td style="padding:8px 6px;text-align:right;font-size:11px;">${fmt(Math.abs(totalDebit-totalCredit))}</td>`
+    +`</tr></tfoot>`
+    +`</table></div>`
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// RÉFORME 5 — COMPTE DE RÉSULTAT FORMEL (SYSCOHADA)
+// ══════════════════════════════════════════════════════════════
+function voirCompteResultat(periode) {
+  if(!isAdmin) return;
+  const p = periode || null;
+  let ventesF = ventes, achatsF = achats.filter(a=>a.statut==="recu");
+  if(p) {
+    ventesF = ventesF.filter(v=>(v.date||"").slice(0,7)===p);
+    achatsF = achatsF.filter(a=>(a.date_reception||a.date||"").slice(0,7)===p);
+  }
+  const ca         = ventesF.reduce((s,v)=>s+v.quantite*v.prix_vente,0);
+  const camv       = ca - margebrute(ventesF);
+  const mb         = margebrute(ventesF);
+  const frais      = mb - margenette(ventesF);
+  const mn         = margenette(ventesF);
+  const commV      = commissionsPaiements
+    .filter(cp=>!p||(cp.date||"").slice(0,7)===p)
+    .reduce((s,p)=>s+p.montant,0);
+  const pertesV    = pertesLots
+    .filter(pl=>!p||(pl.date||"").slice(0,7)===p)
+    .reduce((s,pl)=>s+(pl.valeur_perte||0),0);
+  const chargesF   = chargesFixes.filter(c=>c.actif).reduce((s,c)=>s+c.montant_mensuel,0)*(p?1:Math.ceil(ventes.length/20||1));
+  const resultatBrut = mn - commV - pertesV;
+  const resultatNet  = resultatBrut - chargesF;
+  const txMB = ca?Math.round(mb/ca*100):0;
+  const txMN = ca?Math.round(mn/ca*100):0;
+  const txRN = ca?Math.round(resultatNet/ca*100):0;
+
+  const ligne = (lib, val, isTotal=false, color="#0f1f16") =>
+    `<div style="display:flex;justify-content:space-between;padding:${isTotal?"9px":"6px"} 0;`
+    +`border-${isTotal?"top":"bottom"}:${isTotal?"2px":"1px"} solid #e4ede7;`
+    +`${isTotal?"font-weight:900;font-size:13px;":"font-size:12px;"}">`
+    +`<span style="color:#3d5c48;">${lib}</span>`
+    +`<span style="font-weight:${isTotal?"900":"700"};color:${val>=0?"#166534":"#dc2626"};">${val>=0?"+":""}${fmt(val)}</span>`
+    +`</div>`;
+
+  const moisNoms=["","Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
+  const titreP = p?moisNoms[parseInt(p.split("-")[1])]+" "+p.split("-")[0]:"Toutes périodes";
+
+  showModal(
+    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">`
+    +`<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">📊 Compte de Résultat</div>`
+    +`<div style="font-size:11px;color:#3d5c48;margin-top:2px;">SYSCOHADA · ${titreP}</div></div>`
+    +`<div style="display:flex;gap:6px;">`
+    +`<button onclick="exportCompteResultatCSV('${p||""}')" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;border-radius:9px;padding:6px 10px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">⬇ CSV</button>`
+    +`<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>`
+    +`</div></div>`
+    +`<div style="background:#f8faf8;border-radius:12px;padding:14px;margin-bottom:14px;">`
+    +ligne("Chiffre d'affaires (CA)", ca)
+    +ligne("− Coût achat marchandises vendues (601)", -camv)
+    +ligne("= MARGE BRUTE  ("+txMB+"%)", mb, true, mb>=0?"#166534":"#dc2626")
+    +ligne("− Frais accessoires achats (6011)", -frais)
+    +ligne("= MARGE NETTE  ("+txMN+"%)", mn, true, mn>=0?"#166534":"#dc2626")
+    +ligne("− Commissions versées (641)", -commV)
+    +ligne("− Pertes sur stocks (658)", -pertesV)
+    +ligne("− Charges fixes exploitation", -chargesF)
+    +ligne("= RÉSULTAT NET D'EXPLOITATION  ("+txRN+"%)", resultatNet, true, resultatNet>=0?"#166534":"#dc2626")
+    +`</div>`
+    // Sélecteur de période
+    +`<div style="display:flex;gap:8px;flex-wrap:wrap;">`
+    +[...new Set(ventes.map(v=>(v.date||"").slice(0,7)))].sort().reverse().slice(0,6).map(m=>
+      `<button onclick="voirCompteResultat('${m}')" style="background:${p===m?"#0d3d1a":"#f0f5f1"};color:${p===m?"#fff":"#3d5c48"};border:none;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">${m}</button>`
+    ).join('')
+    +`<button onclick="voirCompteResultat(null)" style="background:${!p?"#0d3d1a":"#f0f5f1"};color:${!p?"#fff":"#3d5c48"};border:none;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">Tout</button>`
+    +`</div>`
+  );
+}
+
+function exportCompteResultatCSV(periode) {
+  const p = periode||null;
+  let ventesF=ventes, achatsF=achats.filter(a=>a.statut==="recu");
+  if(p){ventesF=ventesF.filter(v=>(v.date||"").slice(0,7)===p);achatsF=achatsF.filter(a=>(a.date_reception||a.date||"").slice(0,7)===p);}
+  const ca=ventesF.reduce((s,v)=>s+v.quantite*v.prix_vente,0);
+  const mb=margebrute(ventesF),mn=margenette(ventesF),frais=mb-mn;
+  const commV=commissionsPaiements.filter(cp=>!p||(cp.date||"").slice(0,7)===p).reduce((s,p)=>s+p.montant,0);
+  const pertesV=pertesLots.filter(pl=>!p||(pl.date||"").slice(0,7)===p).reduce((s,pl)=>s+(pl.valeur_perte||0),0);
+  const chargesF=chargesFixes.filter(c=>c.actif).reduce((s,c)=>s+c.montant_mensuel,0);
+  const rows=[
+    ["COMPTE DE RÉSULTAT — VerdApp CI — SYSCOHADA","",""],
+    ["Période",p||"Toutes périodes",""],["","",""],
+    ["Poste","Montant (FCFA)",""],
+    ["Chiffre d'affaires",ca,""],
+    ["Coût achat marchandises (601)",-(ca-mb),""],
+    ["MARGE BRUTE",mb,""],
+    ["Frais accessoires achats (6011)",-frais,""],
+    ["MARGE NETTE",mn,""],
+    ["Commissions versées (641)",-commV,""],
+    ["Pertes sur stocks (658)",-pertesV,""],
+    ["Charges fixes exploitation",-chargesF,""],
+    ["RÉSULTAT NET D'EXPLOITATION",mn-commV-pertesV-chargesF,""],
+  ];
+  downloadCSV("CompteResultat_VerdApp_"+(p||"Global")+"_"+new Date().toISOString().slice(0,10)+".csv", rows, []);
+  showToast("✓ Compte de résultat exporté");
+}
+
+// ══════════════════════════════════════════════════════════════
+// RÉFORME 6 — BILAN SIMPLIFIÉ
+// ══════════════════════════════════════════════════════════════
+function voirBilan() {
+  if(!isAdmin) return;
+  const t = calculerCaisse();
+  const stockValeur = (() => {
+    let total=0;
+    [...new Set(achats.filter(a=>a.statut==="recu").map(a=>a.produit))].forEach(p=>{
+      total+=calculerFIFO(p).coutFIFO;
+    });
+    return total;
+  })();
+  const creancesClients = ventes.reduce((s,v)=>{
+    if(v.mode_paiement!=="Crédit") return s;
+    return s+Math.max(0,v.quantite*v.prix_vente-(v.montant_paye||0));
+  },0);
+  const dettesFourn = achats.reduce((s,a)=>s+a.quantite*a.prix_unitaire-(a.avance_paye||0),0);
+  const commDues = commissionsPaiements.length>0?0:
+    [...new Set(achats.filter(a=>a.statut==="recu"&&a.enregistre_par).map(a=>a.enregistre_par))]
+    .reduce((s,nom)=>s+Math.max(0,calculerCommissionComplete(nom).solde),0);
+  const actifTotal = t.caisseTotale + stockValeur + creancesClients;
+  const passifTotal = t.fondCommerce + dettesFourn + commDues;
+  const resultatNet = actifTotal - passifTotal;
+
+  const cellA = (lib,val,sub="") =>
+    `<div style="background:#eff6ff;border-radius:10px;padding:10px;margin-bottom:6px;">`
+    +`<div style="font-size:11px;color:#3d5c48;">${lib}</div>`
+    +`<div style="font-size:14px;font-weight:900;color:#1d4ed8;">${fmt(val)}</div>`
+    +(sub?`<div style="font-size:9px;color:#6b8c7a;">${sub}</div>`:"")
+    +`</div>`;
+  const cellP = (lib,val,sub="") =>
+    `<div style="background:#fef2f2;border-radius:10px;padding:10px;margin-bottom:6px;">`
+    +`<div style="font-size:11px;color:#3d5c48;">${lib}</div>`
+    +`<div style="font-size:14px;font-weight:900;color:#dc2626;">${fmt(val)}</div>`
+    +(sub?`<div style="font-size:9px;color:#6b8c7a;">${sub}</div>`:"")
+    +`</div>`;
+
+  showModal(
+    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">`
+    +`<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">🏛 Bilan Simplifié</div>`
+    +`<div style="font-size:11px;color:#3d5c48;margin-top:2px;">SYSCOHADA · Au ${new Date().toLocaleDateString("fr-CI",{day:"numeric",month:"long",year:"numeric"})}</div></div>`
+    +`<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>`
+    +`</div>`
+    +`<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">`
+    // ACTIF
+    +`<div>`
+    +`<div style="font-size:10px;font-weight:700;color:#1d4ed8;text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px;text-align:center;">ACTIF</div>`
+    +cellA("Caisse (571)", t.caisseTotale, "Fond + Trésorerie")
+    +cellA("Stocks (311)", stockValeur, "Valorisé FIFO")
+    +cellA("Créances clients (411)", creancesClients, "Ventes à crédit")
+    +`<div style="background:#1d4ed8;border-radius:10px;padding:10px;text-align:center;">`
+    +`<div style="font-size:10px;color:#bfdbfe;">TOTAL ACTIF</div>`
+    +`<div style="font-size:16px;font-weight:900;color:#fff;">${fmt(actifTotal)}</div>`
+    +`</div>`
+    +`</div>`
+    // PASSIF
+    +`<div>`
+    +`<div style="font-size:10px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px;text-align:center;">PASSIF</div>`
+    +cellP("Capital (101)", t.fondCommerce, "Fond de commerce")
+    +cellP("Dettes fourn. (401)", dettesFourn, "Achats non soldés")
+    +(commDues>0?cellP("Commissions dues (421)", commDues, "Personnel terrain"):"")
+    +`<div style="background:${resultatNet>=0?"#166534":"#dc2626"};border-radius:10px;padding:10px;margin-bottom:6px;">`
+    +`<div style="font-size:10px;color:#fff;opacity:.7;">Résultat net</div>`
+    +`<div style="font-size:14px;font-weight:900;color:#fff;">${fmt(resultatNet)}</div>`
+    +`</div>`
+    +`<div style="background:#dc2626;border-radius:10px;padding:10px;text-align:center;">`
+    +`<div style="font-size:10px;color:#fecaca;">TOTAL PASSIF</div>`
+    +`<div style="font-size:16px;font-weight:900;color:#fff;">${fmt(passifTotal+resultatNet)}</div>`
+    +`</div>`
+    +`</div>`
+    +`</div>`
+    +`<div style="background:${Math.abs(actifTotal-(passifTotal+resultatNet))<100?"#f0fdf4":"#fef2f2"};border:1.5px solid ${Math.abs(actifTotal-(passifTotal+resultatNet))<100?"#bbf7d0":"#fecaca"};border-radius:10px;padding:10px;margin-top:12px;text-align:center;font-size:11px;font-weight:700;color:${Math.abs(actifTotal-(passifTotal+resultatNet))<100?"#166534":"#dc2626"};">`
+    +`${Math.abs(actifTotal-(passifTotal+resultatNet))<100?"✓ Bilan équilibré":"⚠ Bilan non équilibré — contrôler les données"}`
+    +`</div>`
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// RÉFORME 7 — TABLEAU DES FLUX DE TRÉSORERIE
+// ══════════════════════════════════════════════════════════════
+function voirFluxTresorerie() {
+  if(!isAdmin) return;
+  const t = calculerCaisse();
+  const encaissVentes = ventes.reduce((s,v)=>v.mode_paiement==="Crédit"?s+(v.montant_paye||0):s+v.quantite*v.prix_vente,0);
+  const decaissAchats = achats.reduce((s,a)=>s+(a.avance_paye||0),0);
+  const decaissComm   = commissionsPaiements.reduce((s,p)=>s+p.montant,0);
+  const fluxExploit   = encaissVentes - decaissAchats - decaissComm;
+  const apportCapital = t.fondCommerce;
+
+  const ligne=(lib,val,indent=false)=>
+    `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e4ede7;font-size:12px;${indent?"padding-left:16px;":""}">
+    <span style="color:#3d5c48;">${lib}</span>
+    <span style="font-weight:700;color:${val>=0?"#166534":"#dc2626"};">${val>=0?"+":""}${fmt(val)}</span></div>`;
+
+  showModal(
+    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">`
+    +`<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">💧 Flux de Trésorerie</div>`
+    +`<div style="font-size:11px;color:#3d5c48;margin-top:2px;">Tableau des flux · SYSCOHADA</div></div>`
+    +`<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>`
+    +`</div>`
+    +`<div style="background:#f8faf8;border-radius:12px;padding:14px;">`
+    +`<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">A. Flux d'exploitation</div>`
+    +ligne("+ Encaissements clients (ventes)",encaissVentes,true)
+    +ligne("− Décaissements fournisseurs (avances)",-decaissAchats,true)
+    +ligne("− Commissions versées",-decaissComm,true)
+    +ligne("= Flux net d'exploitation",fluxExploit)
+    +`<div style="margin-top:12px;font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">B. Flux de financement</div>`
+    +ligne("+ Apport en capital (fond de commerce)",apportCapital,true)
+    +ligne("= Flux net de financement",apportCapital)
+    +`<div style="margin-top:12px;border-top:2px solid #0d3d1a;padding-top:10px;">`
+    +ligne("= VARIATION NETTE DE TRÉSORERIE",fluxExploit+apportCapital)
+    +`</div>`
+    +`<div style="margin-top:10px;background:${(fluxExploit+apportCapital)>=0?"#0d3d1a":"#991b1b"};border-radius:10px;padding:12px;text-align:center;">`
+    +`<div style="font-size:10px;font-weight:700;color:rgba(255,255,255,.6);text-transform:uppercase;">Trésorerie disponible</div>`
+    +`<div style="font-size:24px;font-weight:900;color:#fff;">${fmt(t.caisseTotale)}</div>`
+    +`</div>`
+    +`</div>`
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// RÉFORME 8 — SEUIL DE RENTABILITÉ
+// ══════════════════════════════════════════════════════════════
+function voirSeuilRentabilite() {
+  if(!isAdmin) return;
+  const totalChargesFixes = chargesFixes.filter(c=>c.actif).reduce((s,c)=>s+c.montant_mensuel,0);
+  const ca = totalVentes();
+  const mb = margebrute();
+  const txMarge = ca ? mb/ca : 0;
+  const seuil = txMarge > 0 ? totalChargesFixes / txMarge : 0;
+  const margeSurite = ca - seuil;
+  const txSecurite = ca ? Math.round(margeSurite/ca*100) : 0;
+  const nbJoursActivite = [...new Set(ventes.map(v=>(v.date||"").slice(0,10)))].length || 1;
+  const caParJour = ca / nbJoursActivite;
+  const joursAvantSeuil = caParJour > 0 ? Math.ceil(seuil / caParJour) : 0;
+
+  showModal(
+    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">`
+    +`<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">📐 Seuil de Rentabilité</div>`
+    +`<div style="font-size:11px;color:#3d5c48;margin-top:2px;">Point mort · Marge de sécurité</div></div>`
+    +`<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>`
+    +`</div>`
+    // Résultat principal
+    +`<div style="background:linear-gradient(135deg,#0d3d1a,#166534);border-radius:16px;padding:20px;text-align:center;margin-bottom:14px;">`
+    +`<div style="font-size:10px;font-weight:700;color:#86efac;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;">Seuil de rentabilité mensuel</div>`
+    +`<div style="font-size:28px;font-weight:900;color:#fff;">${fmt(seuil)}</div>`
+    +`<div style="font-size:11px;color:rgba(255,255,255,.6);margin-top:6px;">CA minimum pour couvrir toutes les charges fixes</div>`
+    +`</div>`
+    // Grille KPIs
+    +`<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px;">`
+    +`<div style="background:#eff6ff;border-radius:12px;padding:12px;text-align:center;">`
+    +`<div style="font-size:9px;color:#1d4ed8;font-weight:700;text-transform:uppercase;">Taux de marge brute</div>`
+    +`<div style="font-size:18px;font-weight:900;color:#1d4ed8;">${Math.round(txMarge*100)}%</div>`
+    +`</div>`
+    +`<div style="background:${margeSurite>=0?"#f0fdf4":"#fef2f2"};border-radius:12px;padding:12px;text-align:center;">`
+    +`<div style="font-size:9px;color:${margeSurite>=0?"#166534":"#dc2626"};font-weight:700;text-transform:uppercase;">Marge de sécurité</div>`
+    +`<div style="font-size:18px;font-weight:900;color:${margeSurite>=0?"#166534":"#dc2626"};">${txSecurite}%</div>`
+    +`</div>`
+    +`<div style="background:#fff7ed;border-radius:12px;padding:12px;text-align:center;">`
+    +`<div style="font-size:9px;color:#c2410c;font-weight:700;text-transform:uppercase;">CA / jour</div>`
+    +`<div style="font-size:18px;font-weight:900;color:#c2410c;">${fmt(caParJour)}</div>`
+    +`</div>`
+    +`<div style="background:${margeSurite>=0?"#f0fdf4":"#fef2f2"};border-radius:12px;padding:12px;text-align:center;">`
+    +`<div style="font-size:9px;color:${margeSurite>=0?"#166534":"#dc2626"};font-weight:700;text-transform:uppercase;">${margeSurite>=0?"Au-dessus du seuil":"Sous le seuil"}</div>`
+    +`<div style="font-size:18px;font-weight:900;color:${margeSurite>=0?"#166534":"#dc2626"};">${fmt(Math.abs(margeSurite))}</div>`
+    +`</div>`
+    +`</div>`
+    // Charges fixes
+    +`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">`
+    +`<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;">Charges fixes mensuelles</div>`
+    +`<button onclick="gererChargesFixes()" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">✏ Gérer</button>`
+    +`</div>`
+    +chargesFixes.filter(c=>c.actif).map(c=>
+      `<div style="display:flex;justify-content:space-between;padding:6px 10px;background:#f8faf8;border-radius:8px;margin-bottom:4px;font-size:11px;">`
+      +`<span style="color:#3d5c48;">${c.libelle}</span>`
+      +`<span style="font-weight:700;color:#c2410c;">${fmt(c.montant_mensuel)}</span>`
+      +`</div>`
+    ).join('')
+    +`<div style="display:flex;justify-content:space-between;padding:8px 10px;background:#fff7ed;border:1.5px solid #fed7aa;border-radius:8px;margin-top:4px;font-size:12px;font-weight:900;">`
+    +`<span>Total charges fixes</span><span style="color:#c2410c;">${fmt(totalChargesFixes)}</span>`
+    +`</div>`
+  );
+}
+
+function gererChargesFixes() {
+  const lignes = chargesFixes.map((c,i)=>
+    `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:#f8faf8;border-radius:8px;margin-bottom:6px;">`
+    +`<div><div style="font-size:12px;font-weight:700;color:#0f1f16;">${c.libelle}</div>`
+    +`<div style="font-size:10px;color:#6b8c7a;">${c.categorie}</div></div>`
+    +`<div style="display:flex;align-items:center;gap:6px;">`
+    +`<div style="font-size:13px;font-weight:900;color:#c2410c;">${fmt(c.montant_mensuel)}</div>`
+    +`<button onclick="supprimerChargeFix('${c.id}')" style="background:#fef2f2;border:1.5px solid #fecaca;color:#dc2626;border-radius:7px;padding:4px 8px;cursor:pointer;font-size:10px;font-weight:700;font-family:inherit;">✕</button>`
+    +`</div></div>`
+  ).join('');
+
+  showModal(
+    `<div style="font-size:16px;font-weight:800;color:#0f1f16;margin-bottom:14px;">⚙ Charges fixes</div>`
+    +lignes
+    +`<div style="border-top:1.5px solid #e4ede7;margin-top:12px;padding-top:12px;">`
+    +`<div style="font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:8px;">+ Ajouter une charge</div>`
+    +`<input type="text" id="cf_lib" placeholder="Ex : Loyer, Électricité…" style="width:100%;padding:10px;border:1.5px solid #d4edda;border-radius:10px;font-family:inherit;font-size:13px;margin-bottom:8px;"/>`
+    +`<input type="number" id="cf_mnt" placeholder="Montant mensuel (FCFA)" style="width:100%;padding:10px;border:1.5px solid #d4edda;border-radius:10px;font-family:inherit;font-size:13px;margin-bottom:8px;"/>`
+    +`<select id="cf_cat" style="width:100%;padding:10px;border:1.5px solid #d4edda;border-radius:10px;font-family:inherit;font-size:13px;margin-bottom:10px;">`
+    +`<option value="personnel">Personnel</option><option value="exploitation">Exploitation</option>`
+    +`<option value="fiscal">Fiscal</option><option value="autre">Autre</option></select>`
+    +`<button onclick="ajouterChargeFix()" style="width:100%;padding:11px;background:#0d3d1a;color:#fff;border:none;border-radius:10px;font-family:inherit;font-weight:700;font-size:13px;cursor:pointer;">+ Ajouter</button>`
+    +`</div>`
+  );
+}
+
+async function ajouterChargeFix(){
+  const lib=document.getElementById("cf_lib").value.trim();
+  const mnt=parseFloat(document.getElementById("cf_mnt").value)||0;
+  const cat=document.getElementById("cf_cat").value;
+  if(!lib||!mnt){showToast("Remplissez tous les champs","error");return;}
+  const item={id:genId(),libelle:lib,montant_mensuel:mnt,categorie:cat,actif:true};
+  try{await fetch(SB_URL+"/rest/v1/charges_fixes",{method:"POST",headers:HDR,body:JSON.stringify(item)});}catch(e){}
+  chargesFixes.push(item);saveChargesFixes();
+  showToast("✓ Charge ajoutée");gererChargesFixes();
+}
+
+async function supprimerChargeFix(id){
+  try{await fetch(SB_URL+"/rest/v1/charges_fixes?id=eq."+id,{method:"DELETE",headers:HDR});}catch(e){}
+  chargesFixes=chargesFixes.filter(c=>c.id!==id);saveChargesFixes();
+  showToast("✓ Charge supprimée");gererChargesFixes();
+}
+
+// ══════════════════════════════════════════════════════════════
+// RÉFORME 9 — RATIOS FINANCIERS
+// ══════════════════════════════════════════════════════════════
+function voirRatios() {
+  if(!isAdmin) return;
+  const ca = totalVentes();
+  const mb = margebrute();
+  const mn = margenette();
+  const commV = commissionsPaiements.reduce((s,p)=>s+p.montant,0);
+  const pertesV = pertesLots.reduce((s,p)=>s+(p.valeur_perte||0),0);
+  const rn = mn - commV - pertesV;
+  const stockMoyen = (() => {
+    let t=0; [...new Set(achats.filter(a=>a.statut==="recu").map(a=>a.produit))].forEach(p=>{t+=calculerFIFO(p).coutFIFO;});
+    return t;
+  })();
+  const creances = ventes.reduce((s,v)=>v.mode_paiement==="Crédit"?s+Math.max(0,v.quantite*v.prix_vente-(v.montant_paye||0)):s,0);
+  const dettes = achats.reduce((s,a)=>s+a.quantite*a.prix_unitaire-(a.avance_paye||0),0);
+  const achatsTotal = totalAchats();
+  const nbJours = [...new Set(ventes.map(v=>(v.date||"").slice(0,10)))].length || 1;
+
+  const rotationStock = stockMoyen>0?Math.round(ca/stockMoyen*10)/10:0;
+  const delaiClient   = ca>0?Math.round(creances*nbJours/ca):0;
+  const delaiFourn    = achatsTotal>0?Math.round(dettes*nbJours/achatsTotal):0;
+  const tauxPerte     = achatsTotal>0?Math.round(pertesV/achatsTotal*100):0;
+  const txMB = ca?Math.round(mb/ca*100):0;
+  const txMN = ca?Math.round(mn/ca*100):0;
+  const txRN = ca?Math.round(rn/ca*100):0;
+
+  const ratio=(lib,val,unite,seuil,ok,commentaire)=>
+    `<div style="background:#fff;border:1.5px solid ${ok?"#bbf7d0":"#fecaca"};border-radius:12px;padding:12px;margin-bottom:8px;">`
+    +`<div style="display:flex;justify-content:space-between;align-items:center;">`
+    +`<div><div style="font-size:12px;font-weight:700;color:#0f1f16;">${lib}</div>`
+    +`<div style="font-size:10px;color:#6b8c7a;margin-top:2px;">${commentaire} · Seuil : ${seuil}</div></div>`
+    +`<div style="text-align:right;"><div style="font-size:18px;font-weight:900;color:${ok?"#166534":"#dc2626"};">${val}${unite}</div>`
+    +`<div style="font-size:10px;color:${ok?"#166534":"#dc2626"};font-weight:700;">${ok?"✓ Bon":"⚠ À surveiller"}</div></div>`
+    +`</div></div>`;
+
+  showModal(
+    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">`
+    +`<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">📈 Ratios Financiers</div>`
+    +`<div style="font-size:11px;color:#3d5c48;margin-top:2px;">Tableau de bord gestionnaire</div></div>`
+    +`<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>`
+    +`</div>`
+    +ratio("Taux de marge brute",txMB,"%","> 20%",txMB>=20,"Rentabilité du négoce pur")
+    +ratio("Taux de marge nette",txMN,"%","> 15%",txMN>=15,"Efficacité après frais terrain")
+    +ratio("Résultat net / CA",txRN,"%","> 10%",txRN>=10,"Après toutes charges")
+    +ratio("Rotation des stocks",rotationStock,"x","> 12x/an",rotationStock>=1,"Liquidité marchandises")
+    +ratio("Délai moyen client",delaiClient,"j","< 30 jours",delaiClient<=30,"Gestion du crédit client")
+    +ratio("Délai moyen fournisseur",delaiFourn,"j","30-60 jours",delaiFourn>=15&&delaiFourn<=60,"Négociation fournisseurs")
+    +ratio("Taux de perte stock",tauxPerte,"%","< 3%",tauxPerte<=3,"Qualité gestion des stocks")
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// RÉFORME 10 — BUDGET PRÉVISIONNEL
+// ══════════════════════════════════════════════════════════════
+function voirBudget() {
+  if(!isAdmin) return;
+  const moisNoms=["","Jan","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Déc"];
+  const annee = new Date().getFullYear();
+  const moisActuel = new Date().getMonth()+1;
+
+  // Calcul réalisé par mois
+  const realise = {};
+  for(let m=1;m<=12;m++){
+    const mp = annee+"-"+String(m).padStart(2,"0");
+    const vF = ventes.filter(v=>(v.date||"").slice(0,7)===mp);
+    const aF = achats.filter(a=>(a.date_reception||a.date||"").slice(0,7)===mp&&a.statut==="recu");
+    realise[m]={ca:vF.reduce((s,v)=>s+v.quantite*v.prix_vente,0),mb:margebrute(vF),mn:margenette(vF)};
+  }
+
+  const lignes = Array.from({length:12},(_,i)=>i+1).map(m=>{
+    const b = budgetPrevisionnel.find(x=>x.mois===m&&x.exercice===annee)||{ca_prevu:0,marge_brute_prevue:0};
+    const r = realise[m];
+    const ecartCA = r.ca - b.ca_prevu;
+    const isPast = m <= moisActuel;
+    return `<tr style="border-bottom:1px solid #e4ede7;font-size:11px;background:${m===moisActuel?"#f0fdf4":""};">`
+    +`<td style="padding:7px 6px;font-weight:700;color:#0f1f16;">${moisNoms[m]}</td>`
+    +`<td style="padding:7px 6px;text-align:right;color:#6b8c7a;">${b.ca_prevu>0?fmt(b.ca_prevu):"—"}</td>`
+    +`<td style="padding:7px 6px;text-align:right;color:#0f1f16;">${isPast&&r.ca>0?fmt(r.ca):"—"}</td>`
+    +`<td style="padding:7px 6px;text-align:right;font-weight:700;color:${ecartCA>=0?"#166534":"#dc2626"};">${isPast&&b.ca_prevu>0?(ecartCA>=0?"+":"")+fmt(ecartCA):"—"}</td>`
+    +`<td style="padding:7px 6px;text-align:right;color:#0f1f16;">${isPast&&r.mn>0?fmt(r.mn):"—"}</td>`
+    +`<td style="padding:7px 4px;text-align:center;">`
+    +`<button onclick="saisirBudget(${m},${annee},${b.ca_prevu||0},${b.marge_brute_prevue||0})" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:7px;padding:3px 8px;cursor:pointer;font-size:10px;font-weight:700;font-family:inherit;">✏</button>`
+    +`</td></tr>`;
+  }).join('');
+
+  const totalBudget = budgetPrevisionnel.filter(b=>b.exercice===annee).reduce((s,b)=>s+b.ca_prevu,0);
+  const totalRealise = Object.values(realise).reduce((s,r)=>s+r.ca,0);
+
+  showModal(
+    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">`
+    +`<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">📅 Budget ${annee}</div>`
+    +`<div style="font-size:11px;color:#3d5c48;margin-top:2px;">Prévisionnel vs Réalisé</div></div>`
+    +`<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>`
+    +`</div>`
+    +`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">`
+    +`<div style="background:#eff6ff;border-radius:10px;padding:10px;text-align:center;"><div style="font-size:9px;color:#1d4ed8;font-weight:700;text-transform:uppercase;">CA Prévu</div><div style="font-size:15px;font-weight:900;color:#1d4ed8;">${fmt(totalBudget)}</div></div>`
+    +`<div style="background:${totalRealise>=totalBudget?"#f0fdf4":"#fff7ed"};border-radius:10px;padding:10px;text-align:center;"><div style="font-size:9px;color:${totalRealise>=totalBudget?"#166534":"#c2410c"};font-weight:700;text-transform:uppercase;">CA Réalisé</div><div style="font-size:15px;font-weight:900;color:${totalRealise>=totalBudget?"#166534":"#c2410c"};">${fmt(totalRealise)}</div></div>`
+    +`</div>`
+    +`<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">`
+    +`<thead><tr style="background:#0d3d1a;">`
+    +`<th style="padding:7px 6px;text-align:left;color:#fff;font-size:10px;">Mois</th>`
+    +`<th style="padding:7px 6px;text-align:right;color:#fff;font-size:10px;">Prévu CA</th>`
+    +`<th style="padding:7px 6px;text-align:right;color:#fff;font-size:10px;">Réalisé CA</th>`
+    +`<th style="padding:7px 6px;text-align:right;color:#fff;font-size:10px;">Écart</th>`
+    +`<th style="padding:7px 6px;text-align:right;color:#fff;font-size:10px;">MN réelle</th>`
+    +`<th style="padding:7px 4px;text-align:center;color:#fff;font-size:10px;"></th>`
+    +`</tr></thead><tbody>${lignes}</tbody></table></div>`
+  );
+}
+
+function saisirBudget(mois, annee, caActuel, mbActuel) {
+  const moisNoms=["","Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
+  showModal(
+    `<div style="font-size:16px;font-weight:800;color:#0f1f16;margin-bottom:4px;">📅 Budget ${moisNoms[mois]} ${annee}</div>`
+    +`<div style="font-size:12px;color:#6b8c7a;margin-bottom:14px;">Objectifs prévisionnels</div>`
+    +`<div style="margin-bottom:12px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">CA prévisionnel (FCFA)</label>`
+    +`<input type="number" id="bgt_ca" value="${caActuel}" min="0" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:16px;font-weight:700;text-align:center;"/></div>`
+    +`<div style="margin-bottom:16px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Marge brute prévue (FCFA)</label>`
+    +`<input type="number" id="bgt_mb" value="${mbActuel}" min="0" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:16px;font-weight:700;text-align:center;"/></div>`
+    +`<div style="display:flex;gap:10px;">`
+    +`<button onclick="enregistrerBudget(${mois},${annee})" style="flex:1;padding:13px;background:#0d3d1a;color:#fff;border:none;border-radius:12px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">✓ Enregistrer</button>`
+    +`<button onclick="voirBudget()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>`
+    +`</div>`
+  );
+}
+
+async function enregistrerBudget(mois, annee) {
+  const ca = parseFloat(document.getElementById("bgt_ca").value)||0;
+  const mb = parseFloat(document.getElementById("bgt_mb").value)||0;
+  const item = {id:genId(),exercice:annee,mois,ca_prevu:ca,marge_brute_prevue:mb,resultat_prevu:mb*0.6};
+  const idx = budgetPrevisionnel.findIndex(b=>b.mois===mois&&b.exercice===annee);
+  if(idx>-1) budgetPrevisionnel[idx]=item; else budgetPrevisionnel.push(item);
+  saveBudget();
+  try{
+    await fetch(SB_URL+"/rest/v1/budget_previsionnel",{
+      method:"POST",headers:{...HDR,"Prefer":"resolution=merge-duplicates"},body:JSON.stringify(item)
+    });
+  }catch(e){}
+  showToast("✓ Budget enregistré");
+  voirBudget();
+}
+
+// ══════════════════════════════════════════════════════════════
+// RÉFORME 11 — KPIs HEBDOMADAIRES (Tableau de bord dirigeant)
+// ══════════════════════════════════════════════════════════════
+function voirKPIsDirigeant() {
+  if(!isAdmin) return;
+  const auj = new Date();
+  const lundi = new Date(auj); lundi.setDate(auj.getDate()-auj.getDay()+1); lundi.setHours(0,0,0,0);
+  const lundiStr = lundi.toISOString().slice(0,10);
+  const semPrev = new Date(lundi); semPrev.setDate(lundi.getDate()-7);
+  const semPrevStr = semPrev.toISOString().slice(0,10);
+
+  const vSem  = ventes.filter(v=>(v.date||"")>=lundiStr);
+  const vSemP = ventes.filter(v=>(v.date||"")>=semPrevStr&&(v.date||"")<lundiStr);
+  const caSem  = vSem.reduce((s,v)=>s+v.quantite*v.prix_vente,0);
+  const caSemP = vSemP.reduce((s,v)=>s+v.quantite*v.prix_vente,0);
+  const mnSem  = margenette(vSem);
+  const t      = calculerCaisse();
+  const stockV = (() => {let tot=0;[...new Set(achats.filter(a=>a.statut==="recu").map(a=>a.produit))].forEach(p=>{tot+=calculerFIFO(p).coutFIFO;});return tot;})();
+  const creancesEnRetard = ventes.filter(v=>{
+    if(v.mode_paiement!=="Crédit") return false;
+    const du = v.quantite*v.prix_vente-(v.montant_paye||0);
+    if(du<=0) return false;
+    const j = (new Date()-new Date(v.date||auj))/86400000;
+    return j>7;
+  }).reduce((s,v)=>s+v.quantite*v.prix_vente-(v.montant_paye||0),0);
+  const evolCA = caSemP>0?Math.round((caSem-caSemP)/caSemP*100):0;
+
+  const kpi = (icon,titre,val,sub,color="#0f1f16",trend="") =>
+    `<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:14px;padding:14px;margin-bottom:8px;">`
+    +`<div style="display:flex;justify-content:space-between;align-items:center;">`
+    +`<div style="display:flex;align-items:center;gap:10px;">`
+    +`<div style="font-size:24px;">${icon}</div>`
+    +`<div><div style="font-size:11px;color:#6b8c7a;font-weight:600;">${titre}</div>`
+    +`<div style="font-size:18px;font-weight:900;color:${color};">${val}</div>`
+    +`<div style="font-size:10px;color:#6b8c7a;">${sub}</div></div>`
+    +`</div>`
+    +(trend?`<div style="font-size:13px;font-weight:900;color:${trend.startsWith("+")||trend==="stable"?"#166534":"#dc2626"};">${trend}</div>`:"")
+    +`</div></div>`;
+
+  showModal(
+    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">`
+    +`<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">🎯 Tableau de bord dirigeant</div>`
+    +`<div style="font-size:11px;color:#3d5c48;margin-top:2px;">KPIs semaine · ${auj.toLocaleDateString("fr-CI",{weekday:"long",day:"numeric",month:"long"})}</div></div>`
+    +`<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>`
+    +`</div>`
+    +kpi("💰","CA semaine en cours",fmt(caSem),"vs semaine précédente : "+fmt(caSemP),"#0f1f16",evolCA>=0?"+"+evolCA+"%":evolCA+"%")
+    +kpi("📊","Marge nette semaine",fmt(mnSem),"Après frais terrain",mnSem>=0?"#166534":"#dc2626","")
+    +kpi("📦","Stock disponible valorisé",fmt(stockV),"Au coût de revient FIFO","#1d4ed8","")
+    +kpi("⚠","Créances en retard (>7j)",fmt(creancesEnRetard),"Clients à relancer",creancesEnRetard>0?"#dc2626":"#166534",creancesEnRetard>0?"Relancer":"✓ OK")
+    +kpi("💼","Trésorerie disponible",fmt(t.caisseTotale),"Fond de commerce + activité","#0f1f16","")
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// RÉFORME 12 — SYNC DONNÉES OHADA AU DÉMARRAGE
+// ══════════════════════════════════════════════════════════════
+async function syncOHADA() {
+  try {
+    const [journal, charges, budget] = await Promise.all([
+      fetch(SB_URL+"/rest/v1/journal_comptable?order=date_op.desc&limit=200",{headers:HDR}).then(r=>r.json()),
+      fetch(SB_URL+"/rest/v1/charges_fixes?actif=eq.true",{headers:HDR}).then(r=>r.json()),
+      fetch(SB_URL+"/rest/v1/budget_previsionnel?exercice=eq."+new Date().getFullYear(),{headers:HDR}).then(r=>r.json()),
+    ]);
+    if(journal?.length){journalComptable=journal;saveJournal();}
+    if(charges?.length){chargesFixes=charges;saveChargesFixes();}
+    if(budget?.length){budgetPrevisionnel=budget;saveBudget();}
+  } catch(e){}
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE COMPTABLE OHADA — Réformes 3 à 15
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── RÉFORME 3 : Grand Livre ───────────────────────────────────────────────────
+function grandLivre() {
+  if(!isAdmin) return;
+
+  // Reconstituer les mouvements par compte depuis les données
+  const mouvements = {};
+
+  const ajout = (compte, sens, montant, libelle, date, ref) => {
+    if(!mouvements[compte]) mouvements[compte]=[];
+    mouvements[compte].push({sens,montant,libelle,date,ref});
+  };
+
+  // Achats → 601 débit, 401 crédit
+  achats.forEach(a => {
+    const m = a.quantite*a.prix_unitaire;
+    const f = (a.droit_terre||0)+(a.transport||0)+(a.droit_vente||0)+(a.charrette||0);
+    ajout("601","D",m,a.produit+" — "+a.fournisseur,a.date,"ACH-"+a.id.slice(-4));
+    if(f) ajout("6011","D",f,"Frais terrain "+a.fournisseur,a.date,"ACH-"+a.id.slice(-4));
+    ajout("401","C",m+f,a.fournisseur,a.date,"ACH-"+a.id.slice(-4));
+    if(a.avance_paye) {
+      ajout("4011","D",a.avance_paye,"Avance "+a.fournisseur,a.date,"AV-"+a.id.slice(-4));
+      ajout("571","C",a.avance_paye,"Paiement avance",a.date,"AV-"+a.id.slice(-4));
+    }
+  });
+
+  // Ventes → 411 débit, 701 crédit
+  ventes.forEach(v => {
+    const m = v.quantite*v.prix_vente;
+    ajout("411","D",m,v.client||"Client divers",v.date,"VTE-"+v.id.slice(-4));
+    ajout("701","C",m,v.produit+" × "+v.quantite,v.date,"VTE-"+v.id.slice(-4));
+    const encaisse = v.mode_paiement==="Crédit"?(v.montant_paye||0):m;
+    if(encaisse) {
+      ajout("571","D",encaisse,"Encaissement "+(v.client||""),v.date,"ENC-"+v.id.slice(-4));
+      ajout("411","C",encaisse,"Règlement client",v.date,"ENC-"+v.id.slice(-4));
+    }
+  });
+
+  // Commissions → 641 débit, 571 crédit
+  commissionsPaiements.forEach(p => {
+    ajout("641","D",p.montant,"Commission "+p.utilisateur,p.date,"COM-"+p.id.slice(-4));
+    ajout("571","C",p.montant,"Versement "+p.utilisateur,p.date,"COM-"+p.id.slice(-4));
+  });
+
+  // Pertes → 658 débit, 311 crédit
+  pertesLots.forEach(p => {
+    ajout("658","D",p.valeur_perte,"Perte "+p.produit,p.date,"PRT-"+p.id.slice(-4));
+    ajout("311","C",p.valeur_perte,"Sortie stock perte",p.date,"PRT-"+p.id.slice(-4));
+  });
+
+  // Affichage
+  const comptes = Object.keys(mouvements).sort();
+  const lignesHTML = comptes.map(num => {
+    const mvts = mouvements[num];
+    const debit = mvts.filter(m=>m.sens==="D").reduce((s,m)=>s+m.montant,0);
+    const credit = mvts.filter(m=>m.sens==="C").reduce((s,m)=>s+m.montant,0);
+    const solde = debit - credit;
+    return '<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:12px;padding:12px;margin-bottom:8px;">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
+        +'<div><div style="font-size:13px;font-weight:800;color:#0f1f16;">'+num+' — '+libelleCompte(num)+'</div>'
+          +'<div style="font-size:10px;color:#6b8c7a;">'+mvts.length+' mouvement'+(mvts.length>1?'s':'')+'</div>'
+        +'</div>'
+        +'<div style="text-align:right;">'
+          +'<div style="font-size:12px;color:#166534;font-weight:700;">D: '+fmt(debit)+'</div>'
+          +'<div style="font-size:12px;color:#dc2626;font-weight:700;">C: '+fmt(credit)+'</div>'
+          +'<div style="font-size:13px;font-weight:900;color:'+(solde>=0?"#0f1f16":"#dc2626")+';border-top:1px solid #e4ede7;padding-top:3px;margin-top:3px;">Solde: '+(solde>=0?"+":"")+fmt(solde)+'</div>'
+        +'</div>'
+      +'</div>'
+      +'<div style="overflow-x:auto;">'
+        +'<table style="width:100%;border-collapse:collapse;font-size:10px;">'
+          +'<thead><tr style="background:#f0f5f1;">'
+            +'<th style="padding:4px 6px;text-align:left;color:#6b8c7a;">Date</th>'
+            +'<th style="padding:4px 6px;text-align:left;color:#6b8c7a;">Réf.</th>'
+            +'<th style="padding:4px 6px;text-align:left;color:#6b8c7a;">Libellé</th>'
+            +'<th style="padding:4px 6px;text-align:right;color:#166534;">Débit</th>'
+            +'<th style="padding:4px 6px;text-align:right;color:#dc2626;">Crédit</th>'
+          +'</tr></thead>'
+          +'<tbody>'
+          +mvts.slice(0,20).map(m=>'<tr style="border-bottom:1px solid #f0f5f1;">'
+            +'<td style="padding:4px 6px;color:#6b8c7a;">'+m.date+'</td>'
+            +'<td style="padding:4px 6px;color:#0369a1;font-weight:700;">'+m.ref+'</td>'
+            +'<td style="padding:4px 6px;color:#0f1f16;">'+m.libelle+'</td>'
+            +'<td style="padding:4px 6px;text-align:right;color:#166534;">'+(m.sens==="D"?fmt(m.montant):"")+'</td>'
+            +'<td style="padding:4px 6px;text-align:right;color:#dc2626;">'+(m.sens==="C"?fmt(m.montant):"")+'</td>'
+          +'</tr>').join('')
+          +(mvts.length>20?'<tr><td colspan="5" style="padding:6px;text-align:center;color:#6b8c7a;font-size:10px;">+ '+(mvts.length-20)+' mouvements supplémentaires</td></tr>':"")
+          +'</tbody>'
+        +'</table>'
+      +'</div>'
+    +'</div>';
+  }).join('');
+
+  showModal(
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
+    +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">📒 Grand Livre SYSCOHADA</div>'
+    +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">Tous les mouvements par compte</div></div>'
+    +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+    +'</div>'
+    +lignesHTML
+  );
+}
+
+// ── RÉFORME 4 : Balance des Comptes ──────────────────────────────────────────
+function balanceComptes() {
+  if(!isAdmin) return;
+
+  const totalAch = totalAchats();
+  const totalFrais = achats.reduce((s,a)=>s+(a.droit_terre||0)+(a.transport||0)+(a.droit_vente||0)+(a.charrette||0),0);
+  const totalVte = totalVentes();
+  const totalAv = totalAvances();
+  const totalComm = commissionsPaiements.reduce((s,p)=>s+p.montant,0);
+  const totalPertes = pertesLots.reduce((s,p)=>s+(p.valeur_perte||0),0);
+  const fond = parseFloat(localStorage.getItem("va_fond_commerce")||"0");
+  const stockVal = Object.keys(pertes).length
+    ? totalAch - (totalVte - margebrute()) - totalPertes
+    : margebrute();
+  const caisse = calculerCaisse().caisseTotale;
+  const creances = ventes.reduce((s,v)=>{
+    if(v.mode_paiement!=="Crédit") return s;
+    return s+Math.max(0,v.quantite*v.prix_vente-(v.montant_paye||0));
+  },0);
+  const dettes = totalAch + totalFrais - totalAv;
+
+  const lignes = [
+    {num:"101", lib:"Capital / Fond de commerce", debit:0, credit:fond},
+    {num:"311", lib:"Stocks marchandises (FIFO)", debit:totalAch, credit:totalVte-margebrute()},
+    {num:"401", lib:"Fournisseurs", debit:totalAv, credit:totalAch+totalFrais},
+    {num:"411", lib:"Clients", debit:totalVte, credit:totalVte-creances},
+    {num:"421", lib:"Personnel — commissions dues", debit:totalComm, credit:calculerCommissionComplete("").totalDue||0},
+    {num:"571", lib:"Caisse", debit:caisse+totalComm, credit:totalComm},
+    {num:"601", lib:"Achats marchandises", debit:totalAch, credit:0},
+    {num:"6011", lib:"Frais accessoires d'achat", debit:totalFrais, credit:0},
+    {num:"641", lib:"Commissions personnel", debit:totalComm, credit:0},
+    {num:"658", lib:"Pertes sur stocks", debit:totalPertes, credit:0},
+    {num:"701", lib:"Ventes marchandises", debit:0, credit:totalVte},
+  ];
+
+  const totalD = lignes.reduce((s,l)=>s+l.debit,0);
+  const totalC = lignes.reduce((s,l)=>s+l.credit,0);
+
+  showModal(
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
+    +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">⚖ Balance des Comptes</div>'
+    +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">Vérification débit = crédit (SYSCOHADA)</div></div>'
+    +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+    +'</div>'
+    +'<div style="overflow-x:auto;">'
+    +'<table style="width:100%;border-collapse:collapse;">'
+    +'<thead><tr style="background:#0d3d1a;">'
+      +'<th style="padding:8px;text-align:left;color:#fff;font-size:11px;">N° Cte</th>'
+      +'<th style="padding:8px;text-align:left;color:#fff;font-size:11px;">Libellé</th>'
+      +'<th style="padding:8px;text-align:right;color:#86efac;font-size:11px;">Débit</th>'
+      +'<th style="padding:8px;text-align:right;color:#fca5a5;font-size:11px;">Crédit</th>'
+      +'<th style="padding:8px;text-align:right;color:#fff;font-size:11px;">Solde D</th>'
+      +'<th style="padding:8px;text-align:right;color:#fff;font-size:11px;">Solde C</th>'
+    +'</tr></thead><tbody>'
+    +lignes.map((l,i)=>{
+      const solde = l.debit - l.credit;
+      return '<tr style="background:'+(i%2===0?"#f8faf8":"#fff")+';border-bottom:1px solid #e4ede7;">'
+        +'<td style="padding:6px 8px;font-weight:700;color:#0369a1;font-size:11px;">'+l.num+'</td>'
+        +'<td style="padding:6px 8px;color:#0f1f16;font-size:11px;">'+l.lib+'</td>'
+        +'<td style="padding:6px 8px;text-align:right;color:#166534;font-size:11px;">'+(l.debit?fmt(l.debit):"—")+'</td>'
+        +'<td style="padding:6px 8px;text-align:right;color:#dc2626;font-size:11px;">'+(l.credit?fmt(l.credit):"—")+'</td>'
+        +'<td style="padding:6px 8px;text-align:right;font-size:11px;">'+(solde>0?fmt(solde):"—")+'</td>'
+        +'<td style="padding:6px 8px;text-align:right;font-size:11px;">'+(solde<0?fmt(-solde):"—")+'</td>'
+      +'</tr>';
+    }).join('')
+    +'<tr style="background:#0d3d1a;font-weight:900;">'
+      +'<td colspan="2" style="padding:8px;color:#fff;font-size:12px;">TOTAUX</td>'
+      +'<td style="padding:8px;text-align:right;color:#86efac;font-size:12px;">'+fmt(totalD)+'</td>'
+      +'<td style="padding:8px;text-align:right;color:#fca5a5;font-size:12px;">'+fmt(totalC)+'</td>'
+      +'<td colspan="2" style="padding:8px;text-align:center;color:'+(Math.abs(totalD-totalC)<1?"#86efac":"#fca5a5")+';font-size:11px;">'
+        +(Math.abs(totalD-totalC)<1?"✓ Balance équilibrée":"⚠ Écart: "+fmt(Math.abs(totalD-totalC)))
+      +'</td>'
+    +'</tr>'
+    +'</tbody></table></div>'
+  );
+}
+
+// ── RÉFORME 5 & 6 : Bilan + Compte de Résultat SYSCOHADA ─────────────────────
+function etatFinanciers() {
+  if(!isAdmin) return;
+  let ongletEF = "cr";
+
+  const _render = () => {
+    const totalAch = totalAchats();
+    const totalVte = totalVentes();
+    const mb = margebrute();
+    const mn = margenette();
+    const totalComm = commissionsPaiements.reduce((s,p)=>s+p.montant,0);
+    const totalPertes = pertesLots.reduce((s,p)=>s+(p.valeur_perte||0),0);
+    const fond = parseFloat(localStorage.getItem("va_fond_commerce")||"0");
+    const caisse = calculerCaisse().caisseTotale;
+    const creances = ventes.reduce((s,v)=>v.mode_paiement==="Crédit"?s+Math.max(0,v.quantite*v.prix_vente-(v.montant_paye||0)):s,0);
+    const dettes = totalAch - totalAvances();
+    const stockVal = calculerCaisse().caisseTotale > 0 ? totalAch*(Object.values(pertes).reduce((s,v)=>s+v,0)/Math.max(1,achats.reduce((s,a)=>s+a.quantite,0))) : 0;
+    const stockFIFO = Object.keys(calculerFIFO?.[0]||{}).length ? 0 : (function(){
+      let sv=0; [...new Set(achats.filter(a=>a.statut==="recu").map(a=>a.produit))].forEach(p=>{sv+=calculerFIFO(p).coutFIFO;}); return sv;
+    })();
+    const taxeForf = Math.round(Math.max(totalVte*0.005, 50000)); // 0.5% CA min 50000 F
+
+    const ongletsHtml =
+      '<div style="display:flex;gap:6px;background:#f0f5f1;border-radius:12px;padding:4px;margin-bottom:16px;">'
+      +[["cr","Compte de résultat"],["bilan","Bilan"],["flux","Flux trésorerie"]].map(([k,l])=>
+        '<button onclick="ongletEF=\''+k+'\';renderEF()" style="flex:1;padding:7px 4px;border:none;border-radius:9px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700;'
+        +(ongletEF===k?'background:#0d3d1a;color:#fff;':'background:none;color:#3d5c48;')+'">'+l+'</button>'
+      ).join('') +'</div>';
+
+    let contenu = '';
+
+    if(ongletEF==="cr") {
+      // COMPTE DE RÉSULTAT — Soldes Intermédiaires de Gestion
+      const resExpl = mn - totalComm - totalPertes;
+      const resFin = 0; // pas de charges financières pour l'instant
+      const resNet = resExpl - taxeForf;
+      const lignes = [
+        ["bold","PRODUITS D'EXPLOITATION","",""],
+        ["","Ventes de marchandises (701)",fmt(totalVte),""],
+        ["bold","CHARGES D'EXPLOITATION","",""],
+        ["","Achats de marchandises (601)",fmt(totalAch),""],
+        ["","Frais accessoires d'achat (6011)",fmt(mn<mb?mb-mn:0),""],
+        ["sub","= MARGE BRUTE (MB)",fmt(mb),mb>=0?"green":"red"],
+        ["","Frais terrain (6011-6012)",fmt(mb-mn),""],
+        ["sub","= MARGE NETTE COMMERCIALE",fmt(mn),mn>=0?"green":"red"],
+        ["","Commissions personnel (641)",fmt(totalComm),""],
+        ["","Pertes sur stocks (658)",fmt(totalPertes),""],
+        ["sub","= RÉSULTAT D'EXPLOITATION",fmt(resExpl),resExpl>=0?"green":"red"],
+        ["","Impôt forfaitaire estimé (691)",fmt(taxeForf),""],
+        ["total","RÉSULTAT NET DE L'EXERCICE",fmt(resNet),resNet>=0?"green":"red"],
+      ];
+      contenu = '<div style="background:#f8faf8;border-radius:12px;padding:14px;">'
+        +lignes.map(([type,lib,val,color])=>{
+          if(type==="bold") return '<div style="font-size:10px;font-weight:700;color:#6b8c7a;text-transform:uppercase;letter-spacing:.06em;padding:8px 0 4px;">'+lib+'</div>';
+          if(type==="sub") return '<div style="display:flex;justify-content:space-between;padding:7px 0;border-top:1px solid #e4ede7;border-bottom:1px solid #e4ede7;font-size:12px;font-weight:700;"><span>'+lib+'</span><span style="color:'+(color==="green"?"#166534":"#dc2626")+';">'+val+'</span></div>';
+          if(type==="total") return '<div style="display:flex;justify-content:space-between;padding:10px 0;border-top:2px solid #0d3d1a;font-size:14px;font-weight:900;margin-top:4px;"><span>'+lib+'</span><span style="color:'+(color==="green"?"#166534":"#dc2626")+';">'+val+'</span></div>';
+          return '<div style="display:flex;justify-content:space-between;padding:5px 0;font-size:12px;color:#3d5c48;"><span style="padding-left:12px;">'+lib+'</span><span>'+val+'</span></div>';
+        }).join('')
+        +'</div>'
+        +'<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:10px;padding:10px;margin-top:10px;font-size:10px;color:#c2410c;">'
+          +'Note : Impôt forfaitaire estimé à 0,5% du CA (Contribution des Micro-Entreprises — CGI Côte d\'Ivoire). '
+          +'VerdApp CI étant rattachée à la mairie, vérifier avec l\'expert-comptable le régime fiscal applicable.'
+        +'</div>';
+
+    } else if(ongletEF==="bilan") {
+      // BILAN SIMPLIFIÉ SYSCOHADA — Exercice en cours
+      const resNet = mn - totalComm - totalPertes;
+      // Commissions restant dues (solde non encore versé)
+      const usersUniq=[...new Set(achats.filter(a=>a.statut==="recu"&&a.enregistre_par).map(a=>a.enregistre_par))];
+      const commDues=usersUniq.reduce((s,n)=>s+Math.max(0,calculerCommissionComplete(n).solde),0);
+      const actifTotal = fond + stockFIFO + creances + caisse;
+      const passifTotal = fond + resNet + dettes + commDues;
+      contenu =
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
+        // ACTIF
+        +'<div style="background:#eff6ff;border:1.5px solid #bfdbfe;border-radius:12px;padding:12px;">'
+          +'<div style="font-size:11px;font-weight:700;color:#1d4ed8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">ACTIF</div>'
+          +'<div style="font-size:11px;font-weight:700;color:#6b8c7a;margin-bottom:4px;">Actif immobilisé</div>'
+          +'<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;"><span>Fond de commerce</span><span style="font-weight:700;">'+fmt(fond)+'</span></div>'
+          +'<div style="font-size:11px;font-weight:700;color:#6b8c7a;margin:8px 0 4px;">Actif circulant</div>'
+          +'<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;"><span>Stocks (FIFO)</span><span style="font-weight:700;">'+fmt(stockFIFO)+'</span></div>'
+          +'<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;"><span>Créances clients</span><span style="font-weight:700;">'+fmt(creances)+'</span></div>'
+          +'<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;"><span>Trésorerie (Caisse)</span><span style="font-weight:700;">'+fmt(caisse)+'</span></div>'
+          +'<div style="display:flex;justify-content:space-between;font-size:12px;font-weight:900;padding:8px 0 0;border-top:2px solid #1d4ed8;margin-top:6px;"><span>TOTAL ACTIF</span><span>'+fmt(fond+stockFIFO+creances+caisse)+'</span></div>'
+        +'</div>'
+        // PASSIF
+        +'<div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:12px;padding:12px;">'
+          +'<div style="font-size:11px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">PASSIF</div>'
+          +'<div style="font-size:11px;font-weight:700;color:#6b8c7a;margin-bottom:4px;">Capitaux propres</div>'
+          +'<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;"><span>Capital (101)</span><span style="font-weight:700;">'+fmt(fond)+'</span></div>'
+          +'<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;"><span>Résultat net (120)</span><span style="font-weight:700;color:'+(mn-totalComm-totalPertes>=0?"#166534":"#dc2626")+';">'+fmt(mn-totalComm-totalPertes)+'</span></div>'
+          +'<div style="font-size:11px;font-weight:700;color:#6b8c7a;margin:8px 0 4px;">Dettes</div>'
+          +'<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;"><span>Fournisseurs (401)</span><span style="font-weight:700;">'+fmt(dettes)+'</span></div>'
+          +'<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;"><span>Commissions dues (421)</span><span style="font-weight:700;">'+fmt(Math.max(0,margeNetteReelle()-mn+totalComm))+'</span></div>'
+          +'<div style="display:flex;justify-content:space-between;font-size:12px;font-weight:900;padding:8px 0 0;border-top:2px solid #166534;margin-top:6px;"><span>TOTAL PASSIF</span><span>'+fmt(fond+(mn-totalComm-totalPertes)+dettes)+'</span></div>'
+        +'</div>'
+        +'</div>';
+
+    } else if(ongletEF==="flux") {
+      // TABLEAU DES FLUX DE TRÉSORERIE — Méthode directe (SYSCOHADA Révisé)
+      const encClient = ventes.reduce((s,v)=>v.mode_paiement!=="Crédit"?s+v.quantite*v.prix_vente:s+(v.montant_paye||0),0);
+      const decFourn  = totalAvances();
+      const fluxExpl  = encClient - decFourn - totalComm - totalPertes;
+      const fluxNet   = fluxExpl + fond;
+      const bfr       = dettes - stockFIFO - creances;
+
+      const lig=(lib,val,col,ind,bold)=>
+        '<div style="display:flex;justify-content:space-between;font-size:'+(bold?'12':'11')+'px;'
+        +(bold?'font-weight:700;padding:7px 0;border-top:1px solid #e4ede7;':'padding:3px 0;color:#3d5c48;')
+        +'"><span style="padding-left:'+(ind?'12':'0')+'px;">'+lib+'</span>'
+        +'<span style="color:'+col+';font-weight:'+(bold?'700':'500')+';">'+val+'</span></div>';
+
+      contenu =
+        '<div style="background:#f8faf8;border-radius:12px;padding:14px;">'
+
+        +'<div style="font-size:10px;font-weight:700;color:#1d4ed8;text-transform:uppercase;letter-spacing:.06em;padding-bottom:6px;border-bottom:2px solid #bfdbfe;margin-bottom:8px;">A — Flux nets d exploitation</div>'
+        +lig("+ Encaissements clients (411→571)","+"+fmt(encClient),"#166534",true,false)
+        +lig("− Décaissements fournisseurs (401←571)","−"+fmt(decFourn),"#dc2626",true,false)
+        +lig("− Commissions versées (421←571)","−"+fmt(totalComm),"#dc2626",true,false)
+        +lig("− Pertes sur stocks constatées (658)","−"+fmt(totalPertes),"#dc2626",true,false)
+        +lig("= Flux nets exploitation",(fluxExpl>=0?"+":"")+fmt(fluxExpl),fluxExpl>=0?"#166534":"#dc2626",false,true)
+
+        +'<div style="font-size:10px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.06em;padding:10px 0 6px;border-bottom:2px solid #bbf7d0;margin-bottom:8px;">B — Flux de financement</div>'
+        +lig("+ Apport en capital — Fond de commerce","+"+fmt(fond),"#166534",true,false)
+        +lig("= Flux nets de financement","+"+fmt(fond),"#166534",false,true)
+
+        +'<div style="font-size:10px;font-weight:700;color:#c2410c;text-transform:uppercase;letter-spacing:.06em;padding:10px 0 6px;border-bottom:2px solid #fed7aa;margin-bottom:8px;">C — Variation BFR</div>'
+        +lig("Stock valorisé FIFO non vendu (311)","−"+fmt(stockFIFO),"#c2410c",true,false)
+        +lig("Créances clients non encaissées (411)","−"+fmt(creances),"#c2410c",true,false)
+        +lig("Dettes fournisseurs non payées (401)","+"+fmt(dettes),"#166534",true,false)
+        +lig("= Besoin en Fonds de Roulement",(bfr>=0?"+":"")+fmt(bfr),bfr>=0?"#166534":"#dc2626",false,true)
+
+        +'<div style="display:flex;justify-content:space-between;font-size:14px;font-weight:900;padding:12px 0;border-top:3px solid #0d3d1a;margin-top:6px;">'
+          +'<span>TRÉSORERIE NETTE GLOBALE</span>'
+          +'<span style="color:'+(fluxNet>=0?"#166534":"#dc2626")+'">'+(fluxNet>=0?"+":"")+fmt(fluxNet)+'</span>'
+        +'</div>'
+        +'</div>'
+        +'<div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:10px;padding:10px;margin-top:10px;font-size:10px;color:#166534;">'
+          +'✓ VerdApp CI — Exonérée de TVA (rattachement mairie). Régime CME. Aucune TVA collectée ni déductible.'
+        +'</div>'
+    }
+
+    const page = document.getElementById("page-etats") || document.getElementById("page-params");
+    const modalContent =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
+      +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">📊 États Financiers SYSCOHADA</div>'
+      +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">Exercice '+new Date().getFullYear()+' · SYSCOHADA Révisé 2017</div></div>'
+      +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+      +'</div>'
+      +ongletsHtml+contenu;
+
+    showModal(modalContent);
+    window.renderEF = ()=>{ ongletEF=window.ongletEF||ongletEF; _render(); };
+    window.ongletEF = ongletEF;
+  };
+
+  window.ongletEF = ongletEF;
+  window.renderEF = ()=>{ ongletEF=window.ongletEF; _render(); };
+  _render();
+}
+
+// ── RÉFORME 9 : Taxe Forfaitaire (CME) ───────────────────────────────────────
+function taxeForfaitaire() {
+  const ca = totalVentes();
+  // Contribution des Micro-Entreprises (CME) — Côte d'Ivoire
+  // Taux : 2% du CA plafonné. Exonération partielle pour structures publiques.
+  // VerdApp CI rattachée mairie → vérifier avec expert-comptable
+  const taux = 0.005; // 0.5% estimatif — à ajuster selon régime fiscal exact
+  const taxe = Math.max(Math.round(ca * taux), 50000);
+  const trimestre = Math.ceil((new Date().getMonth()+1)/3);
+  return { ca, taux: taux*100, taxe, trimestre };
+}
+
+// ── RÉFORME 10 : Seuil de Rentabilité ────────────────────────────────────────
+function seuilRentabilite() {
+  if(!isAdmin) return;
+
+  const ca = totalVentes();
+  const chargesFixesMensuelles = parseFloat(localStorage.getItem("va_charges_fixes")||"0");
+  const mb = margebrute();
+  const tauxMB = ca ? mb/ca : 0;
+  const sr = tauxMB > 0 ? Math.round(chargesFixesMensuelles / tauxMB) : 0;
+  const marge_secu = ca - sr;
+  const indice_secu = ca ? Math.round((marge_secu/ca)*100) : 0;
+  const jours_at = ca ? Math.round(sr/ca*360) : 0;
+
+  showModal(
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
+    +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">📐 Seuil de Rentabilité</div>'
+    +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">Point mort — Analyse charges fixes vs variables</div></div>'
+    +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+    +'</div>'
+
+    +(chargesFixesMensuelles===0?
+      '<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:14px;margin-bottom:14px;">'
+        +'<div style="font-size:12px;font-weight:700;color:#c2410c;margin-bottom:6px;">Charges fixes non configurées</div>'
+        +'<div style="font-size:11px;color:#6b8c7a;margin-bottom:10px;">Saisissez vos charges fixes mensuelles (loyer, salaires, taxes…) pour calculer votre point mort.</div>'
+        +'<input type="number" id="cf_montant" placeholder="Ex : 150 000 F/mois" style="width:100%;padding:10px;border:1.5px solid #fed7aa;border-radius:10px;font-family:inherit;font-size:14px;text-align:center;margin-bottom:8px;"/>'
+        +'<button onclick="localStorage.setItem(\'va_charges_fixes\',document.getElementById(\'cf_montant\').value);seuilRentabilite()" style="width:100%;padding:10px;background:#0d3d1a;color:#fff;border:none;border-radius:10px;cursor:pointer;font-family:inherit;font-weight:700;">Calculer</button>'
+      +'</div>'
+    :"")
+
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">'
+      +'<div style="background:#eff6ff;border-radius:12px;padding:12px;text-align:center;">'
+        +'<div style="font-size:9px;font-weight:700;color:#1d4ed8;text-transform:uppercase;letter-spacing:.06em;">CA actuel</div>'
+        +'<div style="font-size:16px;font-weight:900;color:#0f1f16;margin-top:4px;">'+fmt(ca)+'</div>'
+      +'</div>'
+      +'<div style="background:'+(sr>0&&ca>=sr?"#f0fdf4":"#fef2f2")+';border-radius:12px;padding:12px;text-align:center;">'
+        +'<div style="font-size:9px;font-weight:700;color:'+(sr>0&&ca>=sr?"#166534":"#dc2626")+';text-transform:uppercase;letter-spacing:.06em;">Seuil de rentabilité</div>'
+        +'<div style="font-size:16px;font-weight:900;color:#0f1f16;margin-top:4px;">'+(sr>0?fmt(sr):"N/A")+'</div>'
+      +'</div>'
+    +'</div>'
+
+    +(sr>0?
+      '<div style="background:#f8faf8;border-radius:12px;padding:14px;margin-bottom:12px;">'
+        +'<div style="font-size:11px;font-weight:700;color:#0f1f16;margin-bottom:10px;">Analyse</div>'
+        +'<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid #e4ede7;"><span>Taux de marge brute</span><span style="font-weight:700;color:#166534;">'+Math.round(tauxMB*100)+'%</span></div>'
+        +'<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid #e4ede7;"><span>Charges fixes mensuelles</span><span style="font-weight:700;">'+fmt(chargesFixesMensuelles)+'</span></div>'
+        +'<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid #e4ede7;"><span>Point mort atteint en</span><span style="font-weight:700;">'+(jours_at>0?jours_at+" jours/an":"N/A")+'</span></div>'
+        +'<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid #e4ede7;"><span>Marge de sécurité</span><span style="font-weight:700;color:'+(marge_secu>=0?"#166534":"#dc2626")+'">'+(marge_secu>=0?"+":"")+fmt(marge_secu)+'</span></div>'
+        +'<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;"><span>Indice de sécurité</span><span style="font-weight:700;color:'+(indice_secu>=20?"#166534":indice_secu>=10?"#c2410c":"#dc2626")+';">'+indice_secu+'%</span></div>'
+      +'</div>'
+      +'<div style="background:'+(ca>=sr?"#f0fdf4":"#fef2f2")+';border:1.5px solid '+(ca>=sr?"#bbf7d0":"#fecaca")+';border-radius:12px;padding:12px;text-align:center;">'
+        +'<div style="font-size:14px;font-weight:900;color:'+(ca>=sr?"#166534":"#dc2626")+'">'
+          +(ca>=sr?"✅ Seuil de rentabilité atteint":"⚠ Seuil non atteint — il manque "+fmt(sr-ca)+" de CA")
+        +'</div>'
+      +'</div>'
+    :"")
+  );
+}
+
+// ── RÉFORME 11 : Ratios Financiers ───────────────────────────────────────────
+function ratiosFinanciers() {
+  if(!isAdmin) return;
+
+  const ca = totalVentes();
+  const mb = margebrute();
+  const mn = margenette();
+  const resNet = margeNetteReelle();
+  const totalComm = commissionsPaiements.reduce((s,p)=>s+p.montant,0);
+  const caisse = calculerCaisse().caisseTotale;
+  const creances = ventes.reduce((s,v)=>v.mode_paiement==="Crédit"?s+Math.max(0,v.quantite*v.prix_vente-(v.montant_paye||0)):s,0);
+  const dettes = totalAchats()-totalAvances();
+  const chargesFixes = parseFloat(localStorage.getItem("va_charges_fixes")||"0");
+  const pertesVal = pertesLots.reduce((s,p)=>s+(p.valeur_perte||0),0);
+
+  // Stock moyen
+  const stockFIFO = (()=>{ let sv=0; [...new Set(achats.filter(a=>a.statut==="recu").map(a=>a.produit))].forEach(p=>{sv+=calculerFIFO(p).coutFIFO;}); return sv; })();
+
+  const ratios = [
+    {
+      nom:"Taux de marge brute",
+      formule:"Marge brute / CA",
+      valeur: ca?Math.round(mb/ca*100):0,
+      unite:"%",
+      seuil:20,
+      sens:"plus c'est haut, mieux c'est",
+      interpretation: ca&&mb/ca>0.20?"Excellente rentabilité commerciale":ca&&mb/ca>0.15?"Rentabilité correcte":"Marge trop faible"
+    },
+    {
+      nom:"Taux de marge nette",
+      formule:"Marge nette / CA",
+      valeur: ca?Math.round(mn/ca*100):0,
+      unite:"%",
+      seuil:15,
+      sens:"plus c'est haut, mieux c'est",
+      interpretation: ca&&mn/ca>0.15?"Bonne efficacité":"Charges trop élevées"
+    },
+    {
+      nom:"Taux résultat net",
+      formule:"Résultat net / CA",
+      valeur: ca?Math.round(resNet/ca*100):0,
+      unite:"%",
+      seuil:10,
+      sens:"plus c'est haut, mieux c'est",
+      interpretation: ca&&resNet/ca>0.10?"Rentabilité nette satisfaisante":"À améliorer"
+    },
+    {
+      nom:"Rotation des stocks",
+      formule:"CA / Stock FIFO",
+      valeur: stockFIFO?Math.round(ca/stockFIFO):0,
+      unite:"x",
+      seuil:12,
+      sens:"plus c'est élevé, plus le stock tourne vite",
+      interpretation: stockFIFO&&ca/stockFIFO>12?"Stock très liquide":stockFIFO&&ca/stockFIFO>6?"Rotation correcte":"Stock peu liquide"
+    },
+    {
+      nom:"Délai moyen de recouvrement clients",
+      formule:"Créances × 360 / CA",
+      valeur: ca?Math.round(creances*360/ca):0,
+      unite:" jours",
+      seuil:30,
+      sens:"moins c'est élevé, mieux c'est",
+      interpretation: ca&&creances*360/ca<30?"Excellent recouvrement":ca&&creances*360/ca<60?"Délai acceptable":"Risque d'impayés élevé"
+    },
+    {
+      nom:"Délai moyen de paiement fournisseurs",
+      formule:"Dettes × 360 / Achats",
+      valeur: totalAchats()?Math.round(dettes*360/totalAchats()):0,
+      unite:" jours",
+      seuil:45,
+      sens:"entre 30 et 60 jours est idéal",
+      interpretation: "Délai de négociation avec les fournisseurs"
+    },
+    {
+      nom:"Taux de perte sur stock",
+      formule:"Pertes / Total entré",
+      valeur: totalAchats()?Math.round(pertesVal/totalAchats()*100):0,
+      unite:"%",
+      seuil:3,
+      sens:"moins c'est élevé, mieux c'est",
+      interpretation: totalAchats()&&pertesVal/totalAchats()<0.03?"Gestion des pertes maîtrisée":"Niveau de pertes préoccupant"
+    },
+    {
+      nom:"Couverture de trésorerie",
+      formule:"Caisse / Charges fixes",
+      valeur: chargesFixes?Math.round(caisse/chargesFixes):0,
+      unite:" mois",
+      seuil:2,
+      sens:"plus c'est élevé, plus la trésorerie est sécurisée",
+      interpretation: chargesFixes&&caisse/chargesFixes>2?"Trésorerie confortable":chargesFixes?"Trésorerie tendue":"Configurer les charges fixes"
+    },
+  ];
+
+  const lignesHTML = ratios.map(r=>{
+    const ok = r.sens.includes("haut")
+      ? r.valeur >= r.seuil
+      : r.sens.includes("bas")||r.sens.includes("moins")
+        ? r.valeur <= r.seuil
+        : true;
+    return '<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:12px;padding:12px;margin-bottom:8px;">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">'
+        +'<div><div style="font-weight:700;color:#0f1f16;font-size:13px;">'+r.nom+'</div>'
+          +'<div style="font-size:10px;color:#6b8c7a;font-style:italic;">'+r.formule+'</div>'
+        +'</div>'
+        +'<div style="text-align:right;">'
+          +'<div style="font-size:20px;font-weight:900;color:'+(ok?"#166534":"#dc2626")+';">'+r.valeur+r.unite+'</div>'
+          +'<div style="font-size:9px;color:#6b8c7a;">Seuil : '+r.seuil+r.unite+'</div>'
+        +'</div>'
+      +'</div>'
+      +'<div style="background:'+(ok?"#f0fdf4":"#fef2f2")+';border-radius:7px;padding:6px 8px;font-size:10px;color:'+(ok?"#166534":"#dc2626")+';">'
+        +(ok?"✅":"⚠")+' '+r.interpretation
+      +'</div>'
+    +'</div>';
+  }).join('');
+
+  showModal(
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
+    +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">📈 Ratios Financiers</div>'
+    +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">Indicateurs de performance — gestion OHADA</div></div>'
+    +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+    +'</div>'
+    +lignesHTML
+  );
+}
+
+// ── RÉFORME 14 : KPIs Hebdomadaires ──────────────────────────────────────────
+function kpiHebdo() {
+  if(!isAdmin) return;
+
+  const now = new Date();
+  const lundi = new Date(now); lundi.setDate(now.getDate()-now.getDay()+1); lundi.setHours(0,0,0,0);
+  const dimanche = new Date(lundi); dimanche.setDate(lundi.getDate()+6);
+  const semStr = lundi.toLocaleDateString("fr-CI",{day:"numeric",month:"long"})+" au "+dimanche.toLocaleDateString("fr-CI",{day:"numeric",month:"long",year:"numeric"});
+
+  const ventesS = ventes.filter(v=>v.date&&new Date(v.date)>=lundi);
+  const achatsS = achats.filter(a=>a.date&&new Date(a.date)>=lundi);
+  const caS = ventesS.reduce((s,v)=>s+v.quantite*v.prix_vente,0);
+  const mbS = margebrute(ventesS);
+  const mnS = margenette(ventesS);
+  const commS = commissionsPaiements.filter(p=>p.date&&new Date(p.date)>=lundi).reduce((s,p)=>s+p.montant,0);
+  const resS = mnS - commS;
+  const stockVal = (()=>{ let sv=0; [...new Set(achats.filter(a=>a.statut==="recu").map(a=>a.produit))].forEach(p=>{sv+=calculerFIFO(p).coutFIFO;}); return sv; })();
+  const creancesEnRetard = ventes.filter(v=>{
+    if(v.mode_paiement!=="Crédit") return false;
+    const du = v.quantite*v.prix_vente-(v.montant_paye||0);
+    const age = v.date?(now-new Date(v.date))/86400000:0;
+    return du>0 && age>7;
+  }).reduce((s,v)=>s+Math.max(0,v.quantite*v.prix_vente-(v.montant_paye||0)),0);
+  const caisse = calculerCaisse().caisseTotale;
+
+  showModal(
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
+    +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">📅 KPIs Semaine</div>'
+    +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">'+semStr+'</div></div>'
+    +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+    +'</div>'
+    +'<div style="background:linear-gradient(135deg,#0d3d1a,#166534);border-radius:14px;padding:16px;margin-bottom:14px;text-align:center;">'
+      +'<div style="font-size:10px;font-weight:700;color:#86efac;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px;">CA de la semaine</div>'
+      +'<div style="font-size:28px;font-weight:900;color:#fff;">'+fmt(caS)+'</div>'
+      +'<div style="font-size:11px;color:rgba(255,255,255,.5);margin-top:4px;">'+ventesS.length+' vente'+(ventesS.length>1?'s':'')+' · '+achatsS.length+' achat'+(achatsS.length>1?'s':'')+'</div>'
+    +'</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">'
+      +[
+        ["Marge brute sem.", fmt(mbS), mbS>=0?"#f0fdf4":"#fef2f2", mbS>=0?"#166534":"#dc2626"],
+        ["Résultat net sem.", fmt(resS), resS>=0?"#f0fdf4":"#fef2f2", resS>=0?"#166534":"#dc2626"],
+        ["Stock disponible", fmt(stockVal), "#eff6ff", "#1d4ed8"],
+        ["Trésorerie", fmt(caisse), caisse>0?"#f0fdf4":"#fef2f2", caisse>0?"#166534":"#dc2626"],
+        ["Créances > 7j", fmt(creancesEnRetard), creancesEnRetard>0?"#fef2f2":"#f0fdf4", creancesEnRetard>0?"#dc2626":"#166534"],
+        ["Commissions sem.", fmt(commS), "#fff7ed", "#c2410c"],
+      ].map(([lib,val,bg,col])=>'<div style="background:'+bg+';border-radius:12px;padding:12px;text-align:center;">'
+        +'<div style="font-size:9px;font-weight:700;color:#6b8c7a;text-transform:uppercase;letter-spacing:.06em;">'+lib+'</div>'
+        +'<div style="font-size:15px;font-weight:900;color:'+col+';margin-top:4px;">'+val+'</div>'
+      +'</div>').join('')
+    +'</div>'
+    +(creancesEnRetard>0?'<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:10px;padding:10px;font-size:11px;color:#dc2626;font-weight:700;">⚠ '+fmt(creancesEnRetard)+' de créances clients en retard (> 7 jours) — relancer les clients</div>':"")
+  );
+}
+
+// ── RÉFORME 15 : Amortissements ───────────────────────────────────────────────
+function amortissements() {
+  if(!isAdmin) return;
+
+  const immos = JSON.parse(localStorage.getItem("va_immobilisations")||"[]");
+  const totalDotation = immos.reduce((s,i)=>{
+    const age = (new Date().getFullYear() - new Date(i.date_acquisition).getFullYear());
+    const annuite = i.valeur_brute / i.duree_amortissement;
+    const cumul = Math.min(age * annuite, i.valeur_brute);
+    return s + annuite;
+  }, 0);
+
+  const immoHTML = immos.length
+    ? immos.map(i=>{
+        const age = Math.max(0,(new Date().getFullYear()-new Date(i.date_acquisition).getFullYear()));
+        const annuite = i.valeur_brute/i.duree_amortissement;
+        const cumul = Math.min(age*annuite, i.valeur_brute);
+        const vna = Math.max(0, i.valeur_brute - cumul);
+        return '<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:10px;padding:10px;margin-bottom:6px;">'
+          +'<div style="display:flex;justify-content:space-between;">'
+            +'<div><div style="font-weight:700;font-size:12px;color:#0f1f16;">'+i.libelle+'</div>'
+              +'<div style="font-size:10px;color:#6b8c7a;">Acquis le '+i.date_acquisition+' · '+i.duree_amortissement+' ans · Linéaire</div>'
+            +'</div>'
+            +'<div style="text-align:right;">'
+              +'<div style="font-size:11px;color:#6b8c7a;">Brut : '+fmt(i.valeur_brute)+'</div>'
+              +'<div style="font-size:11px;color:#dc2626;">Amort. : −'+fmt(cumul)+'</div>'
+              +'<div style="font-size:12px;font-weight:700;color:#0f1f16;">VNA : '+fmt(vna)+'</div>'
+            +'</div>'
+          +'</div>'
+          +'<div style="height:4px;background:#e2ece7;border-radius:999px;margin-top:6px;overflow:hidden;">'
+            +'<div style="height:100%;background:#dc2626;border-radius:999px;width:'+(i.valeur_brute?Math.round(cumul/i.valeur_brute*100):0)+'%;"></div>'
+          +'</div>'
+        +'</div>';
+      }).join('')
+    : '<div style="text-align:center;padding:20px;color:#6b8c7a;font-size:12px;">Aucune immobilisation enregistrée.</div>';
+
+  showModal(
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
+    +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">🏗 Amortissements</div>'
+    +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">Méthode linéaire — SYSCOHADA Révisé</div></div>'
+    +'<div style="display:flex;gap:6px;">'
+      +'<button onclick="ajouterImmobilisation()" style="background:#0d3d1a;color:#fff;border:none;border-radius:9px;padding:6px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">+ Ajouter</button>'
+      +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+    +'</div>'
+    +'</div>'
+    +(immos.length?'<div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:10px;padding:10px;margin-bottom:12px;display:flex;justify-content:space-between;">'
+      +'<span style="font-size:12px;font-weight:700;color:#166534;">Dotation annuelle totale</span>'
+      +'<span style="font-size:14px;font-weight:900;color:#166534;">'+fmt(totalDotation)+'</span>'
+    +'</div>':"")
+    +immoHTML
+  );
+}
+
+function ajouterImmobilisation() {
+  showModal(
+    '<div style="font-size:16px;font-weight:800;color:#0f1f16;margin-bottom:14px;">+ Nouvelle immobilisation</div>'
+    +'<div style="margin-bottom:10px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Libellé *</label>'
+      +'<input type="text" id="immo_lib" placeholder="Ex : Véhicule de transport, Téléphone…" style="width:100%;padding:10px;border:1.5px solid #d4edda;border-radius:10px;font-family:inherit;font-size:13px;"/></div>'
+    +'<div style="margin-bottom:10px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Valeur d\'acquisition (FCFA) *</label>'
+      +'<input type="number" id="immo_val" min="0" style="width:100%;padding:10px;border:1.5px solid #d4edda;border-radius:10px;font-family:inherit;font-size:14px;"/></div>'
+    +'<div style="margin-bottom:10px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Date d\'acquisition *</label>'
+      +'<input type="date" id="immo_date" value="'+new Date().toISOString().slice(0,10)+'" style="width:100%;padding:10px;border:1.5px solid #d4edda;border-radius:10px;font-family:inherit;font-size:13px;"/></div>'
+    +'<div style="margin-bottom:16px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Durée d\'amortissement (années) *</label>'
+      +'<select id="immo_duree" style="width:100%;padding:10px;border:1.5px solid #d4edda;border-radius:10px;font-family:inherit;font-size:13px;">'
+        +'<option value="3">3 ans — Matériel informatique, téléphones</option>'
+        +'<option value="5">5 ans — Véhicules, équipements</option>'
+        +'<option value="10">10 ans — Mobilier, matériel divers</option>'
+        +'<option value="20">20 ans — Constructions, aménagements</option>'
+      +'</select></div>'
+    +'<div style="display:flex;gap:10px;">'
+      +'<button onclick="sauvegarderImmobilisation()" style="flex:1;padding:12px;background:#0d3d1a;color:#fff;border:none;border-radius:12px;font-weight:800;cursor:pointer;font-family:inherit;">✓ Enregistrer</button>'
+      +'<button onclick="amortissements()" style="padding:12px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>'
+    +'</div>'
+  );
+}
+
+function sauvegarderImmobilisation() {
+  const lib  = document.getElementById("immo_lib").value.trim();
+  const val  = parseFloat(document.getElementById("immo_val").value)||0;
+  const date = document.getElementById("immo_date").value;
+  const dur  = parseInt(document.getElementById("immo_duree").value)||5;
+  if(!lib||!val) return showToast("Remplissez tous les champs","error");
+  const immos = JSON.parse(localStorage.getItem("va_immobilisations")||"[]");
+  immos.push({id:genId(), libelle:lib, valeur_brute:val, date_acquisition:date, duree_amortissement:dur});
+  localStorage.setItem("va_immobilisations", JSON.stringify(immos));
+  showToast("✓ Immobilisation enregistrée");
+  amortissements();
+}
+
 function renderParams(){
   const page = document.getElementById("page-params");
   if(!isAdmin){
@@ -3665,8 +5246,8 @@ function renderParams(){
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
       +_paramBtn("💼","Caisse","Trésorerie & fond","voirCaisse()","#f0fdf4","#bbf7d0","#166534")
       +_paramBtn("💰","Commissions","Équipe & paiements","voirCommissionAdmin()","#fff7ed","#fed7aa","#c2410c")
-      +_paramBtn("💼","Bilan","Par jour / mois / an","bilanFinancier()","#fff7ed","#fed7aa","#c2410c")
-      +_paramBtn("📊","Marge","Analyse FIFO","detailMarge()","#eff6ff","#bfdbfe","#1d4ed8")
+      +_paramBtn("📊","États financiers","Bilan · CR · Flux","etatFinanciers()","#fff7ed","#fed7aa","#c2410c")
+      +_paramBtn("📈","Ratios & KPIs","Indicateurs OHADA","ratiosFinanciers()","#eff6ff","#bfdbfe","#1d4ed8")
     +'</div>'
     +'</div>';
 
@@ -3682,12 +5263,36 @@ function renderParams(){
     +'</div>'
     +'</div>';
 
+  // ── Section Comptabilité OHADA ──
+  const sectionCompta =
+    '<div style="margin-bottom:20px;">'
+    +'<div style="font-size:10px;font-weight:700;color:#6b8c7a;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;">Comptabilité OHADA</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
+      +_paramBtn("📒","Grand livre","Mouvements/compte","grandLivre()","#eff6ff","#bfdbfe","#1d4ed8")
+      +_paramBtn("⚖","Balance","Débit = Crédit","balanceComptes()","#f0fdf4","#bbf7d0","#166534")
+      +_paramBtn("📐","Point mort","Seuil rentabilité","seuilRentabilite()","#fff7ed","#fed7aa","#c2410c")
+      +_paramBtn("🏗","Amortissements","Immobilisations","amortissements()","#f8faf8","#e4ede7","#3d5c48")
+    +'</div>'
+    +'</div>';
+
+  // ── Section KPIs ──
+  const sectionKPIs =
+    '<div style="margin-bottom:20px;">'
+    +'<div style="font-size:10px;font-weight:700;color:#6b8c7a;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;">Pilotage & Analyse</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
+      +_paramBtn("📅","KPIs semaine","5 chiffres clés","kpiHebdo()","#f0fdf4","#bbf7d0","#166534")
+      +_paramBtn("💼","Bilan journalier","Par jour/mois/an","bilanFinancier()","#fff7ed","#fed7aa","#c2410c")
+      +_paramBtn("📊","Marge FIFO","Analyse détaillée","detailMarge()","#eff6ff","#bfdbfe","#1d4ed8")
+      +_paramBtn("📋","Pertes","Stocks perdus","voirPertesLots()","#fef2f2","#fecaca","#dc2626")
+    +'</div>'
+    +'</div>';
+
   // ── Section Sécurité ──
   const sectionSecurite =
     '<div style="margin-bottom:20px;">'
     +'<div style="font-size:10px;font-weight:700;color:#6b8c7a;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;">Sécurité & Données</div>'
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
-      +_paramBtn("🔑","Changer PIN","Code d'accès admin","showChangePIN()","#fef2f2","#fecaca","#dc2626")
+      +_paramBtn("🔑","Changer PIN","Code accès admin","showChangePIN()","#fef2f2","#fecaca","#dc2626")
       +_paramBtn("🔐","Journal","Actions admin","voirJournalAdmin()","#eff6ff","#bfdbfe","#1d4ed8")
       +_paramBtn("🔍","Vérifier","Intégrité données","verifierIntegriteDonnees()","#f0fdf4","#bbf7d0","#166534")
       +_paramBtn("📦","Stock FIFO","Voir les lots","switchTab('stock')","#f8faf8","#e4ede7","#3d5c48")
@@ -3701,7 +5306,7 @@ function renderParams(){
     +'<div id="listeProduits"></div>'
     +'</div>';
 
-  page.innerHTML = headerHTML + sectionFinances + sectionGestion + sectionSecurite + sectionProduits;
+  page.innerHTML = headerHTML + sectionFinances + sectionGestion + sectionCompta + sectionKPIs + sectionSecurite + sectionProduits;
   renderListeProduits();
 }
 

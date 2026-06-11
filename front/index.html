@@ -253,7 +253,7 @@ select option{background:var(--white);color:var(--text);}
 
 <!-- MAIN CONTENT -->
 <!-- ═══ ÉCRAN DE CONNEXION ═══ -->
-<div id="loginScreen" style="display:none;position:fixed;inset:0;z-index:2000;background:linear-gradient(160deg,#071c0d 0%,#0d3d1a 50%,#0a2e12 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;">
+<div id="loginScreen" style="display:flex;position:fixed;inset:0;z-index:2000;background:linear-gradient(160deg,#071c0d 0%,#0d3d1a 50%,#0a2e12 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;">
   <!-- Logo directement sur fond vert foncé — mix-blend-mode:screen efface le fond noir du PNG -->
   <div style="text-align:center;margin-bottom:16px;">
     <img id="loginLogo" style="height:220px;width:auto;object-fit:contain;mix-blend-mode:screen;display:block;margin:0 auto;border-radius:20px;filter:contrast(1.05) brightness(1.1);"/>
@@ -289,7 +289,7 @@ select option{background:var(--white);color:var(--text);}
   </div>
 </div>
 
-<div id="main">
+<div id="main" style="display:none;">
   <div id="page-dashboard"></div>
   <div id="page-achats" style="display:none;"></div>
   <div id="page-ventes" style="display:none;"></div>
@@ -7299,12 +7299,17 @@ async function demarrerApp() {
 }
 
 async function afficherEcranLogin() {
-  document.getElementById("loginScreen").style.display = "flex";
-  document.getElementById("main").style.display = "none";
-  document.getElementById("sidebar") && (document.getElementById("sidebar").style.display = "none");
-  document.getElementById("bottomnav") && (document.getElementById("bottomnav").style.display = "none");
-  document.getElementById("topbar") && (document.getElementById("topbar").style.display = "none");
-  await chargerListeUtilisateurs();
+  const ls = document.getElementById("loginScreen");
+  const main = document.getElementById("main");
+  const sb = document.getElementById("sidebar");
+  const bn = document.getElementById("bottomnav");
+  const tb = document.getElementById("topbar");
+  if(ls) ls.style.display = "flex";
+  if(main) main.style.display = "none";
+  if(sb) sb.style.display = "none";
+  if(bn) bn.style.display = "none";
+  if(tb) tb.style.display = "none";
+  try { await chargerListeUtilisateurs(); } catch(e) { console.warn("Liste utilisateurs:", e); }
 }
 
 function afficherApp() {
@@ -7651,7 +7656,14 @@ try{ adminLog.push(...JSON.parse(localStorage.getItem("va_admin_log")||"[]")); }
 // Migration PIN
 migrerPinVersHash();
 // Démarrer (l'app se rend après connexion + sync)
-demarrerApp();
+try {
+  demarrerApp();
+} catch(e) {
+  console.error("[VerdApp] Erreur démarrage:", e);
+  // Afficher l'écran de connexion en fallback
+  const ls = document.getElementById("loginScreen");
+  if(ls) ls.style.display = "flex";
+}
 // ── Polling unifié : un seul setInterval au lieu de 4 ──
 // Remplace les setInterval dispersés dans le code
 // Sync automatique toutes les 15 secondes

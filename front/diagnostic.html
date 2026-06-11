@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>VerdApp CI - Diagnostic</title>
+<style>
+body{font-family:Arial;padding:20px;background:#f0f5f1;}
+.ok{color:#166534;background:#f0fdf4;padding:8px;border-radius:8px;margin:4px 0;}
+.err{color:#dc2626;background:#fef2f2;padding:8px;border-radius:8px;margin:4px 0;}
+h2{color:#0d3d1a;}
+</style>
+</head>
+<body>
+<h2>VerdApp CI — Diagnostic Front</h2>
+<div id="log"></div>
+<script>
+const log = document.getElementById('log');
+function ok(msg){ log.innerHTML += '<div class="ok">✅ '+msg+'</div>'; }
+function err(msg){ log.innerHTML += '<div class="err">❌ '+msg+'</div>'; }
+
+// Test 1 : APP_MODE
+try {
+  const APP_MODE = "front";
+  ok("APP_MODE = " + APP_MODE);
+} catch(e) { err("APP_MODE: " + e.message); }
+
+// Test 2 : Supabase fetch
+try {
+  const SB_URL = "https://rhlrlnmoitfrzqdcvuoq.supabase.co";
+  const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJobHJsbm1vaXRmcnpxZGN2dW9xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1Mjk0NTAsImV4cCI6MjA5NjEwNTQ1MH0.fIFPK8DbmY5bpaTel4_nv5eMF8P-dEMrE-6VcJHg1Co";
+  fetch(SB_URL + "/rest/v1/produits?limit=1", {
+    headers: {
+      "apikey": SB_KEY,
+      "Authorization": "Bearer " + SB_KEY
+    }
+  }).then(r => {
+    if(r.ok) ok("Supabase accessible (" + r.status + ")");
+    else err("Supabase erreur " + r.status);
+  }).catch(e => err("Supabase fetch: " + e.message));
+  ok("Fetch lancé...");
+} catch(e) { err("Fetch: " + e.message); }
+
+// Test 3 : localStorage
+try {
+  localStorage.setItem("va_test","1");
+  localStorage.removeItem("va_test");
+  ok("localStorage OK");
+} catch(e) { err("localStorage: " + e.message); }
+
+// Test 4 : crypto
+try {
+  crypto.getRandomValues(new Uint8Array(4));
+  ok("Web Crypto OK");
+} catch(e) { err("Web Crypto: " + e.message); }
+
+ok("Script exécuté jusqu'au bout");
+</script>
+</body>
+</html>

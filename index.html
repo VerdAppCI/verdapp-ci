@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
   <!-- ═══ SÉCURITÉ : Headers HTTP via meta ══════════════════════════════════ -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://*.supabase.co https://verdappci.github.io https://gleeful-macaron-a0d6a6.netlify.app; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https://*.supabase.co https://placehold.co; connect-src 'self' https://*.supabase.co; frame-ancestors 'none';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://*.supabase.co https://verdappci.github.io https://gleeful-macaron-a0d6a6.netlify.app blob:; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https://*.supabase.co https://placehold.co; connect-src 'self' https://*.supabase.co; worker-src blob:; frame-ancestors 'none';">
   <meta http-equiv="X-Content-Type-Options" content="nosniff">
   <meta http-equiv="X-Frame-Options" content="DENY">
   <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
@@ -14,22 +14,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
 <meta name="apple-mobile-web-app-title" content="VerdApp CI"/>
 <title>VerdApp CI</title>
-<script>
-const manifestData = {
-  name:"VerdApp CI", short_name:"VerdApp",
-  description:"Gestion grossiste légumes Côte d'Ivoire",
-  start_url:"/", display:"standalone",
-  background_color:"#0a1a0c", theme_color:"#1a5c2a", orientation:"portrait",
-  icons:[
-    {src:"https://placehold.co/192x192/65a30d/ffffff?text=V",sizes:"192x192",type:"image/png",purpose:"any maskable"},
-    {src:"https://placehold.co/512x512/65a30d/ffffff?text=V",sizes:"512x512",type:"image/png",purpose:"any maskable"}
-  ]
-};
-const blob = new Blob([JSON.stringify(manifestData)],{type:"application/json"});
-document.addEventListener("DOMContentLoaded",()=>{
-  const l=document.createElement("link"); l.rel="manifest"; l.href=URL.createObjectURL(blob); document.head.appendChild(l);
-});
-</script>
+<!-- Manifest PWA inline supprimé pour compatibilité GitHub Pages -->
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 
@@ -268,7 +253,7 @@ select option{background:var(--white);color:var(--text);}
 
 <!-- MAIN CONTENT -->
 <!-- ═══ ÉCRAN DE CONNEXION ═══ -->
-<div id="loginScreen" style="display:none;position:fixed;inset:0;z-index:2000;background:linear-gradient(160deg,#071c0d 0%,#0d3d1a 50%,#0a2e12 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;">
+<div id="loginScreen" style="display:flex;position:fixed;inset:0;z-index:2000;background:linear-gradient(160deg,#071c0d 0%,#0d3d1a 50%,#0a2e12 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;">
   <!-- Logo directement sur fond vert foncé — mix-blend-mode:screen efface le fond noir du PNG -->
   <div style="text-align:center;margin-bottom:16px;">
     <img id="loginLogo" style="height:220px;width:auto;object-fit:contain;mix-blend-mode:screen;display:block;margin:0 auto;border-radius:20px;filter:contrast(1.05) brightness(1.1);"/>
@@ -304,7 +289,7 @@ select option{background:var(--white);color:var(--text);}
   </div>
 </div>
 
-<div id="main">
+<div id="main" style="display:none;">
   <div id="page-dashboard"></div>
   <div id="page-achats" style="display:none;"></div>
   <div id="page-ventes" style="display:none;"></div>
@@ -319,6 +304,9 @@ select option{background:var(--white);color:var(--text);}
 
 <script>
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
+// ── MODE APPLICATION (défini en premier) ──────────────────────────────────
+const APP_MODE = "front"; // "front" ou "bo" selon le fichier déployé
+
 const SB_URL="https://rhlrlnmoitfrzqdcvuoq.supabase.co";
 const SB_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJobHJsbm1vaXRmcnpxZGN2dW9xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1Mjk0NTAsImV4cCI6MjA5NjEwNTQ1MH0.fIFPK8DbmY5bpaTel4_nv5eMF61MmvMUUNkXCdgrZlk";
 const HDR={"apikey":SB_KEY,"Authorization":"Bearer "+SB_KEY,"Content-Type":"application/json","Prefer":"return=representation"};
@@ -1509,13 +1497,18 @@ async function updatePerte(produit,val){
 // Utilisateur → Achats terrain + Accusé de réception + Chat uniquement
 // ════════════════════════════════════════════════════════════════════════════
 function tabsAutorisés(){
-  // APP_MODE défini en haut du fichier : "front" ou "bo"
-  if(typeof APP_MODE !== "undefined" && APP_MODE === "bo") {
-    // BO : admin principal uniquement
-    return ["dashboard","commercial","chat","finance"];
+  if(APP_MODE === "bo") {
+    // BO — admin principal uniquement
+    if(currentUser?.role === "admin") {
+      return ["dashboard","commercial","chat","finance"];
+    }
+    return []; // pas d'accès BO sans être admin
   }
   // FRONT
-  if(currentUser?.role==="admin_second") {
+  if(currentUser?.role === "admin") {
+    return ["dashboard","achats","commercial","chat","finance"];
+  }
+  if(currentUser?.role === "admin_second") {
     return ["dashboard","achats","commercial","chat"];
   }
   // utilisateur standard
@@ -1527,7 +1520,14 @@ function appliquerRestrictionsRole(){
   document.querySelectorAll("[data-role]").forEach(btn=>{
     btn.style.display = btn.getAttribute("data-role")==="admin" ? (admin?"":"none") : "";
   });
-  if(!tabsAutorisés().includes(currentTab)) switchTab("achats");
+  const tabs = tabsAutorisés();
+  if(!tabs.includes(currentTab)) {
+    // Rediriger vers le premier onglet autorisé
+    const defaultTab = tabs[0] || "achats";
+    switchTab(defaultTab);
+  } else {
+    render(); // forcer le rendu de l'onglet actuel
+  }
 }
 
 function switchTab(tab){
@@ -3545,8 +3545,6 @@ function renderDemandes(){
 // ── MODE APPLICATION ──────────────────────────────────────────────────────────
 // "front" = verdapp-ci/front/  → utilisateurs + admin_second
 // "bo"    = verdapp-ci/bo/     → admin principal
-const APP_MODE = typeof APP_MODE !== "undefined" ? APP_MODE : "front";
-
 // ════════════════════════════════════════════════════════════════════════════
 // MODULE CAISSE & TRÉSORERIE
 // ════════════════════════════════════════════════════════════════════════════
@@ -7301,12 +7299,17 @@ async function demarrerApp() {
 }
 
 async function afficherEcranLogin() {
-  document.getElementById("loginScreen").style.display = "flex";
-  document.getElementById("main").style.display = "none";
-  document.getElementById("sidebar") && (document.getElementById("sidebar").style.display = "none");
-  document.getElementById("bottomnav") && (document.getElementById("bottomnav").style.display = "none");
-  document.getElementById("topbar") && (document.getElementById("topbar").style.display = "none");
-  await chargerListeUtilisateurs();
+  const ls = document.getElementById("loginScreen");
+  const main = document.getElementById("main");
+  const sb = document.getElementById("sidebar");
+  const bn = document.getElementById("bottomnav");
+  const tb = document.getElementById("topbar");
+  if(ls) ls.style.display = "flex";
+  if(main) main.style.display = "none";
+  if(sb) sb.style.display = "none";
+  if(bn) bn.style.display = "none";
+  if(tb) tb.style.display = "none";
+  try { await chargerListeUtilisateurs(); } catch(e) { console.warn("Liste utilisateurs:", e); }
 }
 
 function afficherApp() {
@@ -7320,8 +7323,9 @@ function afficherApp() {
   const label = getEl("modeLabel");
   const logoutBtn = getEl("logoutBtn");
   if(label && currentUser) {
-    label.textContent = currentUser.nom + (currentUser.role==="admin" ? " · Admin" : "");
-    label.style.color = currentUser.role==="admin" ? "#f47820" : "rgba(255,255,255,.6)";
+    const roleLabel = currentUser.role==="admin" ? " · Admin" : currentUser.role==="admin_second" ? " · Admin" : "";
+    label.textContent = currentUser.nom + roleLabel;
+    label.style.color = (currentUser.role==="admin"||currentUser.role==="admin_second") ? "#f47820" : "rgba(255,255,255,.6)";
   }
   if(logoutBtn) logoutBtn.style.display = "inline-flex";
   const ds = getEl("dataStatus");
@@ -7334,9 +7338,12 @@ function afficherApp() {
   const adminBtn = getEl("adminBtn");
   if(adminBtn) {
     adminBtn.style.display = "none";
-    // admin = accès complet | admin_second = accès commercial
-    if(currentUser?.role === "admin" || currentUser?.role === "admin_second") {
+    // admin principal = accès complet
+    // admin_second = accès commercial (pas Finance & Gestion)
+    if(currentUser?.role === "admin") {
       isAdmin = true;
+    } else if(currentUser?.role === "admin_second") {
+      isAdmin = true; // accès commercial activé
     } else {
       isAdmin = false;
     }
@@ -7649,7 +7656,14 @@ try{ adminLog.push(...JSON.parse(localStorage.getItem("va_admin_log")||"[]")); }
 // Migration PIN
 migrerPinVersHash();
 // Démarrer (l'app se rend après connexion + sync)
-demarrerApp();
+try {
+  demarrerApp();
+} catch(e) {
+  console.error("[VerdApp] Erreur démarrage:", e);
+  // Afficher l'écran de connexion en fallback
+  const ls = document.getElementById("loginScreen");
+  if(ls) ls.style.display = "flex";
+}
 // ── Polling unifié : un seul setInterval au lieu de 4 ──
 // Remplace les setInterval dispersés dans le code
 // Sync automatique toutes les 15 secondes

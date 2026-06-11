@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
   <!-- ═══ SÉCURITÉ : Headers HTTP via meta ══════════════════════════════════ -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://*.supabase.co https://verdappci.github.io https://gleeful-macaron-a0d6a6.netlify.app; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https://*.supabase.co https://placehold.co; connect-src 'self' https://*.supabase.co; frame-ancestors 'none';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://*.supabase.co https://verdappci.github.io https://gleeful-macaron-a0d6a6.netlify.app blob:; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https://*.supabase.co https://placehold.co; connect-src 'self' https://*.supabase.co; worker-src blob:; frame-ancestors 'none';">
   <meta http-equiv="X-Content-Type-Options" content="nosniff">
   <meta http-equiv="X-Frame-Options" content="DENY">
   <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
@@ -14,22 +14,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
 <meta name="apple-mobile-web-app-title" content="VerdApp CI"/>
 <title>VerdApp CI</title>
-<script>
-const manifestData = {
-  name:"VerdApp CI", short_name:"VerdApp",
-  description:"Gestion grossiste légumes Côte d'Ivoire",
-  start_url:"/", display:"standalone",
-  background_color:"#0a1a0c", theme_color:"#1a5c2a", orientation:"portrait",
-  icons:[
-    {src:"https://placehold.co/192x192/65a30d/ffffff?text=V",sizes:"192x192",type:"image/png",purpose:"any maskable"},
-    {src:"https://placehold.co/512x512/65a30d/ffffff?text=V",sizes:"512x512",type:"image/png",purpose:"any maskable"}
-  ]
-};
-const blob = new Blob([JSON.stringify(manifestData)],{type:"application/json"});
-document.addEventListener("DOMContentLoaded",()=>{
-  const l=document.createElement("link"); l.rel="manifest"; l.href=URL.createObjectURL(blob); document.head.appendChild(l);
-});
-</script>
+<!-- Manifest PWA inline supprimé pour compatibilité GitHub Pages -->
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 

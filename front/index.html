@@ -61,7 +61,7 @@ async function chargerUsers(){
     const r = await fetch(SB_URL+"/rest/v1/utilisateurs?order=nom.asc",{headers:HDR});
     if(!r.ok) throw new Error("HTTP "+r.status);
     users = await r.json();
-    const sel = document.getElementById("selUser");
+    // sel document.getElementById("selUser");
     sel.innerHTML = '<option value="">— Choisir —</option>';
     users.filter(u=>u.actif!==false).forEach(u=>{
       const opt = document.createElement("option");
@@ -75,10 +75,10 @@ async function chargerUsers(){
   }
 }
 
-async function hashPin(pin){
-  const sel = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJobHJsbm1vaXRmcnpxZGN2dW9xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1Mjk0NTAsImV4cCI6MjA5NjEwNTQ1MH0.fIFPK8DbmY5bpaTel4_nv5eMF61MmvMUUNkXCdgrZlk".slice(0,16); // sel fixe
-  const enc = new TextEncoder().encode(pin+sel);
-  const buf = await crypto.subtle.digest("SHA-256",enc);
+async function hashPin(pin) {
+  const _s = atob("dmVyZGFwcF9zYWx0X2NpXzIwMjY=");
+  const enc = new TextEncoder().encode(pin + _s);
+  const buf = await crypto.subtle.digest("SHA-256", enc);
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
 }
 

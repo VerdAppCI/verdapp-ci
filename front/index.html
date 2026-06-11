@@ -319,6 +319,9 @@ select option{background:var(--white);color:var(--text);}
 
 <script>
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
+// ── MODE APPLICATION (défini en premier) ──────────────────────────────────
+const APP_MODE = "front"; // "front" ou "bo" selon le fichier déployé
+
 const SB_URL="https://rhlrlnmoitfrzqdcvuoq.supabase.co";
 const SB_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJobHJsbm1vaXRmcnpxZGN2dW9xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1Mjk0NTAsImV4cCI6MjA5NjEwNTQ1MH0.fIFPK8DbmY5bpaTel4_nv5eMF61MmvMUUNkXCdgrZlk";
 const HDR={"apikey":SB_KEY,"Authorization":"Bearer "+SB_KEY,"Content-Type":"application/json","Prefer":"return=representation"};
@@ -1509,13 +1512,18 @@ async function updatePerte(produit,val){
 // Utilisateur → Achats terrain + Accusé de réception + Chat uniquement
 // ════════════════════════════════════════════════════════════════════════════
 function tabsAutorisés(){
-  // APP_MODE défini en haut du fichier : "front" ou "bo"
-  if(typeof APP_MODE !== "undefined" && APP_MODE === "bo") {
-    // BO : admin principal uniquement
-    return ["dashboard","commercial","chat","finance"];
+  if(APP_MODE === "bo") {
+    // BO — admin principal uniquement
+    if(currentUser?.role === "admin") {
+      return ["dashboard","commercial","chat","finance"];
+    }
+    return []; // pas d'accès BO sans être admin
   }
   // FRONT
-  if(currentUser?.role==="admin_second") {
+  if(currentUser?.role === "admin") {
+    return ["dashboard","achats","commercial","chat","finance"];
+  }
+  if(currentUser?.role === "admin_second") {
     return ["dashboard","achats","commercial","chat"];
   }
   // utilisateur standard
@@ -1527,7 +1535,14 @@ function appliquerRestrictionsRole(){
   document.querySelectorAll("[data-role]").forEach(btn=>{
     btn.style.display = btn.getAttribute("data-role")==="admin" ? (admin?"":"none") : "";
   });
-  if(!tabsAutorisés().includes(currentTab)) switchTab("achats");
+  const tabs = tabsAutorisés();
+  if(!tabs.includes(currentTab)) {
+    // Rediriger vers le premier onglet autorisé
+    const defaultTab = tabs[0] || "achats";
+    switchTab(defaultTab);
+  } else {
+    render(); // forcer le rendu de l'onglet actuel
+  }
 }
 
 function switchTab(tab){
@@ -3545,8 +3560,6 @@ function renderDemandes(){
 // ── MODE APPLICATION ──────────────────────────────────────────────────────────
 // "front" = verdapp-ci/front/  → utilisateurs + admin_second
 // "bo"    = verdapp-ci/bo/     → admin principal
-const APP_MODE = typeof APP_MODE !== "undefined" ? APP_MODE : "front";
-
 // ════════════════════════════════════════════════════════════════════════════
 // MODULE CAISSE & TRÉSORERIE
 // ════════════════════════════════════════════════════════════════════════════
@@ -7320,8 +7333,9 @@ function afficherApp() {
   const label = getEl("modeLabel");
   const logoutBtn = getEl("logoutBtn");
   if(label && currentUser) {
-    label.textContent = currentUser.nom + (currentUser.role==="admin" ? " · Admin" : "");
-    label.style.color = currentUser.role==="admin" ? "#f47820" : "rgba(255,255,255,.6)";
+    const roleLabel = currentUser.role==="admin" ? " · Admin" : currentUser.role==="admin_second" ? " · Admin" : "";
+    label.textContent = currentUser.nom + roleLabel;
+    label.style.color = (currentUser.role==="admin"||currentUser.role==="admin_second") ? "#f47820" : "rgba(255,255,255,.6)";
   }
   if(logoutBtn) logoutBtn.style.display = "inline-flex";
   const ds = getEl("dataStatus");
@@ -7334,9 +7348,12 @@ function afficherApp() {
   const adminBtn = getEl("adminBtn");
   if(adminBtn) {
     adminBtn.style.display = "none";
-    // admin = accès complet | admin_second = accès commercial
-    if(currentUser?.role === "admin" || currentUser?.role === "admin_second") {
+    // admin principal = accès complet
+    // admin_second = accès commercial (pas Finance & Gestion)
+    if(currentUser?.role === "admin") {
       isAdmin = true;
+    } else if(currentUser?.role === "admin_second") {
+      isAdmin = true; // accès commercial activé
     } else {
       isAdmin = false;
     }

@@ -9,6 +9,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
 <meta name="apple-mobile-web-app-title" content="VerdApp CI"/>
 <title>VerdApp CI</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 const manifestData = {
   name:"VerdApp CI", short_name:"VerdApp",
@@ -1007,6 +1008,29 @@ async function sbUpdate(table,id,data){
   const r=await sbFetch(`/rest/v1/${table}?id=eq.${id}`,{method:"PATCH",body:JSON.stringify(data)});
   if(!r.ok) throw new Error(await r.text());
 }
+
+/**
+ * Attribue le prochain numéro séquentiel de document via la fonction RPC
+ * Supabase prochain_numero_document (atomique, anti-doublon).
+ * prefixe : 'FAC' (ventes) ou 'BR' (bons de réception achats).
+ * Retourne ex. "FAC-2026-0001". En cas d'échec réseau, retourne null
+ * (l'opération principale ne doit pas être bloquée par la numérotation).
+ */
+async function obtenirNumeroDocument(prefixe, date){
+  try {
+    const annee = (date||new Date().toISOString().slice(0,10)).slice(0,4);
+    const r = await sbFetch(`/rest/v1/rpc/prochain_numero_document`, {
+      method:"POST",
+      body: JSON.stringify({p_prefixe:prefixe, p_annee:+annee})
+    });
+    if(!r.ok) return null;
+    const data = await r.json();
+    return typeof data==="string" ? data.replace(/^"|"$/g,"") : data;
+  } catch(e) {
+    console.warn("Numérotation document indisponible:", e.message);
+    return null;
+  }
+}
 async function sbDelete(table,id){
   const r=await sbFetch(`/rest/v1/${table}?id=eq.${id}`,{method:"DELETE"});
   if(!r.ok) throw new Error(await r.text());
@@ -1020,11 +1044,12 @@ async function syncAll(silent=false){
   const btn = getEl("syncBtn");
   if(!silent && btn){ btn.innerHTML='<span class="spinner"></span>'; btn.disabled=true; }
   try{
-    const [a,v,d,p,cp,jc]=await Promise.all([
+    const [a,v,d,p,cp,jc,bm]=await Promise.all([
       sbGet("achats"),sbGet("ventes"),sbGet("demandes"),
       sbFetch(`/rest/v1/produits?order=nom.asc`).then(r=>r.json()),
       sbFetch(`/rest/v1/commissions_paiements?order=created_at.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
-      sbFetch(`/rest/v1/journal_comptable?order=date.asc`).then(r=>r.ok?r.json():[]).catch(()=>[])
+      sbFetch(`/rest/v1/journal_comptable?order=date.asc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
+      sbFetch(`/rest/v1/budgets_mensuels?order=annee.desc,mois.desc`).then(r=>r.ok?r.json():[]).catch(()=>[])
     ]);
     achats=a||[]; localStorage.setItem("va_achats",JSON.stringify(achats));
     ventes=v||[]; localStorage.setItem("va_ventes",JSON.stringify(ventes));
@@ -1032,6 +1057,7 @@ async function syncAll(silent=false){
     if(p&&p.length){produits=p; localStorage.setItem("va_produits",JSON.stringify(p));}
     commissionsPaiements=cp||[]; localStorage.setItem("va_commissions_paiements",JSON.stringify(commissionsPaiements));
     if(jc&&jc.length){journalComptable=jc; saveJournalComptable();}
+    budgetsMensuels=bm||[]; saveBudgetsMensuels();
     updateDemandesBadge();
     render();
     if(!silent) showToast("✓ Synchronisé");
@@ -1392,28 +1418,38 @@ async function saveVenteModal(){
   const qte=document.getElementById("vf_qte").value;
   const prix=document.getElementById("vf_prix").value;
   if(!client||!qte||!prix) return showToast("Champs obligatoires manquants","error");
+  const date=document.getElementById("vf_date").value;
   const payload={
-    id:genId(), date:document.getElementById("vf_date").value, client,
+    id:genId(), date, client,
     produit:document.getElementById("vf_produit").value,
     unite:document.getElementById("vf_unite").value,
     quantite:+qte, prix_vente:+prix,
     mode_paiement:document.getElementById("vf_mode").value,
     notes:document.getElementById("vf_notes").value
   };
+  // Numérotation séquentielle de la facture (FAC-AAAA-NNNN), avant insertion
+  const numeroFacture = await obtenirNumeroDocument("FAC", date);
+  if(numeroFacture) payload.numero_document = numeroFacture;
   try{
     await sbInsert("ventes",payload);
     ventes.unshift(payload); saveLocal(); closeModal();
-    showToast("✓ Vente enregistrée"); render();
+    showToast(numeroFacture ? ("✓ Vente enregistrée — "+numeroFacture) : "✓ Vente enregistrée"); render();
   }catch(e){showToast("Erreur : "+e.message,"error");}
 }
 
 async function marquerRecu(id){
   if(!currentUser){ showToast("Connectez-vous d'abord","error"); return; }
   logAdminAction("MARQUER_RECU", "Achat ID:"+id+" par "+currentUser.nom);
+  const a = achats.find(x=>x.id===id);
+  const updatePayload = {statut:"recu"};
+  // Numérotation séquentielle du bon de réception (BR-AAAA-NNNN)
+  const numeroBR = await obtenirNumeroDocument("BR", a?.date_reception || a?.date || new Date().toISOString().slice(0,10));
+  if(numeroBR) updatePayload.numero_document = numeroBR;
   try{
-    await sbUpdate("achats",id,{statut:"recu"});
-    achats=achats.map(a=>a.id===id?{...a,statut:"recu"}:a);
-    saveLocal(); render(); showToast("✓ Marchandise reçue à Abidjan");
+    await sbUpdate("achats",id,updatePayload);
+    achats=achats.map(x=>x.id===id?{...x,...updatePayload}:x);
+    saveLocal(); render();
+    showToast(numeroBR ? ("✓ Marchandise reçue à Abidjan — "+numeroBR) : "✓ Marchandise reçue à Abidjan");
     // Afficher la commission si utilisateur non-admin
     if(!isAdmin && currentUser?.nom) {
       setTimeout(()=>voirCommission(), 800);
@@ -2144,6 +2180,103 @@ function voirHistoriquePaiementsCommission(nom) {
 
 
 // ════════════════════════════════════════════════════════════════════════════
+// MODULE DOCUMENTS — Génération PDF facture (ventes) / bon de réception (achats)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Génère un PDF simple (facture client ou bon de réception fournisseur)
+ * à partir d'une vente ou d'un achat reçu, via jsPDF (chargé en CDN).
+ * Le document porte le numéro séquentiel attribué (numero_document).
+ */
+function genererDocumentPDF(type, item){
+  if(typeof window.jspdf==="undefined"){ showToast("Génération PDF indisponible (hors-ligne)","error"); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({unit:"mm", format:"a4"});
+  const numero = item.numero_document || "—";
+  const isVente = type==="vente";
+  const titre = isVente ? "FACTURE" : "BON DE RÉCEPTION";
+
+  // En-tête
+  doc.setFillColor(13,61,26); // vert VerdApp
+  doc.rect(0,0,210,28,"F");
+  doc.setTextColor(255,255,255);
+  doc.setFontSize(18); doc.setFont(undefined,"bold");
+  doc.text("VerdApp CI", 14, 17);
+  doc.setFontSize(9); doc.setFont(undefined,"normal");
+  doc.text("Gestion Grossiste Légumes — Côte d'Ivoire", 14, 23);
+
+  doc.setTextColor(20,20,20);
+  doc.setFontSize(14); doc.setFont(undefined,"bold");
+  doc.text(titre, 196, 17, {align:"right"});
+  doc.setFontSize(11); doc.setFont(undefined,"normal");
+  doc.text(numero, 196, 23, {align:"right"});
+
+  let y = 40;
+  doc.setFontSize(10);
+  doc.text("Date : "+(item.date||""), 14, y);
+  if(isVente){
+    doc.text("Client : "+(item.client||"—"), 14, y+6);
+  } else {
+    doc.text("Fournisseur : "+(item.fournisseur||"—"), 14, y+6);
+    if(item.lieu) doc.text("Lieu : "+item.lieu, 14, y+12);
+  }
+
+  y += isVente ? 16 : 22;
+
+  // Tableau : produit / quantité / prix unitaire / total
+  const prixUnit = isVente ? (item.prix_vente||0) : (item.prix_unitaire||0);
+  const total = (item.quantite||0)*prixUnit;
+
+  doc.setFillColor(240,244,240);
+  doc.rect(14,y,182,8,"F");
+  doc.setFont(undefined,"bold"); doc.setFontSize(9);
+  doc.text("Produit",17,y+5.5);
+  doc.text("Quantité",110,y+5.5,{align:"right"});
+  doc.text("Prix unitaire",150,y+5.5,{align:"right"});
+  doc.text("Total",193,y+5.5,{align:"right"});
+
+  y+=8;
+  doc.setFont(undefined,"normal");
+  doc.text((getProduitIcon(item.produit)||"")+" "+(item.produit||""),17,y+5.5);
+  doc.text(String(item.quantite||0)+" "+(item.unite||""),110,y+5.5,{align:"right"});
+  doc.text(fmt(prixUnit)+" F",150,y+5.5,{align:"right"});
+  doc.text(fmt(total)+" F",193,y+5.5,{align:"right"});
+
+  y+=12;
+  doc.setDrawColor(220,220,220); doc.line(14,y,196,y);
+  y+=8;
+
+  // Frais accessoires (achats uniquement)
+  if(!isVente){
+    const frais = fraisAchat(item);
+    if(frais>0){
+      doc.setFontSize(9);
+      doc.text("Frais accessoires (transport, droit de terre, charrette) : "+fmt(frais)+" F", 14, y);
+      y+=6;
+    }
+    if(item.avance_paye>0){
+      doc.text("Avance versée : "+fmt(item.avance_paye)+" F", 14, y);
+      y+=6;
+    }
+  }
+
+  // Total
+  doc.setFontSize(12); doc.setFont(undefined,"bold");
+  doc.text("TOTAL : "+fmt(total)+" F", 196, y+4, {align:"right"});
+
+  // Pied de page
+  doc.setFontSize(8); doc.setFont(undefined,"normal"); doc.setTextColor(120,120,120);
+  doc.text("Document généré par VerdApp CI — "+new Date().toLocaleString("fr-CI"), 14, 285);
+  if(isVente){
+    doc.text("Numérotation séquentielle conforme aux exigences OHADA (Acte uniforme - droit commercial général).", 14, 290);
+  }
+
+  const filename = (numero!=="—"?numero:(isVente?"facture":"bon_reception")) + ".pdf";
+  doc.save(filename);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
 // MODULE JOURNAL COMPTABLE — Plan de comptes SYSCOHADA (OHADA révisé)
 // ════════════════════════════════════════════════════════════════════════════
 //
@@ -2179,6 +2312,11 @@ const PLAN_COMPTES = {
 };
 
 let journalComptable = JSON.parse(localStorage.getItem("va_journal_comptable")||"[]");
+let budgetsMensuels = JSON.parse(localStorage.getItem("va_budgets_mensuels")||"[]");
+
+function saveBudgetsMensuels(){
+  localStorage.setItem("va_budgets_mensuels", JSON.stringify(budgetsMensuels));
+}
 
 function saveJournalComptable(){
   localStorage.setItem("va_journal_comptable", JSON.stringify(journalComptable));
@@ -2822,6 +2960,7 @@ function renderAchats(){
             <span style="font-weight:800;color:#0f1f16;font-size:14px;">${a.produit}</span>
             <span class="badge ${a.statut==="recu"?"b-lime":"b-amber"}">${a.statut==="recu"?"✓ Reçu":"⏳ Transit"}</span>
             <span class="badge b-stone">${a.unite}</span>
+            ${a.numero_document?`<span class="badge b-stone" style="font-family:monospace;cursor:pointer;" onclick='genererDocumentPDF("achat",${JSON.stringify(a).replace(/'/g,"&#39;")})' title="Imprimer le bon de réception">🖨 ${a.numero_document}</span>`:""}
             ${hasPending?`<span class="badge b-orange">⏳ En révision</span>`:""}
           </div>
           <div style="font-size:11px;color:#3d5c48;margin-bottom:5px;">${a.date} · <span style="color:var(--gray-500);">${a.fournisseur}</span>${a.lieu?" · "+a.lieu:""}</div>
@@ -2883,6 +3022,7 @@ function renderVentes(){
             <span style="font-size:18px;">${getProduitIcon(v.produit)||"🌿"}</span>
             <span style="font-weight:800;color:#0f1f16;font-size:14px;">${v.produit}</span>
             <span class="badge b-sky">${v.mode_paiement}</span>
+            ${v.numero_document?`<span class="badge b-stone" style="font-family:monospace;cursor:pointer;" onclick='genererDocumentPDF("vente",${JSON.stringify(v).replace(/'/g,"&#39;")})' title="Imprimer la facture">🖨 ${v.numero_document}</span>`:""}
             ${hasPending?`<span class="badge b-orange">⏳ En révision</span>`:""}
           </div>
           <div style="font-size:11px;color:#3d5c48;margin-bottom:5px;">${v.date} · <span style="color:var(--gray-500);">${v.client}</span></div>
@@ -4350,6 +4490,93 @@ function exportDashboardCSV(){
 // ════════════════════════════════════════════════════════════════════════════
 let bilanOnglet = "jour";
 
+/**
+ * Petite carte d'affichage d'un ratio financier pour l'onglet
+ * "Compte de résultat" du bilan.
+ */
+function ratioCard(label, valeur, sain, note){
+  const color = sain ? "#166534" : "#dc2626";
+  const bg = sain ? "#f0fdf4" : "#fef2f2";
+  const border = sain ? "#bbf7d0" : "#fecaca";
+  return '<div style="background:'+bg+';border:1.5px solid '+border+';border-radius:12px;padding:10px;text-align:center;">'
+    +'<div style="font-size:9px;font-weight:700;color:#6b8c7a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">'+label+'</div>'
+    +'<div style="font-size:18px;font-weight:900;color:'+color+';">'+valeur+'</div>'
+    +'<div style="font-size:9px;color:#6b8c7a;margin-top:3px;">'+note+'</div>'
+  +'</div>';
+}
+
+/**
+ * Modal de saisie/édition du budget prévisionnel d'un mois donné
+ * (CA, marge brute, résultat net cibles, charges fixes mensuelles).
+ */
+function modalEditerBudget(annee, mois){
+  if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
+  const b = budgetsMensuels.find(x=>x.annee===annee && x.mois===mois) || {};
+  const label = new Date(annee, mois-1, 1).toLocaleDateString("fr-CI",{month:"long",year:"numeric"});
+
+  showModal(
+    '<div style="font-size:16px;font-weight:800;color:#0f1f16;margin-bottom:14px;">📅 Budget — '+label+'</div>'
+
+    +'<div style="margin-bottom:10px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Chiffre d\'affaires objectif (F)</label>'
+      +'<input type="number" id="bg_ca" min="0" value="'+(b.ca_objectif||0)+'" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:14px;"/>'
+    +'</div>'
+    +'<div style="margin-bottom:10px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Marge brute objectif (F)</label>'
+      +'<input type="number" id="bg_mb" min="0" value="'+(b.marge_brute_objectif||0)+'" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:14px;"/>'
+    +'</div>'
+    +'<div style="margin-bottom:10px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Résultat net objectif (F)</label>'
+      +'<input type="number" id="bg_rn" min="0" value="'+(b.resultat_net_objectif||0)+'" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:14px;"/>'
+    +'</div>'
+    +'<div style="margin-bottom:14px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Charges fixes mensuelles (F)</label>'
+      +'<input type="number" id="bg_cf" min="0" value="'+(b.charges_fixes_mensuelles||0)+'" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:14px;"/>'
+      +'<div style="font-size:10px;color:#6b8c7a;margin-top:4px;">Loyer, salaires administratifs, abonnements, etc. — utilisé pour affiner le résultat net réalisé et le seuil de rentabilité.</div>'
+    +'</div>'
+
+    +'<div id="bg_msg" style="display:none;margin-bottom:10px;font-size:12px;font-weight:700;text-align:center;"></div>'
+    +'<div style="display:flex;gap:10px;">'
+      +'<button onclick="enregistrerBudget('+annee+','+mois+')" style="flex:1;padding:13px;background:#0369a1;color:#fff;border:none;border-radius:12px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">Enregistrer</button>'
+      +'<button onclick="bilanFinancier(\'budget\')" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>'
+    +'</div>'
+  );
+}
+
+async function enregistrerBudget(annee, mois){
+  const msg = document.getElementById("bg_msg");
+  const payload = {
+    id: genId(),
+    annee, mois,
+    ca_objectif: parseFloat(document.getElementById("bg_ca")?.value)||0,
+    marge_brute_objectif: parseFloat(document.getElementById("bg_mb")?.value)||0,
+    resultat_net_objectif: parseFloat(document.getElementById("bg_rn")?.value)||0,
+    charges_fixes_mensuelles: parseFloat(document.getElementById("bg_cf")?.value)||0,
+    enregistre_par: currentUser?.nom || "Admin",
+  };
+
+  msg.style.cssText="display:block;color:#166534;"; msg.textContent="Enregistrement…";
+
+  try {
+    const existant = budgetsMensuels.find(b=>b.annee===annee && b.mois===mois);
+    if(existant){
+      payload.id = existant.id;
+      await sbUpdate("budgets_mensuels", existant.id, payload);
+      budgetsMensuels = budgetsMensuels.map(b=>b.id===existant.id?payload:b);
+    } else {
+      await sbInsert("budgets_mensuels", payload);
+      budgetsMensuels.unshift(payload);
+    }
+    saveBudgetsMensuels();
+    logAdminAction("BUDGET_MENSUEL", annee+"-"+mois+" mis à jour");
+    showToast("✓ Budget enregistré");
+    bilanFinancier("budget");
+  } catch(e) {
+    msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Erreur : "+e.message;
+  }
+}
+
+
 // Délégation d'événement pour les cellules marge cliquables
 document.addEventListener("click", function(e) {
   const cell = e.target.closest(".marge-cell");
@@ -4374,12 +4601,14 @@ function bilanFinancier(onglet) {
 
   // ── Onglets ──
   const ongletsHtml = '<div style="display:flex;gap:6px;margin-bottom:16px;background:#f0f5f1;border-radius:12px;padding:4px;">'
-    + ['jour','mois','annee','pertes'].map(o => {
-        const labels={jour:'Par jour',mois:'Par mois',annee:'Par année',pertes:'Pertes'};
+    + ['jour','mois','annee','sig','budget','pertes'].map(o => {
+        const labels={jour:'Par jour',mois:'Par mois',annee:'Par année',sig:'Compte de résultat',budget:'Budget',pertes:'Pertes'};
         const active = bilanOnglet===o;
         const isPertes = o==='pertes';
+        const isSig = o==='sig';
+        const isBudget = o==='budget';
         return '<button onclick="bilanFinancier(\''+o+'\')" style="flex:1;padding:7px 4px;border:none;border-radius:9px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700;transition:all .2s;'
-          +(active?(isPertes?'background:#dc2626;color:#fff;':'background:#0d3d1a;color:#fff;box-shadow:0 2px 8px rgba(13,61,26,.3);'):'background:none;color:#3d5c48;')+'">'+labels[o]+'</button>';
+          +(active?(isPertes?'background:#dc2626;color:#fff;':isSig?'background:#6d28d9;color:#fff;box-shadow:0 2px 8px rgba(109,40,217,.3);':isBudget?'background:#0369a1;color:#fff;box-shadow:0 2px 8px rgba(3,105,161,.3);':'background:#0d3d1a;color:#fff;box-shadow:0 2px 8px rgba(13,61,26,.3);'):'background:none;color:#3d5c48;')+'">'+labels[o]+'</button>';
       }).join('')
     + '</div>';
 
@@ -4524,6 +4753,149 @@ function bilanFinancier(onglet) {
   }
 
   // ── PERTES (admin seulement) ──
+  // ── COMPTE DE RÉSULTAT (SIG — Soldes Intermédiaires de Gestion) ──
+  else if(bilanOnglet==="sig") {
+    const ca          = totalV;
+    const coutMarchandiseVendu = ca - margeB;     // CA − marge brute = coût d'achat des marchandises vendues (FIFO)
+    const margeBrute  = margeB;                   // CA − CMV
+    const fraisAcc    = frais;                    // frais accessoires (transport, droit de terre, charrette)
+    const margeNetteCommerciale = margeN;         // CA − (CMV + frais)
+    const totalPertesV = totalPertesValeur();
+    const totalCommiss = totalCommissionsDues();
+    const resultatExploitation = margeNetteCommerciale - totalPertesV - totalCommiss;
+
+    const tauxB  = ca ? Math.round(margeBrute/ca*100) : 0;
+    const tauxN  = ca ? Math.round(margeNetteCommerciale/ca*100) : 0;
+    const tauxRE = ca ? Math.round(resultatExploitation/ca*100) : 0;
+
+    // ── Ratios financiers ──
+    const stockValorise = (function(){
+      let total=0;
+      [...new Set(achats.filter(a=>a.statut==="recu").map(a=>a.produit))].forEach(p=>{
+        const f=calculerFIFO(p);
+        total += (f.qteDispo>0?f.qteDispo:0) * (coutMoyen(p)||0);
+      });
+      return total;
+    })();
+    const rotationStock = stockValorise>0 ? (coutMarchandiseVendu/stockValorise) : 0;
+    const tauxPerte = (coutMarchandiseVendu+totalPertesV)>0 ? Math.round(totalPertesV/(coutMarchandiseVendu+totalPertesV)*1000)/10 : 0;
+
+    function ligneSIG(label, montant, opts){
+      opts=opts||{};
+      const isTotal = opts.total;
+      const isNeg = opts.neg;
+      const color = montant<0?'#dc2626':(isTotal?(montant>=0?'#166534':'#dc2626'):'#0f1f16');
+      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:'+(isTotal?'10px 12px':'7px 12px')+';'
+        +(isTotal?'background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:10px;margin:6px 0;':'border-bottom:1px solid #f1f5f2;')+'">'
+        +'<span style="font-size:'+(isTotal?'12px':'11px')+';font-weight:'+(isTotal?'800':'600')+';color:'+(isTotal?'#0f1f16':'#3d5c48')+';">'+label+'</span>'
+        +'<span style="font-size:'+(isTotal?'14px':'12px')+';font-weight:900;color:'+color+';">'+(isNeg?'− ':(isTotal&&montant>=0?'':''))+fmt(Math.abs(montant))+' F'+(opts.taux!==undefined?' <span style="font-size:10px;font-weight:700;color:#6b8c7a;">('+opts.taux+'%)</span>':'')+'</span>'
+      +'</div>';
+    }
+
+    contenu =
+      '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">📊 Compte de résultat (Soldes Intermédiaires de Gestion)</div>'
+      +'<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:12px;padding:6px 4px;margin-bottom:16px;">'
+        +ligneSIG("Chiffre d'affaires (CA)", ca)
+        +ligneSIG("− Coût d'achat des marchandises vendues (CMV, FIFO)", coutMarchandiseVendu, {neg:true})
+        +ligneSIG("= MARGE BRUTE", margeBrute, {total:true, taux:tauxB})
+        +ligneSIG("− Frais accessoires d'achat (transport, droit de terre, charrette)", fraisAcc, {neg:true})
+        +ligneSIG("= MARGE NETTE COMMERCIALE", margeNetteCommerciale, {total:true, taux:tauxN})
+        +ligneSIG("− Commissions versées au personnel terrain", totalCommiss, {neg:true})
+        +ligneSIG("− Pertes sur stocks", totalPertesV, {neg:true})
+        +ligneSIG("= RÉSULTAT D'EXPLOITATION", resultatExploitation, {total:true, taux:tauxRE})
+      +'</div>'
+      +'<div style="font-size:10px;color:#6b8c7a;margin-bottom:16px;">Le résultat d\'exploitation ne tient pas compte des charges fiscales (patente, impôts) ni des charges fixes générales (loyer, personnel administratif, amortissements), à intégrer par le comptable en charge de la comptabilité légale.</div>'
+
+      +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">📐 Ratios financiers</div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
+        +ratioCard("Taux de marge brute", tauxB+"%", tauxB>=20, "Seuil sain : > 20%")
+        +ratioCard("Taux de marge nette", tauxN+"%", tauxN>=15, "Seuil sain : > 15%")
+        +ratioCard("Rotation des stocks", rotationStock.toFixed(1)+"x", rotationStock>=1, "CMV / Stock valorisé (période)")
+        +ratioCard("Taux de perte", tauxPerte+"%", tauxPerte<3, "Pertes / (CMV+Pertes) — seuil sain : < 3%")
+        +ratioCard("Stock valorisé (FIFO)", fmt(stockValorise)+" F", true, "Coût d'achat du stock disponible")
+        +ratioCard("Dû fournisseurs", fmt(totalDus)+" F", totalDus<=stockValorise, "À régler sur le stock en cours")
+      +'</div>';
+
+    // ── Seuil de rentabilité (point mort) ──
+    // Charges fixes proxy : commissions + pertes constatées sur la période,
+    // utilisées comme estimation faute de saisie de charges fixes dédiée
+    // (loyer, salaires admin, etc. — à compléter via l'onglet Budget).
+    const chargesFixesProxy = totalCommiss + totalPertesV;
+    const tauxMargeSurCA = ca ? (margeBrute/ca) : 0;
+    const seuilRentabilite = tauxMargeSurCA>0 ? chargesFixesProxy/tauxMargeSurCA : 0;
+    const margeSecurite = ca - seuilRentabilite;
+    const tauxMargeSecurite = ca ? Math.round(margeSecurite/ca*100) : 0;
+
+    contenu += '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px;">🎯 Seuil de rentabilité (point mort)</div>'
+      +'<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:12px;padding:12px;">'
+        +'<div style="font-size:11px;color:#3d5c48;margin-bottom:8px;">Charges fixes estimées (commissions + pertes) : <b>'+fmt(chargesFixesProxy)+' F</b> · Taux de marge brute / CA : <b>'+Math.round(tauxMargeSurCA*100)+'%</b></div>'
+        +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
+          +ratioCard("CA minimum requis", fmt(seuilRentabilite)+" F", ca>=seuilRentabilite, "Pour couvrir les charges fixes")
+          +ratioCard("Marge de sécurité", (margeSecurite>=0?'+':'')+fmt(margeSecurite)+" F", margeSecurite>=0, "CA actuel − Seuil ("+tauxMargeSecurite+"%)")
+        +'</div>'
+        +'<div style="font-size:10px;color:#6b8c7a;margin-top:8px;">Cette estimation utilise commissions + pertes comme proxy des charges fixes. Pour un calcul précis, saisissez vos charges fixes réelles (loyer, salaires administratifs, etc.) dans l\'onglet Budget.</div>'
+      +'</div>';
+  }
+
+  // ── BUDGET PRÉVISIONNEL VS RÉALISÉ ──
+  else if(bilanOnglet==="budget") {
+    const now = new Date();
+    const annee = now.getFullYear(), mois = now.getMonth()+1;
+    const moisLabel = now.toLocaleDateString("fr-CI",{month:"long",year:"numeric"});
+
+    const budgetCourant = budgetsMensuels.find(b=>b.annee===annee && b.mois===mois);
+
+    // Réalisé du mois courant
+    const ventesMois = ventes.filter(v=>(v.date||"").slice(0,7)===now.toISOString().slice(0,7));
+    const caRealise = totalVentes(ventesMois);
+    const margeBruteRealisee = margebrute(ventesMois);
+    const margeNetteRealisee = margenette(ventesMois);
+    const totalCommissMois = totalCommissionsDues(); // global (l'app ne filtre pas les commissions par mois)
+    const totalPertesMois = totalPertesValeur();
+    const resultatNetRealise = margeNetteRealisee - totalCommissMois - totalPertesMois - (budgetCourant?.charges_fixes_mensuelles||0);
+
+    function ligneBudget(label, objectif, realise){
+      const ecart = realise - objectif;
+      const ecartPct = objectif ? Math.round(ecart/objectif*100) : 0;
+      const color = ecart>=0 ? "#166534" : "#dc2626";
+      return '<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:6px;align-items:center;padding:8px 0;border-bottom:1px solid #f1f5f2;font-size:11px;">'
+        +'<div style="font-weight:700;color:#0f1f16;">'+label+'</div>'
+        +'<div style="text-align:right;color:#6b8c7a;">'+fmt(objectif)+'</div>'
+        +'<div style="text-align:right;font-weight:800;color:#0f1f16;">'+fmt(realise)+'</div>'
+        +'<div style="text-align:right;font-weight:800;color:'+color+';">'+(ecart>=0?'+':'')+fmt(ecart)+' <span style="font-size:9px;">('+(ecart>=0?'+':'')+ecartPct+'%)</span></div>'
+      +'</div>';
+    }
+
+    contenu =
+      '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">📅 Budget vs Réalisé — '+moisLabel+'</div>'
+
+      +'<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:6px;padding:6px 0;font-size:10px;font-weight:700;color:#6b8c7a;text-transform:uppercase;letter-spacing:.04em;border-bottom:2px solid #e4ede7;margin-bottom:4px;">'
+        +'<div>Indicateur</div><div style="text-align:right;">Budget</div><div style="text-align:right;">Réalisé</div><div style="text-align:right;">Écart</div>'
+      +'</div>'
+      +ligneBudget("Chiffre d'affaires", budgetCourant?.ca_objectif||0, caRealise)
+      +ligneBudget("Marge brute", budgetCourant?.marge_brute_objectif||0, margeBruteRealisee)
+      +ligneBudget("Résultat net", budgetCourant?.resultat_net_objectif||0, resultatNetRealise)
+
+      +'<div style="margin-top:14px;">'
+        +'<button onclick="modalEditerBudget('+annee+','+mois+')" style="width:100%;background:#0369a1;color:#fff;border:none;border-radius:10px;padding:10px;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;">✏ '+(budgetCourant?'Modifier':'Définir')+' le budget de '+moisLabel+'</button>'
+      +'</div>'
+
+      +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin:18px 0 8px;">📜 Historique des budgets</div>'
+      +(budgetsMensuels.length
+        ? '<div style="display:flex;flex-direction:column;gap:6px;">'
+          +budgetsMensuels.slice().sort((a,b)=>(b.annee*12+b.mois)-(a.annee*12+a.mois)).map(b=>{
+            const label = new Date(b.annee, b.mois-1, 1).toLocaleDateString("fr-CI",{month:"long",year:"numeric"});
+            return '<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:10px;padding:9px 12px;display:flex;justify-content:space-between;align-items:center;font-size:11px;">'
+              +'<div><div style="font-weight:700;color:#0f1f16;">'+label+'</div>'
+                +'<div style="font-size:10px;color:#6b8c7a;">CA obj. '+fmt(b.ca_objectif)+' · MB obj. '+fmt(b.marge_brute_objectif)+' · RN obj. '+fmt(b.resultat_net_objectif)+'</div>'
+              +'</div>'
+              +'<button onclick="modalEditerBudget('+b.annee+','+b.mois+')" style="background:#f1f5f2;border:none;border-radius:8px;padding:5px 10px;font-size:10px;font-weight:700;color:#3d5c48;cursor:pointer;font-family:inherit;">✏</button>'
+            +'</div>';
+          }).join('')
+          +'</div>'
+        : '<div style="text-align:center;padding:16px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;">Aucun budget défini.</div>');
+  }
+
   else if(bilanOnglet==="pertes") {
     if(!isAdmin){
       contenu='<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:14px;padding:24px;text-align:center;">'
@@ -4614,7 +4986,7 @@ function bilanFinancier(onglet) {
     +'<div style="display:flex;gap:6px;align-items:center;">'+exportBtn
     +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;color:#3d5c48;">✕</button>'
     +'</div></div>'
-    + ongletsHtml + kpiHtml + contenu
+    + ongletsHtml + (bilanOnglet==="sig"||bilanOnglet==="budget"?"":kpiHtml) + contenu
   );
 }
 

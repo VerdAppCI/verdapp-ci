@@ -1020,16 +1020,18 @@ async function syncAll(silent=false){
   const btn = getEl("syncBtn");
   if(!silent && btn){ btn.innerHTML='<span class="spinner"></span>'; btn.disabled=true; }
   try{
-    const [a,v,d,p,cp]=await Promise.all([
+    const [a,v,d,p,cp,jc]=await Promise.all([
       sbGet("achats"),sbGet("ventes"),sbGet("demandes"),
       sbFetch(`/rest/v1/produits?order=nom.asc`).then(r=>r.json()),
-      sbFetch(`/rest/v1/commissions_paiements?order=created_at.desc`).then(r=>r.ok?r.json():[]).catch(()=>[])
+      sbFetch(`/rest/v1/commissions_paiements?order=created_at.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
+      sbFetch(`/rest/v1/journal_comptable?order=date.asc`).then(r=>r.ok?r.json():[]).catch(()=>[])
     ]);
     achats=a||[]; localStorage.setItem("va_achats",JSON.stringify(achats));
     ventes=v||[]; localStorage.setItem("va_ventes",JSON.stringify(ventes));
     demandes=d||[]; localStorage.setItem("va_demandes",JSON.stringify(demandes));
     if(p&&p.length){produits=p; localStorage.setItem("va_produits",JSON.stringify(p));}
     commissionsPaiements=cp||[]; localStorage.setItem("va_commissions_paiements",JSON.stringify(commissionsPaiements));
+    if(jc&&jc.length){journalComptable=jc; saveJournalComptable();}
     updateDemandesBadge();
     render();
     if(!silent) showToast("✓ Synchronisé");
@@ -2138,6 +2140,326 @@ function voirHistoriquePaiementsCommission(nom) {
     +'</div>'
     +(paiements.length ? lignes : '<div style="text-align:center;padding:24px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;">Aucun paiement enregistré.</div>')
   );
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE JOURNAL COMPTABLE — Plan de comptes SYSCOHADA (OHADA révisé)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Chaque opération métier (achat reçu, vente, perte, paiement de commission)
+// génère automatiquement une ou plusieurs écritures comptables (débit/crédit)
+// dans la table journal_comptable. Réservé à l'admin/super-admin (RLS).
+//
+// Plan de comptes retenu pour VerdApp CI :
+//   101  Capital
+//   311  Marchandises en stock (valorisées FIFO)
+//   401  Fournisseurs
+//   411  Clients
+//   421  Personnel — rémunérations dues (commissions)
+//   571  Caisse / Mobile Money
+//   601  Achats de marchandises
+//   6011 Frais accessoires d'achat (transport, droit de terre, charrette)
+//   641  Commissions versées au personnel terrain
+//   658  Charges diverses — pertes sur stocks
+//   701  Ventes de marchandises
+
+const PLAN_COMPTES = {
+  "101":  "Capital",
+  "311":  "Marchandises en stock",
+  "401":  "Fournisseurs",
+  "411":  "Clients",
+  "421":  "Personnel — rémunérations dues",
+  "571":  "Caisse / Mobile Money",
+  "601":  "Achats de marchandises",
+  "6011": "Frais accessoires d'achat",
+  "641":  "Commissions versées",
+  "658":  "Pertes sur stocks",
+  "701":  "Ventes de marchandises",
+};
+
+let journalComptable = JSON.parse(localStorage.getItem("va_journal_comptable")||"[]");
+
+function saveJournalComptable(){
+  localStorage.setItem("va_journal_comptable", JSON.stringify(journalComptable));
+}
+
+/**
+ * Crée une écriture comptable (objet) prêt à insérer.
+ */
+function ecriture(date, typeOperation, reference, libelle, compteDebit, compteCredit, montant){
+  return {
+    id: genId(),
+    date,
+    type_operation: typeOperation,
+    reference: reference||null,
+    libelle,
+    compte_debit: compteDebit,
+    compte_debit_libelle: PLAN_COMPTES[compteDebit]||compteDebit,
+    compte_credit: compteCredit,
+    compte_credit_libelle: PLAN_COMPTES[compteCredit]||compteCredit,
+    montant: Math.round(montant*100)/100,
+    enregistre_par: currentUser?.nom || "Système",
+  };
+}
+
+/**
+ * Écriture(s) pour un achat reçu :
+ *  - 601/6011 Achats (+frais accessoires) au débit, 401 Fournisseurs au crédit,
+ *    pour la part non encore réglée (avance_paye déduite)
+ *  - si avance payée : 601 au débit, 571 Caisse au crédit, pour l'avance
+ */
+function ecrituresAchat(a){
+  const ecr = [];
+  const date = a.date_reception || a.date;
+  const montantHT = montantAchat(a);
+  const frais = fraisAchat(a);
+  const avance = a.avance_paye||0;
+  const libelleBase = a.produit+' — '+a.fournisseur+' ('+a.quantite+' u.)';
+
+  if(montantHT>0){
+    const detteFournisseur = Math.max(0, montantHT - avance);
+    if(detteFournisseur>0){
+      ecr.push(ecriture(date,"achat",a.id,"Achat "+libelleBase+" (à crédit)","601","401",detteFournisseur));
+    }
+    if(avance>0){
+      const avanceMarchandise = Math.min(avance, montantHT);
+      ecr.push(ecriture(date,"achat",a.id,"Achat "+libelleBase+" (avance versée)","601","571",avanceMarchandise));
+    }
+  }
+  if(frais>0){
+    ecr.push(ecriture(date,"achat",a.id,"Frais accessoires — "+libelleBase,"6011","571",frais));
+  }
+  return ecr;
+}
+
+/**
+ * Écriture pour une vente :
+ *  701 Ventes au crédit, 411 Clients (ou 571 Caisse si encaissée — non distingué
+ *  pour l'instant, l'app ne suit pas le mode de règlement client) au débit.
+ */
+function ecrituresVente(v){
+  const montant = montantVente(v);
+  if(montant<=0) return [];
+  const libelle = "Vente "+v.produit+" ("+v.quantite+" u.) — "+v.date;
+  return [ecriture(v.date,"vente",v.id,libelle,"411","701",montant)];
+}
+
+/**
+ * Écriture pour une perte constatée :
+ *  658 Pertes sur stocks au débit, 311 Stocks au crédit.
+ */
+function ecrituresPerte(p){
+  if(!p.valeur_perte) return [];
+  const libelle = "Perte "+p.produit+" — "+p.qte_perte+" u. ("+(p.fournisseur||"")+")";
+  return [ecriture(p.date,"perte",p.id,libelle,"658","311",p.valeur_perte)];
+}
+
+/**
+ * Écriture(s) pour un paiement de commission :
+ *  - constatation de la charge due : 641 Commissions au débit, 421 Personnel au crédit
+ *  - paiement effectif : 421 Personnel au débit, 571 Caisse au crédit
+ * Les deux écritures sont générées ensemble car l'app n'enregistre que le paiement
+ * (pas la charge à payer séparément) — simplification documentée.
+ */
+function ecrituresCommission(c){
+  if(!c.montant) return [];
+  const libelle = "Commission "+(c.utilisateur||"")+" — "+(c.date||"");
+  const montantDu = c.montant_du||c.montant;
+  const ecr = [];
+  if(montantDu>0){
+    ecr.push(ecriture(c.date,"commission",c.id,"Charge commission due — "+libelle,"641","421",montantDu));
+  }
+  ecr.push(ecriture(c.date,"commission",c.id,"Paiement commission — "+libelle,"421","571",c.montant));
+  return ecr;
+}
+
+/**
+ * Écriture d'ouverture du capital (101 Capital / 571 Caisse), à générer une
+ * seule fois lors de la régénération rétroactive.
+ */
+function ecritureOuvertureCapital(montant, date){
+  return [ecriture(date,"ouverture",null,"Apport initial — fond de commerce","571","101",montant)];
+}
+
+/**
+ * Régénère intégralement le journal comptable à partir des données actuelles
+ * (achats reçus, ventes, pertes, paiements de commission) + écriture
+ * d'ouverture du capital. Remplace le journal existant (idempotent).
+ *
+ * Appelée depuis l'écran Journal comptable par l'admin.
+ */
+async function regenererJournalComptable(capitalOuverture){
+  const nouvelles = [];
+
+  // Date d'ouverture = date du plus ancien achat (ou aujourd'hui si aucun)
+  const toutesDates = [
+    ...achats.map(a=>a.date_reception||a.date),
+    ...ventes.map(v=>v.date),
+  ].filter(Boolean).sort();
+  const dateOuverture = toutesDates[0] || new Date().toISOString().slice(0,10);
+
+  if(capitalOuverture>0){
+    nouvelles.push(...ecritureOuvertureCapital(capitalOuverture, dateOuverture));
+  }
+
+  achats.filter(a=>a.statut==="recu").forEach(a=>{
+    nouvelles.push(...ecrituresAchat(a));
+  });
+
+  ventes.forEach(v=>{
+    nouvelles.push(...ecrituresVente(v));
+  });
+
+  pertesLots.forEach(p=>{
+    nouvelles.push(...ecrituresPerte(p));
+  });
+
+  commissionsPaiements.forEach(c=>{
+    nouvelles.push(...ecrituresCommission(c));
+  });
+
+  // Tri chronologique
+  nouvelles.sort((x,y)=> (x.date||"").localeCompare(y.date||""));
+
+  // Remplacement local immédiat
+  journalComptable = nouvelles;
+  saveJournalComptable();
+
+  // Synchronisation Supabase : on vide la table puis on réinsère.
+  try {
+    // Supprime toutes les écritures existantes (id non vide → toujours vrai)
+    await sbFetch(`/rest/v1/journal_comptable?id=neq.__none__`, {method:"DELETE"});
+    // Insertion par lots de 200 pour éviter les requêtes trop grosses
+    const CHUNK=200;
+    for(let i=0;i<nouvelles.length;i+=CHUNK){
+      await sbFetch(`/rest/v1/journal_comptable`, {
+        method:"POST",
+        body: JSON.stringify(nouvelles.slice(i,i+CHUNK))
+      });
+    }
+  } catch(e) {
+    console.warn("Sync journal_comptable a échoué, conservé en local seulement:", e.message);
+  }
+
+  return nouvelles.length;
+}
+
+/**
+ * Écran Journal comptable (modal) : liste chronologique, filtrable par compte,
+ * avec total débit/crédit par compte (balance simplifiée) et export CSV.
+ */
+function voirJournalComptable(){
+  if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
+
+  const lignes = journalComptable.slice().sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+
+  // Balance simplifiée par compte (somme débits / somme crédits)
+  const balance = {};
+  lignes.forEach(e=>{
+    balance[e.compte_debit] = balance[e.compte_debit] || {libelle:e.compte_debit_libelle, debit:0, credit:0};
+    balance[e.compte_debit].debit += e.montant;
+    balance[e.compte_credit] = balance[e.compte_credit] || {libelle:e.compte_credit_libelle, debit:0, credit:0};
+    balance[e.compte_credit].credit += e.montant;
+  });
+  const balanceHtml = Object.entries(balance)
+    .sort((a,b)=>a[0].localeCompare(b[0]))
+    .map(([compte,b])=>{
+      const solde = b.debit - b.credit;
+      return '<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f1f5f2;font-size:11px;">'
+        +'<div><span style="font-weight:800;color:#0f1f16;">'+compte+'</span> <span style="color:#6b8c7a;">'+b.libelle+'</span></div>'
+        +'<div style="text-align:right;"><span style="color:#166534;">D '+fmt(b.debit)+'</span> · <span style="color:#dc2626;">C '+fmt(b.credit)+'</span> · <span style="font-weight:800;color:'+(solde>=0?'#166534':'#dc2626')+';">'+(solde>=0?'+':'')+fmt(solde)+'</span></div>'
+      +'</div>';
+    }).join('');
+
+  const lignesHtml = lignes.slice(0,200).map(e=>
+    '<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:#fff;border:1px solid #e4ede7;border-radius:8px;margin-bottom:4px;font-size:11px;">'
+      +'<div style="flex:1;">'
+        +'<div style="font-weight:700;color:#0f1f16;">'+e.libelle+'</div>'
+        +'<div style="font-size:9px;color:#6b8c7a;">'+e.date+' · '+e.type_operation+'</div>'
+      +'</div>'
+      +'<div style="text-align:right;flex-shrink:0;margin-left:8px;">'
+        +'<div style="font-size:10px;"><span style="color:#166534;font-weight:700;">D '+e.compte_debit+'</span> → <span style="color:#dc2626;font-weight:700;">C '+e.compte_credit+'</span></div>'
+        +'<div style="font-weight:900;color:#0f1f16;">'+fmt(e.montant)+' F</div>'
+      +'</div>'
+    +'</div>'
+  ).join('');
+
+  showModal(
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
+    +'<div>'
+      +'<div style="font-size:17px;font-weight:800;color:#0f1f16;">📒 Journal comptable</div>'
+      +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">'+lignes.length+' écriture'+(lignes.length>1?'s':'')+' · Plan SYSCOHADA</div>'
+    +'</div>'
+    +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+    +'</div>'
+
+    +'<div style="display:flex;gap:8px;margin-bottom:12px;">'
+      +'<button onclick="modalRegenererJournal()" style="flex:1;background:#0d3d1a;color:#fff;border:none;border-radius:10px;padding:9px;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;">↻ Régénérer le journal</button>'
+      +'<button onclick="exporterJournalCSV()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">⬇ CSV</button>'
+    +'</div>'
+
+    +(lignes.length ? (
+      '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Balance par compte</div>'
+      +'<div style="background:#f8faf8;border:1.5px solid #e4ede7;border-radius:10px;padding:8px 10px;margin-bottom:14px;">'+balanceHtml+'</div>'
+      +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Écritures (les 200 plus récentes)</div>'
+      +lignesHtml
+    ) : '<div style="text-align:center;padding:24px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;">'
+        +'Aucune écriture. Cliquez sur « Régénérer le journal » pour le construire à partir des données existantes.</div>'
+    )
+  );
+}
+
+function modalRegenererJournal(){
+  showModal(
+    '<div style="font-size:16px;font-weight:800;color:#0f1f16;margin-bottom:10px;">↻ Régénérer le journal comptable</div>'
+    +'<div style="font-size:12px;color:#3d5c48;margin-bottom:14px;">'
+      +'Cette opération reconstruit l\'intégralité du journal à partir des achats reçus, ventes, pertes et paiements de commission actuels. Le journal existant sera remplacé.'
+    +'</div>'
+    +'<div style="margin-bottom:14px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Capital de départ (101) — écriture d\'ouverture</label>'
+      +'<input type="number" id="jc_capital" min="0" value="200000" '
+        +'style="width:100%;padding:12px;border:1.5px solid #e4ede7;border-radius:12px;font-size:16px;text-align:center;font-family:inherit;font-weight:700;"/>'
+      +'<div style="font-size:10px;color:#6b8c7a;margin-top:4px;">Mettre 0 pour ne pas générer d\'écriture d\'ouverture.</div>'
+    +'</div>'
+    +'<div id="jc_msg" style="display:none;margin-bottom:10px;font-size:12px;font-weight:700;text-align:center;"></div>'
+    +'<div style="display:flex;gap:10px;">'
+      +'<button onclick="lancerRegenerationJournal()" style="flex:1;padding:13px;background:#0d3d1a;color:#fff;border:none;border-radius:12px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">Régénérer</button>'
+      +'<button onclick="voirJournalComptable()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>'
+    +'</div>'
+  );
+}
+
+async function lancerRegenerationJournal(){
+  const capitalEl = document.getElementById("jc_capital");
+  const msg = document.getElementById("jc_msg");
+  const capital = parseFloat(capitalEl?.value)||0;
+
+  msg.style.cssText="display:block;color:#166534;"; msg.textContent="Génération en cours…";
+
+  try {
+    const n = await regenererJournalComptable(capital);
+    logAdminAction("REGEN_JOURNAL", n+" écritures générées");
+    showToast("✓ Journal régénéré : "+n+" écritures");
+    voirJournalComptable();
+  } catch(e) {
+    msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Erreur : "+e.message;
+  }
+}
+
+function exporterJournalCSV(){
+  if(!journalComptable.length){ showToast("Journal vide","error"); return; }
+  const header = "Date,Type,Reference,Libelle,Compte debit,Libelle debit,Compte credit,Libelle credit,Montant\n";
+  const rows = journalComptable.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||"")).map(e=>
+    [e.date,e.type_operation,e.reference||"",'"'+e.libelle.replace(/"/g,'""')+'"',e.compte_debit,'"'+e.compte_debit_libelle+'"',e.compte_credit,'"'+e.compte_credit_libelle+'"',e.montant]
+    .join(",")
+  ).join("\n");
+  const blob = new Blob([header+rows], {type:"text/csv;charset=utf-8;"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = "journal_comptable_verdapp.csv";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 
@@ -3253,6 +3575,7 @@ function renderParams(){
         <button onclick="voirCommissionAdmin()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:10px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;text-align:left;">💰 Commissions</button>
         <button onclick="voirJournalAdmin()" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:10px;padding:10px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;text-align:left;">🔐 Journal admin</button>
         <button onclick="verifierIntegriteDonnees()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#166534;border-radius:10px;padding:10px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;text-align:left;">🔍 Vérifier données</button>
+        <button onclick="voirJournalComptable()" style="background:#f5f3ff;border:1.5px solid #ddd6fe;color:#6d28d9;border-radius:10px;padding:10px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;text-align:left;">📒 Journal comptable</button>
       </div>
     </div>
 

@@ -235,8 +235,7 @@ select option{background:var(--white);color:var(--text);}
     <div style="display:flex;gap:8px;">
       <span id="dataStatus" style="font-size:9px;color:rgba(255,255,255,.35);font-weight:600;display:none;" title="Dernière synchronisation"></span>
       <button onclick="syncAll()" id="syncBtn" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);color:rgba(255,255,255,.8);padding:7px 14px;border-radius:10px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700;display:flex;align-items:center;gap:5px;">↻ Sync</button>
-      <button onclick="toggleAdmin()" id="adminBtn" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);color:rgba(255,255,255,.8);padding:7px 12px;border-radius:10px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700;">🔐</button>
-      <button onclick="deconnecterUtilisateur()" id="logoutBtn" style="display:none;background:rgba(220,38,38,.15);border:1px solid rgba(220,38,38,.3);color:#fca5a5;padding:7px 10px;border-radius:10px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700;" title="Se déconnecter">⏻</button>
+      <button onclick="logout()" id="logoutBtn" style="display:none;background:rgba(220,38,38,.15);border:1px solid rgba(220,38,38,.3);color:#fca5a5;padding:7px 10px;border-radius:10px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700;" title="Se déconnecter">⏻</button>
     </div>
   </div>
 </div>
@@ -316,91 +315,300 @@ select option{background:var(--white);color:var(--text);}
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 const SB_URL="https://rhlrlnmoitfrzqdcvuoq.supabase.co";
 const SB_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJobHJsbm1vaXRmcnpxZGN2dW9xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1Mjk0NTAsImV4cCI6MjA5NjEwNTQ1MH0.fIFPK8DbmY5bpaTel4_nv5eMF61MmvMUUNkXCdgrZlk";
-const HDR={"apikey":SB_KEY,"Authorization":"Bearer "+SB_KEY,"Content-Type":"application/json","Prefer":"return=representation"};
-// PIN par défaut obfusqué (ne jamais mettre en clair)
-const ADMIN_PIN_DEFAULT=atob("MDkwMg=="); // Fallback chiffré base64
 
-// ── SÉCURITÉ : Anti-brute force PIN ──────────────────────────────────────────
-const SEC = {
-  MAX_ATTEMPTS: 5,          // Tentatives max avant blocage
-  LOCK_DURATION: 5*60*1000, // 5 minutes de blocage
-  SESSION_DURATION: 30*60*1000, // Session admin expire après 30 min
-  attempts: parseInt(localStorage.getItem("va_sec_attempts")||"0"),
-  lockedUntil: parseInt(localStorage.getItem("va_sec_locked")||"0"),
-  sessionExpires: parseInt(localStorage.getItem("va_sec_session")||"0"),
-};
+// ============================================================
+// MODULE 2 — auth.js
+// Authentification VerdApp CI (PIN -> Edge Function -> JWT custom)
+//
+// Remplace : hashPin/verifyPin/migrerPinVersHash/SEC/secIsLocked/
+//            secRecordFail/secRecordSuccess/secCheckSession,
+//            ainsi que toute la logique de loginConfirmerPin()
+//            qui comparait pin_hash côté client.
+//
+// Expose globalement :
+//   - currentUser            {id, nom, role}  role ∈ {super_admin,admin,utilisateur}
+//   - isAdminLevel()          true si role === 'admin' ou 'super_admin'
+//   - isSuperAdmin()          true si role === 'super_admin'
+//   - sbFetch(path, options)  fetch authentifié vers PostgREST (remplace HDR)
+//   - sbStorageHeaders()      headers pour upload Storage
+//   - logout()
+//   - loginScreenInit() / loginSelectUser() / loginBackToList() / loginConfirmerPin()
+// ============================================================
 
-function secIsLocked(){
-  if(SEC.lockedUntil && Date.now() < SEC.lockedUntil) return true;
-  if(SEC.lockedUntil && Date.now() >= SEC.lockedUntil){
-    SEC.lockedUntil=0; SEC.attempts=0;
-    localStorage.removeItem("va_sec_locked");
-    localStorage.setItem("va_sec_attempts","0");
+const EDGE_FUNCTIONS_URL = SB_URL + "/functions/v1";
+const SESSION_KEY = "va_session"; // { token, exp, user:{id,nom,role} }
+
+let currentUser = null; // {id, nom, role}
+let isAdmin = false;     // synchronisé avec isAdminLevel() — conservé pour compat
+let usersCache = [];
+let loginSelectedUser = null;
+
+// ── Helpers de rôle ──────────────────────────────────────────────────────────
+function isAdminLevel() {
+  return currentUser?.role === "admin" || currentUser?.role === "super_admin";
+}
+function isSuperAdmin() {
+  return currentUser?.role === "super_admin";
+}
+function syncIsAdmin() {
+  isAdmin = isAdminLevel();
+}
+
+// ── Session (localStorage) ───────────────────────────────────────────────────
+function saveSession(token, expiresInSec, user) {
+  const exp = Date.now() + expiresInSec * 1000;
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ token, exp, user }));
+}
+
+function loadSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    if (!s.token || !s.exp || Date.now() > s.exp) {
+      localStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+    return s;
+  } catch {
+    localStorage.removeItem(SESSION_KEY);
+    return null;
   }
-  return false;
 }
 
-function secRecordFail(){
-  SEC.attempts++;
-  localStorage.setItem("va_sec_attempts", SEC.attempts);
-  if(SEC.attempts >= SEC.MAX_ATTEMPTS){
-    SEC.lockedUntil = Date.now() + SEC.LOCK_DURATION;
-    localStorage.setItem("va_sec_locked", SEC.lockedUntil);
-    return true; // bloqué
+function clearSession() {
+  localStorage.removeItem(SESSION_KEY);
+  currentUser = null;
+}
+
+function getToken() {
+  const s = loadSession();
+  return s ? s.token : null;
+}
+
+// ── Fetch authentifié vers PostgREST ─────────────────────────────────────────
+// Remplace l'ancien HDR. Utilise le JWT custom comme Authorization si présent,
+// sinon retombe sur la clé anon (utilisée seulement pour les lectures publiques
+// avant connexion, ex: liste des produits sur l'écran de login).
+function sbHeaders(extra = {}) {
+  const token = getToken();
+  return {
+    "apikey": SB_KEY,
+    "Authorization": "Bearer " + (token || SB_KEY),
+    "Content-Type": "application/json",
+    "Prefer": "return=representation",
+    ...extra,
+  };
+}
+
+async function sbFetch(path, options = {}) {
+  const headers = { ...sbHeaders(), ...(options.headers || {}) };
+  const r = await fetch(SB_URL + path, { ...options, headers });
+  if (r.status === 401) {
+    // JWT expiré / invalide -> forcer reconnexion
+    clearSession();
+    showToast("⏱ Session expirée — reconnectez-vous", "warn");
+    showLoginScreen();
   }
-  return false;
+  return r;
 }
 
-function secRecordSuccess(){
-  SEC.attempts=0; SEC.lockedUntil=0;
-  SEC.sessionExpires = Date.now() + SEC.SESSION_DURATION;
-  localStorage.setItem("va_sec_attempts","0");
-  localStorage.removeItem("va_sec_locked");
-  localStorage.setItem("va_sec_session", SEC.sessionExpires);
+function sbStorageHeaders(contentType) {
+  const token = getToken();
+  return {
+    "apikey": SB_KEY,
+    "Authorization": "Bearer " + (token || SB_KEY),
+    "Content-Type": contentType,
+  };
 }
 
-function secCheckSession(){
-  const exp = parseInt(localStorage.getItem("va_sec_session")||"0");
-  if(exp && Date.now() > exp){
-    isAdmin=false;
-    localStorage.removeItem("va_sec_session");
-    showToast("⏱ Session admin expirée — reconnectez-vous","warn");
+// ── Vérification d'expiration périodique ────────────────────────────────────
+function checkSessionExpiry() {
+  const s = loadSession();
+  if (!s) {
+    if (currentUser) {
+      currentUser = null;
+      syncIsAdmin();
+      showToast("⏱ Session admin expirée — reconnectez-vous", "warn");
+      showLoginScreen();
+    }
+  }
+}
+setInterval(checkSessionExpiry, 60000);
+
+// ── Écran de connexion ────────────────────────────────────────────────────────
+function showLoginScreen() {
+  const el = document.getElementById("loginScreen");
+  if (el) el.style.display = "flex";
+  if (typeof syncLogos === "function") syncLogos();
+  loginBackToList();
+  loadUserListForLogin();
+}
+
+function hideLoginScreen() {
+  const el = document.getElementById("loginScreen");
+  if (el) el.style.display = "none";
+  if (typeof syncLogos === "function") syncLogos();
+  if (typeof afficherApp === "function") afficherApp();
+}
+
+// Charge la liste des utilisateurs depuis la VUE utilisateurs_public
+// (jamais pin_hash). Lecture publique (anon) — pas besoin de JWT ici.
+async function loadUserListForLogin() {
+  const container = document.getElementById("userList");
+  if (!container) return;
+  container.innerHTML = '<div style="text-align:center;padding:20px;color:rgba(255,255,255,.4);font-size:12px;">Chargement...</div>';
+  try {
+    const r = await fetch(SB_URL + "/rest/v1/utilisateurs_public?order=nom.asc&actif=eq.true", {
+      headers: { "apikey": SB_KEY, "Authorization": "Bearer " + SB_KEY },
+    });
+    if (!r.ok) throw new Error(await r.text());
+    usersCache = await r.json();
+    if (!usersCache.length) {
+      container.innerHTML = '<div style="text-align:center;padding:20px;color:rgba(255,255,255,.4);font-size:12px;">Aucun utilisateur actif.</div>';
+      return;
+    }
+    container.innerHTML = usersCache.map(u => {
+      const col = avatarColor(u.nom);
+      const roleLabel = u.role === "super_admin" ? "Super-administrateur"
+                       : u.role === "admin" ? "Administrateur"
+                       : "Utilisateur";
+      return '<button onclick="loginSelectUser(\'' + u.id + '\')" style="display:flex;align-items:center;gap:12px;padding:14px;background:rgba(255,255,255,.04);border:1.5px solid rgba(255,255,255,.08);border-radius:14px;cursor:pointer;width:100%;font-family:inherit;">'
+        + '<div style="width:40px;height:40px;border-radius:999px;background:' + col + ';display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:900;color:#fff;flex-shrink:0;">' + escapeHtml(u.nom.charAt(0).toUpperCase()) + '</div>'
+        + '<div style="text-align:left;">'
+          + '<div style="font-weight:700;color:#fff;font-size:14px;">' + escapeHtml(u.nom) + '</div>'
+          + '<div style="font-size:11px;color:rgba(255,255,255,.4);">' + roleLabel + '</div>'
+        + '</div>'
+        + '<div style="margin-left:auto;color:rgba(244,120,6);font-size:18px;">›</div>'
+        + '</button>';
+    }).join("");
+  } catch (e) {
+    container.innerHTML = '<div style="text-align:center;padding:20px;color:#fca5a5;font-size:12px;">Erreur de connexion au serveur.<br>' + escapeHtml(errMsg(e)) + '</div>';
+  }
+}
+
+function loginSelectUser(id) {
+  loginSelectedUser = usersCache.find(u => u.id === id);
+  if (!loginSelectedUser) return;
+  document.getElementById("loginStep1").style.display = "none";
+  document.getElementById("loginStep2").style.display = "block";
+  const col = avatarColor(loginSelectedUser.nom);
+  document.getElementById("loginAvatar").style.background = col;
+  document.getElementById("loginAvatar").textContent = loginSelectedUser.nom.charAt(0).toUpperCase();
+  document.getElementById("loginNameLabel").textContent = loginSelectedUser.nom;
+  document.getElementById("loginRoleLabel").textContent =
+    loginSelectedUser.role === "super_admin" ? "Super-administrateur"
+    : loginSelectedUser.role === "admin" ? "Administrateur"
+    : "Utilisateur";
+  document.getElementById("loginPinInput").value = "";
+  document.getElementById("loginPinError").style.display = "none";
+  setTimeout(() => document.getElementById("loginPinInput")?.focus(), 200);
+}
+
+function loginBackToList() {
+  loginSelectedUser = null;
+  const step1 = document.getElementById("loginStep1");
+  const step2 = document.getElementById("loginStep2");
+  if (step1) step1.style.display = "block";
+  if (step2) step2.style.display = "none";
+  const err = document.getElementById("loginPinError");
+  if (err) err.style.display = "none";
+}
+
+// ── Connexion : appelle l'Edge Function /login ───────────────────────────────
+async function loginConfirmerPin() {
+  if (!loginSelectedUser) return;
+  const pin = document.getElementById("loginPinInput").value;
+  if (!pin) return;
+
+  const pinError = document.getElementById("loginPinError");
+  const btn = document.querySelector('#loginStep2 button[onclick="loginConfirmerPin()"]');
+  if (btn) btn.disabled = true;
+  pinError.style.display = "none";
+
+  try {
+    const r = await fetch(EDGE_FUNCTIONS_URL + "/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": "Bearer " + SB_KEY },
+      body: JSON.stringify({ userId: loginSelectedUser.id, pin }),
+    });
+    const data = await r.json();
+
+    if (!r.ok) {
+      pinError.textContent = data.message || "Code incorrect.";
+      pinError.style.display = "block";
+      document.getElementById("loginPinInput").value = "";
+      if (btn) btn.disabled = false;
+      return;
+    }
+
+    saveSession(data.token, data.expires_in, data.user);
+    currentUser = data.user;
+    syncIsAdmin();
+    logAdminAction("LOGIN", "Connexion : " + currentUser.nom + " (" + currentUser.role + ")");
+    hideLoginScreen();
+    await syncAll();
+    applyRoleVisibility();
     render();
-    return false;
+    showToast("✓ Bienvenue, " + currentUser.nom);
+  } catch (e) {
+    pinError.textContent = "Erreur de connexion au serveur.";
+    pinError.style.display = "block";
+  } finally {
+    if (btn) btn.disabled = false;
   }
-  // Renouveler la session si active
-  if(exp && isAdmin){
-    SEC.sessionExpires = Date.now() + SEC.SESSION_DURATION;
-    localStorage.setItem("va_sec_session", SEC.sessionExpires);
-  }
-  return true;
 }
 
-// Vérification session toutes les 60 secondes
-setInterval(()=>{ if(isAdmin) secCheckSession(); }, 60000);
+// ── Déconnexion ───────────────────────────────────────────────────────────────
+function logout() {
+  if (currentUser) logAdminAction("LOGOUT", "Déconnexion : " + currentUser.nom);
+  clearSession();
+  currentUser = null;
+  syncIsAdmin();
+  showLoginScreen();
+}
 
-// ── HASHAGE PIN (SHA-256 via Web Crypto API) ─────────────────────────────────
+// ── Visibilité UI selon rôle ───────────────────────────────────────────────
+// Délègue à appliquerRestrictionsRole() (définie dans index.html), qui gère
+// déjà data-role + redirection d'onglet si l'onglet courant est interdit.
+function applyRoleVisibility() {
+  if (typeof appliquerRestrictionsRole === "function") appliquerRestrictionsRole();
+}
+
+// ── Démarrage : restaurer la session si valide, sinon écran de connexion ─────
+async function demarrerApp() {
+  const s = loadSession();
+  if (s) {
+    currentUser = s.user;
+    syncIsAdmin();
+    hideLoginScreen();
+    await syncAll();
+    applyRoleVisibility();
+    render();
+  } else {
+    showLoginScreen();
+  }
+}
+
+
+// ── escapeHtml : protection XSS pour toute donnée utilisateur injectée via innerHTML ──
+function escapeHtml(str) {
+  if (str === null || str === undefined) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+// ── hashPin : SHA-256(pin + sel), identique à l'algorithme de l'Edge Function /login.
+//    Utilisé uniquement côté admin pour hasher un nouveau PIN avant stockage
+//    (jamais pour la vérification — celle-ci se fait côté serveur).
 async function hashPin(pin){
   const enc = new TextEncoder().encode(pin + "verdapp_salt_ci_2026");
   const buf = await crypto.subtle.digest("SHA-256", enc);
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
-}
-
-async function verifyPin(saisie, stocke){
-  // stocke peut être hash SHA-256 ou PIN brut (rétrocompatibilité)
-  if(stocke.length === 64){ // c'est un hash
-    const h = await hashPin(saisie);
-    return h === stocke;
-  }
-  return saisie === stocke; // fallback PIN brut
-}
-
-async function migrerPinVersHash(){
-  const pinBrut = localStorage.getItem("va_admin_pin");
-  if(pinBrut && pinBrut.length < 64){
-    const h = await hashPin(pinBrut);
-    localStorage.setItem("va_admin_pin", h);
-  }
 }
 
 const UNITES=["Sac","Kg","Caisse","Carton","Botte","Filet"];
@@ -414,8 +622,7 @@ let pertes=JSON.parse(localStorage.getItem("va_pertes")||"{}");
 let demandes=JSON.parse(localStorage.getItem("va_demandes")||"[]");
 let notifications=JSON.parse(localStorage.getItem("va_notifs")||"[]");
 let produits=JSON.parse(localStorage.getItem("va_produits")||"[]");
-let isAdmin=false;
-let currentUser=null; // {id, nom, role, actif} — utilisateur connecté
+// isAdmin et currentUser sont déclarés dans auth.js (Module 2)
 let filterAchats="tous";
 // Priorité moyenne — état
 let reglements=JSON.parse(localStorage.getItem("va_reglements")||"[]"); // {id,fournisseur,montant,date,note}
@@ -762,26 +969,25 @@ function showToast(msg,type="ok"){
 
 // ─── SUPABASE ────────────────────────────────────────────────────────────────
 async function sbGet(table,params=""){
-  const r=await fetch(`${SB_URL}/rest/v1/${table}?order=created_at.desc${params}`,{headers:HDR});
+  const r=await sbFetch(`/rest/v1/${table}?order=created_at.desc${params}`);
   if(!r.ok) throw new Error(await r.text());
   return r.json();
 }
 async function sbInsert(table,data){
-  const r=await fetch(`${SB_URL}/rest/v1/${table}`,{method:"POST",headers:HDR,body:JSON.stringify(data)});
+  const r=await sbFetch(`/rest/v1/${table}`,{method:"POST",body:JSON.stringify(data)});
   if(!r.ok) throw new Error(await r.text());
   return r.json();
 }
 async function sbUpdate(table,id,data){
-  const r=await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${id}`,{method:"PATCH",headers:HDR,body:JSON.stringify(data)});
+  const r=await sbFetch(`/rest/v1/${table}?id=eq.${id}`,{method:"PATCH",body:JSON.stringify(data)});
   if(!r.ok) throw new Error(await r.text());
 }
 async function sbDelete(table,id){
-  const r=await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${id}`,{method:"DELETE",headers:HDR});
+  const r=await sbFetch(`/rest/v1/${table}?id=eq.${id}`,{method:"DELETE"});
   if(!r.ok) throw new Error(await r.text());
 }
 async function sbUpsert(table,data){
-  const h={...HDR,"Prefer":"resolution=merge-duplicates,return=representation"};
-  const r=await fetch(`${SB_URL}/rest/v1/${table}`,{method:"POST",headers:h,body:JSON.stringify(data)});
+  const r=await sbFetch(`/rest/v1/${table}`,{method:"POST",headers:{"Prefer":"resolution=merge-duplicates,return=representation"},body:JSON.stringify(data)});
   if(!r.ok) throw new Error(await r.text());
 }
 
@@ -789,23 +995,14 @@ async function syncAll(silent=false){
   const btn = getEl("syncBtn");
   if(!silent && btn){ btn.innerHTML='<span class="spinner"></span>'; btn.disabled=true; }
   try{
-    const [a,v,d,p,cfg]=await Promise.all([
+    const [a,v,d,p]=await Promise.all([
       sbGet("achats"),sbGet("ventes"),sbGet("demandes"),
-      fetch(`${SB_URL}/rest/v1/produits?order=nom.asc`,{headers:HDR}).then(r=>r.json()),
-      fetch(`${SB_URL}/rest/v1/config?cle=eq.admin_pin`,{headers:HDR}).then(r=>r.json())
+      sbFetch(`/rest/v1/produits?order=nom.asc`).then(r=>r.json())
     ]);
     achats=a||[]; localStorage.setItem("va_achats",JSON.stringify(achats));
     ventes=v||[]; localStorage.setItem("va_ventes",JSON.stringify(ventes));
     demandes=d||[]; localStorage.setItem("va_demandes",JSON.stringify(demandes));
     if(p&&p.length){produits=p; localStorage.setItem("va_produits",JSON.stringify(p));}
-    if(cfg&&cfg.length){
-      const pinVal = cfg[0].valeur;
-      if(pinVal && pinVal.length < 64){
-        hashPin(pinVal).then(h => localStorage.setItem("va_admin_pin", h));
-      } else {
-        localStorage.setItem("va_admin_pin", pinVal);
-      }
-    }
     updateDemandesBadge();
     render();
     if(!silent) showToast("✓ Synchronisé");
@@ -819,70 +1016,6 @@ async function syncAll(silent=false){
     if(ds){ ds.textContent="⚠ Hors-ligne"; ds.style.color="#fca5a5"; ds.title="Synchronisation impossible — données en cache"; }
   }
   if(!silent && btn){ btn.innerHTML="↻ Sync"; btn.disabled=false; }
-}
-
-// ─── ADMIN ───────────────────────────────────────────────────────────────────
-function toggleAdmin(){
-  // Le mode admin n'est plus accessible via ce bouton — géré par le compte utilisateur
-  if(currentUser?.role !== "admin") {
-    showToast("Accès réservé aux administrateurs","error");
-    return;
-  }
-  if(isAdmin){
-    logAdminAction("LOGOUT","Déconnexion admin");
-    isAdmin=false;
-    getEl("modeLabel").textContent="Gestion Grossiste Légumes";
-    getEl("modeLabel").style.color="rgba(255,255,255,.45)";
-    getEl("adminBtn").style.background="rgba(255,255,255,.1)";
-    getEl("adminBtn").style.color="rgba(255,255,255,.8)";
-    showToast("Mode utilisateur activé");
-    render();
-  } else {
-    showModal(`
-      <div style="font-weight:900;font-size:16px;color:#0f1f16;margin-bottom:4px;">🔐 Mode Admin</div>
-      <div style="font-size:12px;color:#3d5c48;margin-bottom:16px;">Entre le code administrateur</div>
-      <label class="label">Code PIN</label>
-      <input type="password" id="pinInput" placeholder="••••" inputmode="numeric" maxlength="8" style="margin-bottom:12px;font-size:20px;text-align:center;letter-spacing:.5em;"/>
-      <button class="btn btn-green" onclick="verifyPin()">Accéder</button>
-      <button class="btn btn-ghost" style="margin-top:8px;" onclick="closeModal()">Annuler</button>
-    `);
-    setTimeout(()=>document.getElementById("pinInput")?.focus(),200);
-  }
-}
-
-async function verifyPin(){
-  const val=document.getElementById("pinInput").value;
-  // Vérification sécurisée avec anti-brute force
-  if(secIsLocked()){
-    const restant = Math.ceil((SEC.lockedUntil-Date.now())/60000);
-    showToast(`🔒 Trop de tentatives. Réessayez dans ${restant} min.`,"error");
-    document.getElementById("adminPinInput") && (document.getElementById("adminPinInput").value="");
-    return;
-  }
-  const pinBrut = localStorage.getItem("va_admin_pin");
-  const pinStocke = pinBrut || await hashPin(ADMIN_PIN_DEFAULT);
-  const h = await hashPin(val);
-  const ok = (pinStocke.length === 64) ? h === pinStocke : val === pinStocke;
-  if(ok){
-    secRecordSuccess();
-    isAdmin=true;
-    closeModal();
-    logAdminAction("LOGIN", "Connexion admin réussie");
-    getEl("modeLabel").textContent="Mode Admin ✓";
-    getEl("modeLabel").style.color="#f47820";
-    getEl("adminBtn").style.background="rgba(244,120,32,.2)";
-    getEl("adminBtn").style.color="#f47820";
-    showToast("✓ Mode Admin activé");
-    render();
-  } else {
-    const bloque = secRecordFail();
-    if(bloque){
-      showToast(`🔒 Compte bloqué 5 min après trop de tentatives`,"error");
-    } else {
-      showToast(`Code incorrect (${SEC.MAX_ATTEMPTS - SEC.attempts} essai${SEC.MAX_ATTEMPTS - SEC.attempts > 1 ? "s" : ""} restant)`,"error");
-    }
-    document.getElementById("pinInput").value="";
-  }
 }
 
 // ─── MODAL ───────────────────────────────────────────────────────────────────
@@ -1274,13 +1407,13 @@ async function updatePerte(produit,val){
 // Utilisateur → Achats terrain + Accusé de réception + Chat uniquement
 // ════════════════════════════════════════════════════════════════════════════
 function tabsAutorisés(){
-  return (isAdmin || currentUser?.role==="admin")
+  return isAdminLevel()
     ? ["dashboard","achats","ventes","stock","demandes","chat","params"]
     : ["achats","chat"];
 }
 
 function appliquerRestrictionsRole(){
-  const admin = isAdmin || currentUser?.role === "admin";
+  const admin = isAdminLevel();
   document.querySelectorAll("[data-role]").forEach(btn=>{
     btn.style.display = btn.getAttribute("data-role")==="admin" ? (admin?"":"none") : "";
   });
@@ -2732,7 +2865,6 @@ function renderParams(){
   let html=`
     <div class="label" style="margin-bottom:12px;">⚙ Gestion des produits</div>
     <button class="btn btn-green" onclick="showAddProduit()" style="margin-bottom:10px;">+ Ajouter un produit</button>
-    <button class="btn btn-ghost" onclick="showChangePIN()" style="margin-bottom:10px;">🔑 Changer le code PIN admin</button>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
       <button onclick="renderGestionUtilisateurs()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">👥 Gérer les utilisateurs</button>
       <button onclick="voirCommissionAdmin()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;display:flex;align-items:center;gap:6px;">💰 Commissions équipe</button>
@@ -2744,46 +2876,7 @@ function renderParams(){
   renderListeProduits();
 }
 
-function showChangePIN(){
-  showModal(`
-    <div style="font-weight:900;font-size:15px;color:#0f1f16;margin-bottom:4px;">🔑 Changer le code PIN</div>
-    <div style="font-size:12px;color:#3d5c48;margin-bottom:16px;">Le nouveau code sera sauvegardé sur cet appareil.</div>
-    <label class="label">Code actuel</label>
-    <input type="password" id="pin_actuel" placeholder="••••" inputmode="numeric" maxlength="8" style="margin-bottom:12px;font-size:18px;text-align:center;letter-spacing:.4em;"/>
-    <label class="label">Nouveau code *</label>
-    <input type="password" id="pin_nouveau" placeholder="••••" inputmode="numeric" maxlength="8" style="margin-bottom:12px;font-size:18px;text-align:center;letter-spacing:.4em;"/>
-    <label class="label">Confirmer le nouveau code *</label>
-    <input type="password" id="pin_confirm" placeholder="••••" inputmode="numeric" maxlength="8" style="margin-bottom:16px;font-size:18px;text-align:center;letter-spacing:.4em;"/>
-    <button class="btn btn-green" onclick="sauvegarderPIN()">Sauvegarder</button>
-    <button class="btn btn-ghost" style="margin-top:8px;" onclick="closeModal()">Annuler</button>
-  `);
-  setTimeout(()=>document.getElementById("pin_actuel")?.focus(),200);
-}
-
-async function sauvegarderPIN(){
-  const actuel=document.getElementById("pin_actuel").value;
-  const nouveau=document.getElementById("pin_nouveau").value;
-  const confirme=document.getElementById("pin_confirm").value;
-  const pinCourant=localStorage.getItem("va_admin_pin") || await hashPin(ADMIN_PIN_DEFAULT);
-  if(actuel!==pinCourant) return showToast("Code actuel incorrect","error");
-  if(!nouveau||nouveau.length<4) return showToast("Le nouveau code doit avoir au moins 4 caractères","error");
-  if(nouveau!==confirme) return showToast("Les deux codes ne correspondent pas","error");
-  try{
-    // Sauvegarde dans Supabase
-    const h={...HDR,"Prefer":"resolution=merge-duplicates,return=representation"};
-    const r=await fetch(`${SB_URL}/rest/v1/config`,{
-      method:"POST", headers:h,
-      body:JSON.stringify({cle:"admin_pin",valeur:nouveau,updated_at:new Date().toISOString()})
-    });
-    if(!r.ok) throw new Error(await r.text());
-    // Sauvegarde locale
-    const nouveauHash = await hashPin(nouveau);
-    localStorage.setItem("va_admin_pin", nouveauHash);
-    logAdminAction("CHANGEMENT_PIN","Code PIN admin modifié");
-    closeModal();
-    showToast("✓ Code PIN modifié pour tous les appareils");
-  }catch(e){showToast("Erreur : "+e.message,"error");}
-}
+// (Le changement de PIN se fait désormais via "Gérer les utilisateurs" — modification du PIN par compte)
 
 function renderListeProduits(){
   const el=document.getElementById("listeProduits");
@@ -2886,33 +2979,33 @@ const SB_STORAGE_PUBLIC = SB_URL+"/storage/v1/object/public/chat-images";
 
 // ── Supabase helpers chat ─────────────────────────────────────────────────────
 async function sbGetMessages(since) {
-  let url = SB_URL+"/rest/v1/messages?order=created_at.asc&limit=200";
+  let url = "/rest/v1/messages?order=created_at.asc&limit=200";
   if (since) url += "&created_at=gt."+encodeURIComponent(since);
-  const r = await fetch(url, { headers: HDR });
+  const r = await sbFetch(url);
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 
 async function sbSendMessage(payload) {
-  const r = await fetch(SB_URL+"/rest/v1/messages", { method:"POST", headers:HDR, body:JSON.stringify(payload) });
+  const r = await sbFetch("/rest/v1/messages", { method:"POST", body:JSON.stringify(payload) });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 
 async function sbDeleteMessage(id) {
-  const r = await fetch(SB_URL+"/rest/v1/messages?id=eq."+id, { method:"DELETE", headers:HDR });
+  const r = await sbFetch("/rest/v1/messages?id=eq."+id, { method:"DELETE" });
   if (!r.ok) throw new Error(await r.text());
 }
 
 async function sbReactMessage(id, reactions) {
-  const r = await fetch(SB_URL+"/rest/v1/messages?id=eq."+id, { method:"PATCH", headers:HDR, body:JSON.stringify({reactions}) });
+  const r = await sbFetch("/rest/v1/messages?id=eq."+id, { method:"PATCH", body:JSON.stringify({reactions}) });
   if (!r.ok) throw new Error(await r.text());
 }
 
 async function uploadChatImage(file) {
   const ext = file.name.split(".").pop().toLowerCase();
   const path = genId()+"."+ext;
-  const h = { "apikey":SB_KEY, "Authorization":"Bearer "+SB_KEY, "Content-Type":file.type };
+  const h = sbStorageHeaders(file.type);
   const r = await fetch(SB_STORAGE+"/"+path, { method:"POST", headers:h, body:file });
   if (!r.ok) throw new Error(await r.text());
   return SB_STORAGE_PUBLIC+"/"+path;
@@ -4501,22 +4594,22 @@ function verifierIntegriteDonnees(){
 
 // ── Supabase helpers utilisateurs ────────────────────────────────────────────
 async function sbGetUsers() {
-  const r = await fetch(SB_URL+"/rest/v1/utilisateurs?order=nom.asc", {headers:HDR});
+  const r = await sbFetch("/rest/v1/utilisateurs?order=nom.asc");
   if(!r.ok) throw new Error(await r.text());
   return r.json();
 }
 async function sbCreateUser(payload) {
-  const r = await fetch(SB_URL+"/rest/v1/utilisateurs", {method:"POST",headers:HDR,body:JSON.stringify(payload)});
+  const r = await sbFetch("/rest/v1/utilisateurs", {method:"POST",body:JSON.stringify(payload)});
   if(!r.ok) throw new Error(await r.text());
   return r.json();
 }
 async function sbUpdateUser(id, data) {
-  const r = await fetch(SB_URL+"/rest/v1/utilisateurs?id=eq."+id, {method:"PATCH",headers:HDR,body:JSON.stringify(data)});
+  const r = await sbFetch("/rest/v1/utilisateurs?id=eq."+id, {method:"PATCH",body:JSON.stringify(data)});
   if(!r.ok) throw new Error(await r.text());
   return r.json();
 }
 async function sbDeleteUser(id) {
-  const r = await fetch(SB_URL+"/rest/v1/utilisateurs?id=eq."+id, {method:"DELETE",headers:HDR});
+  const r = await sbFetch("/rest/v1/utilisateurs?id=eq."+id, {method:"DELETE"});
   if(!r.ok) throw new Error(await r.text());
 }
 
@@ -4524,58 +4617,17 @@ async function sbDeleteUser(id) {
 const AVATAR_COLORS=["#f47820","#0369a1","#166534","#7c3aed","#dc2626","#0891b2","#65a30d","#c2410c","#0f766e","#9333ea"];
 function avatarColor(nom){ return AVATAR_COLORS[(nom||"A").charCodeAt(0)%AVATAR_COLORS.length]; }
 
-// ── Session utilisateur ───────────────────────────────────────────────────────
-let loginSelectedUser = null;
-let usersCache = [];
-
-function getSessionUser() {
-  try { return JSON.parse(sessionStorage.getItem("va_session_user")||"null"); } catch(e){ return null; }
-}
-function setSessionUser(u) {
-  if(u) sessionStorage.setItem("va_session_user", JSON.stringify(u));
-  else sessionStorage.removeItem("va_session_user");
-}
-
-// ── Démarrage app — vérifier session ─────────────────────────────────────────
-async function demarrerApp() {
-  // Afficher le logo sur l'écran login
-  // Partager le src du logo topbar → sidebar et login (évite duplication base64)
+// ── Logo : partager le src du topbar vers sidebar/login (évite duplication base64) ──
+function syncLogos() {
   const topbarLogo = getEl("topbarLogo");
   const logoSrc = topbarLogo?.src || "";
   const logoImg = document.querySelector('#loginScreen img#loginLogo');
   const sidebarLogo = getEl("sidebarLogo");
   if(sidebarLogo && logoSrc) sidebarLogo.src = logoSrc;
   if(logoImg && logoSrc) logoImg.src = logoSrc;
-
-  const session = getSessionUser();
-  if(session && session.id) {
-    // Vérifier que l'utilisateur est toujours actif
-    try {
-      const users = await sbGetUsers();
-      const u = users.find(x => x.id === session.id);
-      if(u && u.actif) {
-        currentUser = u;
-        afficherApp();
-        return;
-      }
-    } catch(e) { /* réseau indispo, utiliser session cache */ }
-    currentUser = session;
-    afficherApp();
-    return;
-  }
-  // Pas de session — afficher l'écran de connexion
-  afficherEcranLogin();
 }
 
-async function afficherEcranLogin() {
-  document.getElementById("loginScreen").style.display = "flex";
-  document.getElementById("main").style.display = "none";
-  document.getElementById("sidebar") && (document.getElementById("sidebar").style.display = "none");
-  document.getElementById("bottomnav") && (document.getElementById("bottomnav").style.display = "none");
-  document.getElementById("topbar") && (document.getElementById("topbar").style.display = "none");
-  await chargerListeUtilisateurs();
-}
-
+// ── Affichage app (post-connexion) — appelé par auth.js (Module 2) ────────────
 function afficherApp() {
   document.getElementById("loginScreen").style.display = "none";
   document.getElementById("main").style.display = "";
@@ -4583,180 +4635,29 @@ function afficherApp() {
   document.getElementById("bottomnav") && (document.getElementById("bottomnav").style.display = "");
   document.getElementById("topbar") && (document.getElementById("topbar").style.display = "");
 
-  // Mettre à jour le topbar avec l'utilisateur connecté
   const label = getEl("modeLabel");
   const logoutBtn = getEl("logoutBtn");
   if(label && currentUser) {
-    label.textContent = currentUser.nom + (currentUser.role==="admin" ? " · Admin" : "");
-    label.style.color = currentUser.role==="admin" ? "#f47820" : "rgba(255,255,255,.6)";
+    const roleLabel = currentUser.role==="super_admin" ? " · Super-admin"
+                     : currentUser.role==="admin" ? " · Admin" : "";
+    label.textContent = currentUser.nom + roleLabel;
+    label.style.color = isAdminLevel() ? "#f47820" : "rgba(255,255,255,.6)";
   }
   if(logoutBtn) logoutBtn.style.display = "inline-flex";
   const ds = getEl("dataStatus");
   if(ds){ ds.style.display = "inline"; ds.textContent = "● Cache"; ds.style.color = "rgba(255,255,255,.4)"; }
 
-  // Appliquer les restrictions d'accès selon le rôle
   appliquerRestrictionsRole();
-
-  // Cacher/montrer bouton admin selon le rôle
-  const adminBtn = getEl("adminBtn");
-  if(adminBtn) {
-    // Le bouton 🔐 est toujours masqué : l'accès admin se gère via le compte utilisateur
-    adminBtn.style.display = "none";
-    if(currentUser?.role === "admin") {
-      isAdmin = true;
-    } else {
-      isAdmin = false;
-    }
-  }
 }
 
-async function chargerListeUtilisateurs() {
-  const container = document.getElementById("userList");
-  if(!container) return;
-  container.innerHTML = '<div style="text-align:center;padding:20px;color:rgba(255,255,255,.4);font-size:12px;">Chargement...</div>';
-  try {
-    usersCache = await sbGetUsers();
-    const actifs = usersCache.filter(u => u.actif);
-    if(!actifs.length) {
-      afficherModeAdminDirect("Aucun utilisateur configuré. Connectez-vous en tant qu'admin pour créer des accès.");
-      return;
-    }
-    container.innerHTML = actifs.map(function(u) {
-      const col = avatarColor(u.nom);
-      const roleLabel = u.role === "admin" ? "Administrateur" : "Utilisateur";
-      const safeId = u.id.replace(/["']/g,"");
-      return '<button onclick="loginSelectUser(\'' + safeId + '\')" '
-        + 'style="display:flex;align-items:center;gap:12px;padding:12px 14px;'
-        + 'background:rgba(255,255,255,.06);border:1.5px solid rgba(255,255,255,.1);'
-        + 'border-radius:14px;cursor:pointer;text-align:left;font-family:inherit;width:100%;">'
-        + '<div style="width:40px;height:40px;border-radius:999px;background:' + col + ';'
-        + 'display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:900;color:#fff;flex-shrink:0;">'
-        + u.nom.charAt(0).toUpperCase() + '</div>'
-        + '<div>'
-        + '<div style="font-weight:700;color:#fff;font-size:14px;">' + u.nom + '</div>'
-        + '<div style="font-size:11px;color:rgba(255,255,255,.4);">' + roleLabel + '</div>'
-        + '</div>'
-        + '<div style="margin-left:auto;color:rgba(255,255,255,.3);font-size:18px;">›</div>'
-        + '</button>';
-    }).join("");
-  } catch(e) {
-    // Erreur réseau ou RLS Supabase → fallback mode PIN admin direct
-    afficherModeAdminDirect(null);
-  }
-}
 
-// Mode de secours : accès direct via PIN admin (si Supabase inaccessible ou RLS bloque)
-function afficherModeAdminDirect(msg) {
-  const container = document.getElementById("userList");
-  if(!container) return;
-  container.innerHTML =
-    (msg ? '<div style="font-size:11px;color:rgba(255,255,255,.4);text-align:center;margin-bottom:12px;padding:0 4px;">'+msg+'</div>' : '')
-    +'<button onclick="loginSelectAdminDirect()" style="display:flex;align-items:center;gap:12px;padding:14px;background:rgba(244,120,32,.12);border:1.5px solid rgba(244,120,32,.3);border-radius:14px;cursor:pointer;width:100%;font-family:inherit;">'
-    +'<div style="width:40px;height:40px;border-radius:999px;background:#f47820;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:900;color:#fff;flex-shrink:0;">A</div>'
-    +'<div style="text-align:left;">'
-      +'<div style="font-weight:700;color:#fff;font-size:14px;">Administrateur</div>'
-      +'<div style="font-size:11px;color:rgba(255,255,255,.4);">Accès complet</div>'
-    +'</div>'
-    +'<div style="margin-left:auto;color:rgba(244,120,6);font-size:18px;">›</div>'
-    +'</button>';
-}
-
-function loginSelectAdminDirect() {
-  loginSelectedUser = { id:"_admin_direct", nom:"Administrateur", role:"admin", actif:true, pin_hash:null };
-  document.getElementById("loginStep1").style.display = "none";
-  document.getElementById("loginStep2").style.display = "block";
-  document.getElementById("loginAvatar").style.background = "#f47820";
-  document.getElementById("loginAvatar").textContent = "A";
-  document.getElementById("loginNameLabel").textContent = "Administrateur";
-  document.getElementById("loginRoleLabel").textContent = "Accès complet";
-  document.getElementById("loginPinInput").value = "";
-  document.getElementById("loginPinError").style.display = "none";
-  setTimeout(()=>document.getElementById("loginPinInput")?.focus(), 200);
-}
-
-function loginSelectUser(id) {
-  loginSelectedUser = usersCache.find(u => u.id === id);
-  if(!loginSelectedUser) return;
-  document.getElementById("loginStep1").style.display = "none";
-  document.getElementById("loginStep2").style.display = "block";
-  const col = avatarColor(loginSelectedUser.nom);
-  document.getElementById("loginAvatar").style.background = col;
-  document.getElementById("loginAvatar").textContent = loginSelectedUser.nom.charAt(0).toUpperCase();
-  document.getElementById("loginNameLabel").textContent = loginSelectedUser.nom;
-  document.getElementById("loginRoleLabel").textContent = loginSelectedUser.role === "admin" ? "Administrateur" : "Utilisateur";
-  document.getElementById("loginPinInput").value = "";
-  document.getElementById("loginPinError").style.display = "none";
-  setTimeout(()=>document.getElementById("loginPinInput")?.focus(), 200);
-}
-
-function loginBackToList() {
-  loginSelectedUser = null;
-  document.getElementById("loginStep1").style.display = "block";
-  document.getElementById("loginStep2").style.display = "none";
-  document.getElementById("loginPinError").style.display = "none";
-}
-
-async function loginConfirmerPin() {
-  if(!loginSelectedUser) return;
-  const pin = document.getElementById("loginPinInput").value;
-  if(!pin) return;
-
-  if(secIsLocked()) {
-    const restant = Math.ceil((SEC.lockedUntil-Date.now())/60000);
-    document.getElementById("loginPinError").textContent = "🔒 Trop de tentatives. Réessayez dans "+restant+" min.";
-    document.getElementById("loginPinError").style.display = "block";
-    return;
-  }
-
-  let ok = false;
-
-  if(loginSelectedUser.id === "_admin_direct") {
-    // Mode secours : vérifier contre le PIN admin local
-    const pinBrut = localStorage.getItem("va_admin_pin");
-    const pinRef = pinBrut || await hashPin(ADMIN_PIN_DEFAULT);
-    const h = await hashPin(pin);
-    ok = (pinRef.length===64) ? h===pinRef : pin===pinRef;
-  } else {
-    const stored = loginSelectedUser.pin_hash;
-    if(!stored) { ok = false; }
-    else {
-      const h = await hashPin(pin);
-      ok = (stored.length===64) ? h===stored : pin===stored;
-    }
-  }
-
-  if(ok) {
-    secRecordSuccess();
-    currentUser = loginSelectedUser;
-    setSessionUser(currentUser);
-    logAdminAction("USER_LOGIN","Connexion : "+currentUser.nom);
-    afficherApp();
-    render();
-  } else {
-    const bloque = secRecordFail();
-    const restants = SEC.MAX_ATTEMPTS - SEC.attempts;
-    document.getElementById("loginPinError").textContent = bloque
-      ? "🔒 Compte bloqué 5 min."
-      : "Code incorrect · "+restants+" essai"+(restants>1?"s":"")+" restant"+(restants>1?"s":"");
-    document.getElementById("loginPinError").style.display = "block";
-    document.getElementById("loginPinInput").value = "";
-  }
-}
-
-function deconnecterUtilisateur() {
-  if(!confirm("Se déconnecter ?")) return;
-  logAdminAction("USER_LOGOUT","Déconnexion : "+(currentUser?.nom||""));
-  currentUser = null;
-  isAdmin = false;
-  setSessionUser(null);
-  afficherEcranLogin();
-}
 
 // ── Gestion utilisateurs (admin) ──────────────────────────────────────────────
 async function renderGestionUtilisateurs() {
   if(!isAdmin){ showToast("Réservé à l'admin","error"); return; }
   try {
     const users = await sbGetUsers();
+    const roleLabel = (r) => r==="super_admin" ? "🟣 Super-administrateur" : r==="admin" ? "👑 Administrateur" : "👤 Utilisateur";
     const html =
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px;">'
       +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">👥 Utilisateurs ('+users.length+')</div>'
@@ -4765,17 +4666,18 @@ async function renderGestionUtilisateurs() {
       +'</div>'
       +users.map(u => {
         const col = avatarColor(u.nom);
+        const peutModifier = isSuperAdmin() || u.role !== "super_admin";
         return '<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:#fff;border:1.5px solid #e4ede7;border-radius:14px;margin-bottom:8px;flex-wrap:wrap;">'
-          +'<div style="width:40px;height:40px;border-radius:999px;background:'+col+';display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:900;color:#fff;flex-shrink:0;">'+u.nom.charAt(0).toUpperCase()+'</div>'
+          +'<div style="width:40px;height:40px;border-radius:999px;background:'+col+';display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:900;color:#fff;flex-shrink:0;">'+escapeHtml(u.nom.charAt(0).toUpperCase())+'</div>'
           +'<div style="flex:1;min-width:0;">'
-            +'<div style="font-weight:700;color:#0f1f16;font-size:14px;">'+u.nom+'</div>'
-            +'<div style="font-size:11px;color:#6b8c7a;margin-top:1px;">'+(u.role==="admin"?"👑 Administrateur":"👤 Utilisateur")+'</div>'
+            +'<div style="font-weight:700;color:#0f1f16;font-size:14px;">'+escapeHtml(u.nom)+'</div>'
+            +'<div style="font-size:11px;color:#6b8c7a;margin-top:1px;">'+roleLabel(u.role)+'</div>'
           +'</div>'
           +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;flex-shrink:0;">'
             +'<span style="font-size:10px;padding:3px 10px;border-radius:999px;font-weight:700;background:'+(u.actif?"#d4edda":"#fecaca")+';color:'+(u.actif?"#166534":"#dc2626")+'">'+(u.actif?"● Actif":"○ Inactif")+'</span>'
-            +'<button onclick="ouvrirModifierUtilisateur(\''+u.id+'\')" style="background:#eff6ff;color:#1d4ed8;border:none;border-radius:8px;padding:6px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">✏ Modifier</button>'
-            +'<button onclick="toggleUserActif(\''+u.id+'\','+u.actif+')" style="background:'+(u.actif?"#fff3e8":"#f0fdf4")+';color:'+(u.actif?"#c2410c":"#15803d")+';border:none;border-radius:8px;padding:6px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">'+(u.actif?"🚫 Désactiver":"✅ Activer")+'</button>'
-            +(u.id !== currentUser?.id ? '<button onclick="supprimerUtilisateur(\''+u.id+'\',\''+u.nom+'\')" style="background:#fef2f2;color:#dc2626;border:none;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">🗑</button>' : '')
+            +(peutModifier ? '<button onclick="ouvrirModifierUtilisateur(\''+u.id+'\')" style="background:#eff6ff;color:#1d4ed8;border:none;border-radius:8px;padding:6px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">✏ Modifier</button>' : '')
+            +(peutModifier ? '<button onclick="toggleUserActif(\''+u.id+'\','+u.actif+')" style="background:'+(u.actif?"#fff3e8":"#f0fdf4")+';color:'+(u.actif?"#c2410c":"#15803d")+';border:none;border-radius:8px;padding:6px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">'+(u.actif?"🚫 Désactiver":"✅ Activer")+'</button>' : '')
+            +(u.id !== currentUser?.id && peutModifier ? '<button onclick="supprimerUtilisateur(\''+u.id+'\',\''+u.nom.replace(/'/g,"")+'\')" style="background:#fef2f2;color:#dc2626;border:none;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">🗑</button>' : '')
           +'</div>'
         +'</div>';
       }).join("");
@@ -4784,14 +4686,9 @@ async function renderGestionUtilisateurs() {
     showModal(
       '<div style="text-align:center;padding:24px;">'
       + '<div style="font-size:32px;margin-bottom:12px;">⚠️</div>'
-      + '<div style="font-weight:800;color:#dc2626;font-size:15px;margin-bottom:8px;">Accès à la base de données</div>'
-      + '<div style="font-size:12px;color:#3d5c48;line-height:1.6;margin-bottom:16px;">' + errMsg(e) + '</div>'
-      + '<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:12px;font-size:11px;color:#c2410c;text-align:left;">'
-      + '<div style="font-weight:700;margin-bottom:4px;">Solution : exécuter ce SQL dans Supabase</div>'
-      + '<code style="font-size:10px;line-height:1.8;display:block;">DROP POLICY IF EXISTS &quot;acces_public_utilisateurs&quot; ON utilisateurs;<br>'
-      + 'CREATE POLICY &quot;lecture_publique&quot; ON utilisateurs FOR SELECT USING (true);<br>'
-      + 'CREATE POLICY &quot;ecriture_admin&quot; ON utilisateurs FOR ALL USING (true) WITH CHECK (true);</code>'
-      + '</div>'
+      + '<div style="font-weight:800;color:#dc2626;font-size:15px;margin-bottom:8px;">Accès à la gestion des utilisateurs</div>'
+      + '<div style="font-size:12px;color:#3d5c48;line-height:1.6;margin-bottom:16px;">' + escapeHtml(errMsg(e)) + '</div>'
+      + '<div style="font-size:11px;color:#6b8c7a;line-height:1.6;">Vérifiez votre connexion et que votre session n\'a pas expiré.</div>'
       + '<button onclick="closeModal()" style="margin-top:14px;width:100%;padding:11px;background:#0d3d1a;color:#fff;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:700;">Fermer</button>'
       + '</div>'
     );
@@ -4799,6 +4696,7 @@ async function renderGestionUtilisateurs() {
 }
 
 function ouvrirCreerUtilisateur() {
+  const superOpt = isSuperAdmin() ? '<option value="super_admin">🟣 Super-administrateur</option>' : '';
   showModal(
     '<div style="font-size:17px;font-weight:800;color:#0f1f16;margin-bottom:4px;">+ Nouvel utilisateur</div>'
     +'<div style="font-size:12px;color:#3d5c48;margin-bottom:20px;">L\'utilisateur pourra se connecter avec ce PIN.</div>'
@@ -4809,6 +4707,7 @@ function ouvrirCreerUtilisateur() {
     +'<select id="edit-urole" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:14px;">'
     +'<option value="utilisateur">👤 Utilisateur</option>'
     +'<option value="admin">👑 Administrateur</option>'
+    +superOpt
     +'</select></div>'
     +'<div style="margin-bottom:20px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:5px;">Code PIN * (4 à 8 chiffres)</label>'
     +'<input type="password" id="edit-upin" inputmode="numeric" maxlength="8" placeholder="••••" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:18px;text-align:center;letter-spacing:.4em;"/></div>'
@@ -4831,11 +4730,12 @@ async function ouvrirModifierUtilisateur(id) {
       +'<div style="font-size:12px;color:#3d5c48;margin-bottom:20px;">Laissez le PIN vide pour ne pas le modifier.</div>'
       +'<input type="hidden" id="edit-uid" value="'+u.id+'"/>'
       +'<div style="margin-bottom:14px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:5px;">Prénom / Nom *</label>'
-      +'<input type="text" id="edit-unom" value="'+u.nom+'" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:14px;"/></div>'
+      +'<input type="text" id="edit-unom" value="'+escapeHtml(u.nom)+'" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:14px;"/></div>'
       +'<div style="margin-bottom:14px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:5px;">Rôle</label>'
       +'<select id="edit-urole" style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:14px;">'
       +'<option value="utilisateur"'+(u.role==="utilisateur"?" selected":"")+'>👤 Utilisateur</option>'
       +'<option value="admin"'+(u.role==="admin"?" selected":"")+'>👑 Administrateur</option>'
+      +(isSuperAdmin() ? '<option value="super_admin"'+(u.role==="super_admin"?" selected":"")+'>🟣 Super-administrateur</option>' : '')
       +'</select></div>'
       +'<div style="margin-bottom:20px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:5px;">Nouveau PIN (laisser vide pour garder l\'actuel)</label>'
       +'<input type="password" id="edit-upin" inputmode="numeric" maxlength="8" placeholder="Nouveau PIN..." style="width:100%;padding:12px;border:1.5px solid #d4edda;border-radius:12px;font-family:inherit;font-size:18px;text-align:center;letter-spacing:.4em;"/></div>'
@@ -4902,8 +4802,6 @@ async function supprimerUtilisateur(id, nom) {
 
 // Restaurer le journal admin
 try{ adminLog.push(...JSON.parse(localStorage.getItem("va_admin_log")||"[]")); }catch(e){}
-// Migration PIN
-migrerPinVersHash();
 // Démarrer (l'app se rend après connexion + sync)
 demarrerApp();
 // ── Polling unifié : un seul setInterval au lieu de 4 ──

@@ -248,22 +248,18 @@ select option{background:var(--white);color:var(--text);}
   </div>
   <div style="padding:8px 20px 6px;font-size:10px;font-weight:700;color:rgba(255,255,255,.25);text-transform:uppercase;letter-spacing:.1em;">Navigation</div>
   <button class="nav-item active" id="nav-dashboard" onclick="switchTab('dashboard')" data-role="admin"><span class="nav-icon">⊞</span>Tableau de bord</button>
-  <button class="nav-item" id="nav-achats" onclick="switchTab('achats')" data-role="all"><span class="nav-icon">⬡</span>Achats terrain</button>
-  <button class="nav-item" id="nav-ventes" onclick="switchTab('ventes')" data-role="admin"><span class="nav-icon">$</span>Ventes Abidjan</button>
-  <button class="nav-item" id="nav-stock" onclick="switchTab('stock')" data-role="admin"><span class="nav-icon">◈</span>Stock</button>
-  <button class="nav-item" id="nav-demandes" onclick="switchTab('demandes')" data-role="admin"><span class="nav-icon">📋</span>Demandes<span id="demandesDotSide" class="notif-dot" style="display:none;"></span></button>
+  <button class="nav-item" id="nav-commercial" onclick="switchTab('commercial')" data-role="all"><span class="nav-icon">🛒</span>Commercial<span id="demandesDotSide" class="notif-dot" style="display:none;"></span></button>
   <button class="nav-item" id="nav-chat" onclick="switchTab('chat')" data-role="all"><span class="nav-icon">💬</span>Chat équipe<span id="chatDotSide" class="notif-dot" style="display:none;"></span></button>
+  <button class="nav-item" id="nav-finance" onclick="switchTab('finance')" data-role="admin"><span class="nav-icon">📊</span>Finance &amp; Gestion</button>
   <button class="nav-item" id="nav-params" onclick="switchTab('params')" data-role="admin"><span class="nav-icon">⚙</span>Paramètres</button>
 </div>
 
 <!-- BOTTOM NAV (mobile) -->
 <div id="bottomnav">
   <button class="bnav-item active" id="bnav-dashboard" onclick="switchTab('dashboard')" data-role="admin"><span class="bnav-icon">⊞</span>Bord</button>
-  <button class="bnav-item" id="bnav-achats" onclick="switchTab('achats')" data-role="all"><span class="bnav-icon">⬡</span>Achats</button>
-  <button class="bnav-item" id="bnav-ventes" onclick="switchTab('ventes')" data-role="admin"><span class="bnav-icon">$</span>Ventes</button>
-  <button class="bnav-item" id="bnav-stock" onclick="switchTab('stock')" data-role="admin"><span class="bnav-icon">◈</span>Stock</button>
-  <button class="bnav-item" id="bnav-demandes" onclick="switchTab('demandes')" data-role="admin"><span class="bnav-icon">📋</span>Dem.<span id="demandesDot" class="notif-dot" style="display:none;"></span></button>
+  <button class="bnav-item" id="bnav-commercial" onclick="switchTab('commercial')" data-role="all"><span class="bnav-icon">🛒</span>Commercial<span id="demandesDot" class="notif-dot" style="display:none;"></span></button>
   <button class="bnav-item" id="bnav-chat" onclick="switchTab('chat')" data-role="all"><span class="bnav-icon">💬</span>Chat<span id="chatDot" class="notif-dot" style="display:none;"></span></button>
+  <button class="bnav-item" id="bnav-finance" onclick="switchTab('finance')" data-role="admin"><span class="bnav-icon">📊</span>Finance</button>
   <button class="bnav-item" id="bnav-params" onclick="switchTab('params')" data-role="admin"><span class="bnav-icon">⚙</span>Params</button>
 </div>
 
@@ -304,11 +300,27 @@ select option{background:var(--white);color:var(--text);}
 
 <div id="main">
   <div id="page-dashboard"></div>
-  <div id="page-achats" style="display:none;"></div>
-  <div id="page-ventes" style="display:none;"></div>
-  <div id="page-stock" style="display:none;"></div>
-  <div id="page-demandes" style="display:none;"></div>
+
+  <!-- ── COMMERCIAL (sous-onglets) ── -->
+  <div id="page-commercial" style="display:none;">
+    <div class="section-title" style="margin-bottom:10px;">🛒 Commercial</div>
+    <div id="commercialSubnav" style="display:flex;gap:6px;margin-bottom:14px;background:#f0f5f1;border-radius:12px;padding:4px;overflow-x:auto;"></div>
+    <div id="page-achats" style="display:none;"></div>
+    <div id="page-ventes" style="display:none;"></div>
+    <div id="page-stock" style="display:none;"></div>
+    <div id="page-demandes" style="display:none;"></div>
+    <div id="page-catalogue" style="display:none;"></div>
+  </div>
+
   <div id="page-chat" style="display:none;"></div>
+
+  <!-- ── FINANCE & GESTION (sous-onglets) ── -->
+  <div id="page-finance" style="display:none;">
+    <div class="section-title" style="margin-bottom:10px;">📊 Finance &amp; Gestion</div>
+    <div id="financeSubnav" style="display:flex;gap:6px;margin-bottom:14px;background:#f0f5f1;border-radius:12px;padding:4px;overflow-x:auto;"></div>
+    <div id="page-financeContent"></div>
+  </div>
+
   <div id="page-params" style="display:none;"></div>
 </div>
 
@@ -1085,7 +1097,7 @@ function closeModalOutside(e){if(e.target===getEl("modalOverlay")) closeModal();
 // ─── DEMANDES BADGE ──────────────────────────────────────────────────────────
 function updateDemandesBadge(){
   const pending=demandes.filter(d=>d.statut==="en_attente").length;
-  ["demandesDot","demandesDotSide"].forEach(id=>{
+  ["demandesDot","demandesDotSide","demandesDotSub"].forEach(id=>{
     const el=document.getElementById(id);
     if(el) el.style.display=pending>0?"inline-block":"none";
   });
@@ -1473,8 +1485,84 @@ async function updatePerte(produit,val){
 // ════════════════════════════════════════════════════════════════════════════
 function tabsAutorisés(){
   return isAdminLevel()
-    ? ["dashboard","achats","ventes","stock","demandes","chat","params"]
-    : ["achats","chat"];
+    ? ["dashboard","commercial","chat","finance","params"]
+    : ["commercial","chat"];
+}
+
+// Sous-onglets de "Commercial" et "Finance & Gestion"
+let commercialSubTab = "achats";
+let financeSubTab = "sig";
+
+const COMMERCIAL_SUBTABS = [
+  {id:"achats",   label:"Achats",    icon:"⬡", role:"all"},
+  {id:"ventes",   label:"Ventes",    icon:"$", role:"admin"},
+  {id:"stock",    label:"Stock",     icon:"◈", role:"admin"},
+  {id:"demandes", label:"Demandes",  icon:"📋", role:"admin", badge:"demandes"},
+  {id:"catalogue",label:"Catalogue", icon:"🥬", role:"admin"},
+];
+
+const FINANCE_SUBTABS = [
+  {id:"sig",         label:"Compte de résultat"},
+  {id:"budget",      label:"Budget"},
+  {id:"commissions", label:"Commissions"},
+  {id:"journal",     label:"Journal comptable"},
+  {id:"pertes",      label:"Pertes"},
+];
+
+function renderCommercialSubnav(){
+  const admin = isAdminLevel();
+  const tabs = COMMERCIAL_SUBTABS.filter(t=>t.role!=="admin"||admin);
+  document.getElementById("commercialSubnav").innerHTML = tabs.map(t=>
+    '<button onclick="switchCommercialSub(\''+t.id+'\')" style="flex:1;min-width:80px;padding:8px 6px;border:none;border-radius:9px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700;white-space:nowrap;position:relative;'
+    +(commercialSubTab===t.id?'background:#0d3d1a;color:#fff;box-shadow:0 2px 8px rgba(13,61,26,.3);':'background:none;color:#3d5c48;')+'">'
+    +t.icon+' '+t.label
+    +(t.badge==="demandes"?'<span id="demandesDotSub" class="notif-dot" style="display:none;position:absolute;top:4px;right:6px;"></span>':'')
+    +'</button>'
+  ).join('');
+}
+
+function switchCommercialSub(sub){
+  commercialSubTab = sub;
+  renderCommercialSubnav();
+  ["achats","ventes","stock","demandes","catalogue"].forEach(t=>{
+    const page=document.getElementById("page-"+t);
+    if(page) page.style.display = t===sub ? "block":"none";
+  });
+  if(sub==="achats") renderAchats();
+  else if(sub==="ventes") renderVentes();
+  else if(sub==="stock") renderStock();
+  else if(sub==="demandes") renderDemandes();
+  else if(sub==="catalogue") renderCatalogue();
+}
+
+function renderFinanceSubnav(){
+  document.getElementById("financeSubnav").innerHTML = FINANCE_SUBTABS.map(t=>
+    '<button onclick="switchFinanceSub(\''+t.id+'\')" style="flex:1;min-width:90px;padding:8px 6px;border:none;border-radius:9px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700;white-space:nowrap;'
+    +(financeSubTab===t.id?'background:#6d28d9;color:#fff;box-shadow:0 2px 8px rgba(109,40,217,.3);':'background:none;color:#3d5c48;')+'">'
+    +t.label
+    +'</button>'
+  ).join('');
+}
+
+function switchFinanceSub(sub){
+  financeSubTab = sub;
+  renderFinanceSubnav();
+  renderFinanceContent();
+}
+
+/**
+ * Affiche le contenu du sous-onglet Finance sélectionné directement dans
+ * la page (pas en modal) — réutilise les blocs de calcul de bilanFinancier
+ * en les redirigeant vers #page-financeContent.
+ */
+function renderFinanceContent(){
+  const el = document.getElementById("page-financeContent");
+  if(!el) return;
+  if(financeSubTab==="sig"){ bilanOnglet="sig"; el.innerHTML = renderBilanInline(); }
+  else if(financeSubTab==="budget"){ bilanOnglet="budget"; el.innerHTML = renderBilanInline(); }
+  else if(financeSubTab==="pertes"){ bilanOnglet="pertes"; el.innerHTML = renderBilanInline(); }
+  else if(financeSubTab==="commissions"){ el.innerHTML = '<div id="commissionsInline"></div>'; renderCommissionsInline(); }
+  else if(financeSubTab==="journal"){ el.innerHTML = '<div id="journalInline"></div>'; renderJournalInline(); }
 }
 
 function appliquerRestrictionsRole(){
@@ -1482,17 +1570,17 @@ function appliquerRestrictionsRole(){
   document.querySelectorAll("[data-role]").forEach(btn=>{
     btn.style.display = btn.getAttribute("data-role")==="admin" ? (admin?"":"none") : "";
   });
-  if(!tabsAutorisés().includes(currentTab)) switchTab("achats");
+  if(!tabsAutorisés().includes(currentTab)) switchTab("commercial");
 }
 
 function switchTab(tab){
   const autorise = tabsAutorisés();
   if(!autorise.includes(tab)){
     showToast("Accès réservé à l'administrateur","error");
-    tab="achats";
+    tab="commercial";
   }
   currentTab=tab;
-  ["dashboard","achats","ventes","stock","demandes","chat","params"].forEach(t=>{
+  ["dashboard","commercial","chat","finance","params"].forEach(t=>{
     const page=document.getElementById("page-"+t);
     if(page) page.style.display=t===tab?"block":"none";
     const nav=document.getElementById("nav-"+t);
@@ -1501,6 +1589,8 @@ function switchTab(tab){
     if(bnav) bnav.className="bnav-item"+(t===tab?" active":"");
   });
   if(tab==="chat") initChat();
+  if(tab==="commercial"){ renderCommercialSubnav(); switchCommercialSub(commercialSubTab); }
+  if(tab==="finance"){ renderFinanceSubnav(); renderFinanceContent(); }
   render();
   window.scrollTo(0,0);
 }
@@ -1520,10 +1610,14 @@ function setFilterDemandes(f){
 // ─── RENDER ───────────────────────────────────────────────────────────────────
 function render(){
   if(currentTab==="dashboard") renderDashboard();
-  else if(currentTab==="achats") renderAchats();
-  else if(currentTab==="ventes") renderVentes();
-  else if(currentTab==="stock") renderStock();
-  else if(currentTab==="demandes") renderDemandes();
+  else if(currentTab==="commercial"){
+    if(commercialSubTab==="achats") renderAchats();
+    else if(commercialSubTab==="ventes") renderVentes();
+    else if(commercialSubTab==="stock") renderStock();
+    else if(commercialSubTab==="demandes") renderDemandes();
+    else if(commercialSubTab==="catalogue") renderCatalogue();
+  }
+  else if(currentTab==="finance") renderFinanceContent();
   else if(currentTab==="params") renderParams();
   // chat géré séparément via initChat
 }
@@ -1883,6 +1977,45 @@ function voirCommissionUtilisateur(nom) {
 }
 
 // ── VUE ADMIN : commissions par utilisateur et par lot ───────────────────────
+/**
+ * Affiche le contenu de voirCommissionAdmin() directement dans la page
+ * Finance & Gestion (au lieu d'un modal), via une capture temporaire de
+ * showModal.
+ */
+function renderCommissionsInline(){
+  const target = document.getElementById("commissionsInline");
+  if(!target) return;
+  const realShowModal = window.showModal;
+  window.showModal = function(html){ target.innerHTML = html; };
+  try { voirCommissionAdmin(); } finally { window.showModal = realShowModal; }
+}
+
+/**
+ * Idem pour le journal comptable.
+ */
+function renderJournalInline(){
+  const target = document.getElementById("journalInline");
+  if(!target) return;
+  const realShowModal = window.showModal;
+  window.showModal = function(html){ target.innerHTML = html; };
+  try { voirJournalComptable(); } finally { window.showModal = realShowModal; }
+}
+
+/**
+ * Catalogue produits (déplacé depuis Paramètres vers Commercial).
+ */
+function renderCatalogue(){
+  const el = document.getElementById("page-catalogue");
+  if(!el) return;
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <div class="label" style="margin-bottom:0;">🥬 Catalogue produits</div>
+      <button class="btn btn-green" onclick="showAddProduit()" style="width:auto;padding:8px 14px;font-size:12px;margin:0;">+ Ajouter</button>
+    </div>
+    <div id="listeProduits"></div>`;
+  renderListeProduits();
+}
+
 function voirCommissionAdmin() {
   // Obtenir tous les utilisateurs ayant enregistré des lots
   const usersAvecLots = [...new Set(
@@ -2726,7 +2859,7 @@ function renderDashboard(){
 
   // Alerte demandes
   if(isAdmin&&pending>0){
-    html+=`<div onclick="switchTab('demandes')" style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:10px 14px;margin-bottom:10px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
+    html+=`<div onclick="switchTab('commercial');switchCommercialSub('demandes')" style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:10px 14px;margin-bottom:10px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
       <div style="color:#c2410c;font-weight:700;font-size:12px;">⏳ ${pending} demande${pending>1?"s":""} en attente de validation</div>
       <div style="color:#3d5c48;font-size:11px;">Voir →</div>
     </div>`;
@@ -3708,27 +3841,16 @@ function renderParams(){
     <div class="section-title" style="margin-bottom:12px;">⚙ Paramètres</div>
 
     <!-- ── Administration ── -->
-    <div class="card" style="margin-bottom:14px;">
+    <div class="card">
       <div class="label" style="margin-bottom:10px;">🔐 Administration</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
         <button onclick="renderGestionUtilisateurs()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:10px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;text-align:left;">👥 Utilisateurs</button>
-        <button onclick="voirCommissionAdmin()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:10px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;text-align:left;">💰 Commissions</button>
         <button onclick="voirJournalAdmin()" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:10px;padding:10px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;text-align:left;">🔐 Journal admin</button>
         <button onclick="verifierIntegriteDonnees()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#166534;border-radius:10px;padding:10px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;text-align:left;">🔍 Vérifier données</button>
-        <button onclick="voirJournalComptable()" style="background:#f5f3ff;border:1.5px solid #ddd6fe;color:#6d28d9;border-radius:10px;padding:10px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;text-align:left;">📒 Journal comptable</button>
       </div>
-    </div>
-
-    <!-- ── Produits ── -->
-    <div class="card">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-        <div class="label" style="margin-bottom:0;">🥬 Produits</div>
-        <button class="btn btn-green" onclick="showAddProduit()" style="width:auto;padding:8px 14px;font-size:12px;margin:0;">+ Ajouter</button>
-      </div>
-      <div id="listeProduits"></div>
+      <div style="font-size:10px;color:#6b8c7a;margin-top:10px;">Le catalogue produits est désormais dans <b>Commercial</b>, et les commissions/journal comptable dans <b>Finance &amp; Gestion</b>.</div>
     </div>`;
   document.getElementById("page-params").innerHTML=html;
-  renderListeProduits();
 }
 
 // (Le changement de PIN se fait désormais via "Gérer les utilisateurs" — modification du PIN par compte)
@@ -4595,12 +4717,12 @@ document.addEventListener("click", function(e) {
   }
 });
 
-function bilanFinancier(onglet) {
+function bilanFinancier(onglet, inline) {
   if(!isAdmin){ showToast("Accès réservé à l'administrateur","error"); return; }
   if(onglet) bilanOnglet = onglet;
 
   // ── Onglets ──
-  const ongletsHtml = '<div style="display:flex;gap:6px;margin-bottom:16px;background:#f0f5f1;border-radius:12px;padding:4px;">'
+  const ongletsHtml = inline ? "" : '<div style="display:flex;gap:6px;margin-bottom:16px;background:#f0f5f1;border-radius:12px;padding:4px;">'
     + ['jour','mois','annee','sig','budget','pertes'].map(o => {
         const labels={jour:'Par jour',mois:'Par mois',annee:'Par année',sig:'Compte de résultat',budget:'Budget',pertes:'Pertes'};
         const active = bilanOnglet===o;
@@ -4931,7 +5053,7 @@ function bilanFinancier(onglet) {
         +'<div><div style="font-size:12px;font-weight:700;color:#dc2626;">⚠ Pertes enregistrées</div>'
           +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">'+pertesProds.length+' produit'+(pertesProds.length>1?'s':'')+" · Valeur estimée : "+fmt(totalPertesVal)+'</div>'
         +'</div>'
-        +'<button onclick="switchTab(\'stock\')" style="background:#dc2626;color:#fff;border:none;border-radius:9px;padding:7px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">Gérer →</button>'
+        +'<button onclick="switchTab(\'commercial\');switchCommercialSub(\'stock\')" style="background:#dc2626;color:#fff;border:none;border-radius:9px;padding:7px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">Gérer →</button>'
         +'</div>'
 
         // Pertes par produit
@@ -4979,6 +5101,10 @@ function bilanFinancier(onglet) {
   // Export CSV
   const exportBtn = '<button onclick="exportBilanCSV()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;border-radius:10px;padding:6px 10px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">⬇ CSV</button>';
 
+  const bodyHtml = ongletsHtml + (bilanOnglet==="sig"||bilanOnglet==="budget"?"":kpiHtml) + contenu;
+
+  if(inline) return bodyHtml;
+
   showModal(
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
     +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">💼 Bilan financier</div>'
@@ -4986,9 +5112,19 @@ function bilanFinancier(onglet) {
     +'<div style="display:flex;gap:6px;align-items:center;">'+exportBtn
     +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;color:#3d5c48;">✕</button>'
     +'</div></div>'
-    + ongletsHtml + (bilanOnglet==="sig"||bilanOnglet==="budget"?"":kpiHtml) + contenu
+    + bodyHtml
   );
 }
+
+/**
+ * Variante "inline" de bilanFinancier : retourne le HTML du contenu courant
+ * (selon bilanOnglet) sans onglets internes ni showModal, pour affichage
+ * direct dans l'onglet Finance & Gestion.
+ */
+function renderBilanInline(){
+  return bilanFinancier(bilanOnglet, true);
+}
+
 
 // Raccourci pour l'ancien bilanJour (redirige vers le nouveau)
 function bilanJour() { bilanFinancier("jour"); }

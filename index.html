@@ -316,7 +316,13 @@ select option{background:var(--white);color:var(--text);}
 
   <!-- ── FINANCE & GESTION (sous-onglets) ── -->
   <div id="page-finance" style="display:none;">
-    <div class="section-title" style="margin-bottom:10px;">📊 Finance &amp; Gestion</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <div class="section-title" style="margin-bottom:0;">📊 Finance &amp; Gestion</div>
+      <div style="display:flex;gap:6px;">
+        <button onclick="genererRapportFinancierPDF()" style="background:#f5f3ff;border:1.5px solid #ddd6fe;color:#6d28d9;border-radius:10px;padding:8px 12px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">📄 Rapport PDF</button>
+        <button onclick="exportDashboardCSV()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;border-radius:10px;padding:8px 12px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">⬇ CSV</button>
+      </div>
+    </div>
     <div id="financeSubnav" style="display:flex;gap:6px;margin-bottom:14px;background:#f0f5f1;border-radius:12px;padding:4px;overflow-x:auto;"></div>
     <div id="page-financeContent"></div>
   </div>
@@ -1056,12 +1062,14 @@ async function syncAll(silent=false){
   const btn = getEl("syncBtn");
   if(!silent && btn){ btn.innerHTML='<span class="spinner"></span>'; btn.disabled=true; }
   try{
-    const [a,v,d,p,cp,jc,bm]=await Promise.all([
+    const [a,v,d,p,cp,jc,bm,mc,inv]=await Promise.all([
       sbGet("achats"),sbGet("ventes"),sbGet("demandes"),
       sbFetch(`/rest/v1/produits?order=nom.asc`).then(r=>r.json()),
       sbFetch(`/rest/v1/commissions_paiements?order=created_at.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
       sbFetch(`/rest/v1/journal_comptable?order=date.asc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
-      sbFetch(`/rest/v1/budgets_mensuels?order=annee.desc,mois.desc`).then(r=>r.ok?r.json():[]).catch(()=>[])
+      sbFetch(`/rest/v1/budgets_mensuels?order=annee.desc,mois.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
+      sbFetch(`/rest/v1/mouvements_caisse?order=date.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
+      sbFetch(`/rest/v1/investissements?order=date_acquisition.desc`).then(r=>r.ok?r.json():[]).catch(()=>[])
     ]);
     achats=a||[]; localStorage.setItem("va_achats",JSON.stringify(achats));
     ventes=v||[]; localStorage.setItem("va_ventes",JSON.stringify(ventes));
@@ -1070,6 +1078,8 @@ async function syncAll(silent=false){
     commissionsPaiements=cp||[]; localStorage.setItem("va_commissions_paiements",JSON.stringify(commissionsPaiements));
     if(jc&&jc.length){journalComptable=jc; saveJournalComptable();}
     budgetsMensuels=bm||[]; saveBudgetsMensuels();
+    mouvementsCaisse=mc||[]; saveMouvementsCaisse();
+    investissements=inv||[]; saveInvestissements();
     updateDemandesBadge();
     render();
     if(!silent) showToast("✓ Synchronisé");
@@ -1503,6 +1513,10 @@ const COMMERCIAL_SUBTABS = [
 
 const FINANCE_SUBTABS = [
   {id:"sig",         label:"Compte de résultat"},
+  {id:"tresorerie",  label:"Trésorerie"},
+  {id:"couts",       label:"Coûts"},
+  {id:"tiers",       label:"Clients / Fournisseurs"},
+  {id:"investissements", label:"Investissements"},
   {id:"budget",      label:"Budget"},
   {id:"commissions", label:"Commissions"},
   {id:"journal",     label:"Journal comptable"},
@@ -1561,6 +1575,10 @@ function renderFinanceContent(){
   if(financeSubTab==="sig"){ bilanOnglet="sig"; el.innerHTML = renderBilanInline(); }
   else if(financeSubTab==="budget"){ bilanOnglet="budget"; el.innerHTML = renderBilanInline(); }
   else if(financeSubTab==="pertes"){ bilanOnglet="pertes"; el.innerHTML = renderBilanInline(); }
+  else if(financeSubTab==="tresorerie"){ el.innerHTML = '<div id="tresorerieInline"></div>'; renderTresorerie(); }
+  else if(financeSubTab==="couts"){ el.innerHTML = '<div id="coutsInline"></div>'; renderCouts(); }
+  else if(financeSubTab==="tiers"){ el.innerHTML = '<div id="tiersInline"></div>'; renderTiers(); }
+  else if(financeSubTab==="investissements"){ el.innerHTML = '<div id="investInline"></div>'; renderInvestissements(); }
   else if(financeSubTab==="commissions"){ el.innerHTML = '<div id="commissionsInline"></div>'; renderCommissionsInline(); }
   else if(financeSubTab==="journal"){ el.innerHTML = '<div id="journalInline"></div>'; renderJournalInline(); }
 }
@@ -1785,7 +1803,16 @@ function calculerCommission(nomUtilisateur) {
       ventesImputees.push({...v, quantite: pris});
     }
 
-    const margeNetteL = margenette(ventesImputees);
+    // ── Marge nette du lot = CA proportionnel des ventes imputées
+    //    − coût d'achat réel du lot (qteConsommee × prix unitaire)
+    //    − frais accessoires réels du lot (qteConsommee × frais unitaires)
+    // (Même correction que dans voirCommissionAdmin : évite le recalcul
+    //  via margenette(ventesImputees), incohérent avec l'historique réel.)
+    const caImpute = ventesImputees.reduce((s,v)=>s+v.quantite*v.prix_vente, 0);
+    const fraisTotauxLot = (lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0);
+    const fraisUnitairesLot = lot.quantite ? fraisTotauxLot/lot.quantite : 0;
+    const coutLot = qteVendue * (lot.prix_unitaire + fraisUnitairesLot);
+    const margeNetteL = caImpute - coutLot;
     const commission = Math.max(0, margeNetteL * 0.10);
 
     return {
@@ -2053,7 +2080,17 @@ function voirCommissionAdmin() {
         aPrendre-=pris;
         ventesImputees.push({...v,quantite:pris});
       }
-      const mn = margenette(ventesImputees);
+      // ── Marge nette du lot = CA proportionnel des ventes imputées
+      //    − coût d'achat réel du lot (qteConsommee × prix unitaire)
+      //    − frais accessoires réels du lot (qteConsommee × frais unitaires)
+      // (Remplace l'ancien recalcul via margenette(ventesImputees), qui
+      //  rejouait un FIFO partiel incohérent avec l'historique réel des
+      //  ventes et sous-évaluait les frais terrain imputés.)
+      const caImpute = ventesImputees.reduce((s,v)=>s+v.quantite*v.prix_vente, 0);
+      const fraisTotauxLot = (lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0);
+      const fraisUnitairesLot = lot.quantite ? fraisTotauxLot/lot.quantite : 0;
+      const coutLot = lotFifo.qteConsommee * (lot.prix_unitaire + fraisUnitairesLot);
+      const mn = caImpute - coutLot;
       const comm = Math.max(0, mn*0.10);
       totalCommUser += comm;
 
@@ -2101,7 +2138,6 @@ function voirCommissionAdmin() {
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
     +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">💰 Commissions équipe</div>'
     +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">10% marge nette · Par utilisateur · Par lot</div></div>'
-    +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
     +'</div>'
     +usersHtml
   );
@@ -2258,7 +2294,7 @@ async function enregistrerPaiementCommission(nom, montantDu) {
     localStorage.setItem("va_commissions_paiements", JSON.stringify(commissionsPaiements));
 
     logAdminAction("PAIEMENT_COMMISSION", nom+" · "+fmt(montant)+"F ("+statut+")");
-    showToast("✓ Paiement enregistré : "+fmt(montant)+" F");
+    showToast("✓ Paiement enregistré : "+fmt(montant));
     closeModal();
     voirCommissionAdmin();
     render();
@@ -2372,8 +2408,8 @@ function genererDocumentPDF(type, item){
   doc.setFont(undefined,"normal");
   doc.text((getProduitIcon(item.produit)||"")+" "+(item.produit||""),17,y+5.5);
   doc.text(String(item.quantite||0)+" "+(item.unite||""),110,y+5.5,{align:"right"});
-  doc.text(fmt(prixUnit)+" F",150,y+5.5,{align:"right"});
-  doc.text(fmt(total)+" F",193,y+5.5,{align:"right"});
+  doc.text(fmt(prixUnit),150,y+5.5,{align:"right"});
+  doc.text(fmt(total),193,y+5.5,{align:"right"});
 
   y+=12;
   doc.setDrawColor(220,220,220); doc.line(14,y,196,y);
@@ -2384,18 +2420,18 @@ function genererDocumentPDF(type, item){
     const frais = fraisAchat(item);
     if(frais>0){
       doc.setFontSize(9);
-      doc.text("Frais accessoires (transport, droit de terre, charrette) : "+fmt(frais)+" F", 14, y);
+      doc.text("Frais accessoires (transport, droit de terre, charrette) : "+fmt(frais), 14, y);
       y+=6;
     }
     if(item.avance_paye>0){
-      doc.text("Avance versée : "+fmt(item.avance_paye)+" F", 14, y);
+      doc.text("Avance versée : "+fmt(item.avance_paye), 14, y);
       y+=6;
     }
   }
 
   // Total
   doc.setFontSize(12); doc.setFont(undefined,"bold");
-  doc.text("TOTAL : "+fmt(total)+" F", 196, y+4, {align:"right"});
+  doc.text("TOTAL : "+fmt(total), 196, y+4, {align:"right"});
 
   // Pied de page
   doc.setFontSize(8); doc.setFont(undefined,"normal"); doc.setTextColor(120,120,120);
@@ -2446,9 +2482,19 @@ const PLAN_COMPTES = {
 
 let journalComptable = JSON.parse(localStorage.getItem("va_journal_comptable")||"[]");
 let budgetsMensuels = JSON.parse(localStorage.getItem("va_budgets_mensuels")||"[]");
+let mouvementsCaisse = JSON.parse(localStorage.getItem("va_mouvements_caisse")||"[]");
+let investissements = JSON.parse(localStorage.getItem("va_investissements")||"[]");
 
 function saveBudgetsMensuels(){
   localStorage.setItem("va_budgets_mensuels", JSON.stringify(budgetsMensuels));
+}
+
+function saveMouvementsCaisse(){
+  localStorage.setItem("va_mouvements_caisse", JSON.stringify(mouvementsCaisse));
+}
+
+function saveInvestissements(){
+  localStorage.setItem("va_investissements", JSON.stringify(investissements));
 }
 
 function saveJournalComptable(){
@@ -2620,6 +2666,765 @@ async function regenererJournalComptable(capitalOuverture){
  * Écran Journal comptable (modal) : liste chronologique, filtrable par compte,
  * avec total débit/crédit par compte (balance simplifiée) et export CSV.
  */
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE TRÉSORERIE (Pôle Financier — Lot 1)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Suit les entrées et sorties de caisse, calcule le solde courant et un
+// historique. Les ventes (table ventes) et achats réglés (avances) restent
+// la source du chiffre d'affaires / décaissements fournisseurs ; ce module
+// permet d'enregistrer en plus les flux de trésorerie non capturés ailleurs
+// (apports, emprunts, salaires, loyers, impôts, charges sociales, divers).
+//
+// Catégories d'entrée : vente_directe, paiement_client, apport_associe,
+//   emprunt, revenu_divers, solde_initial
+// Catégories de sortie : achat, salaire, charge_sociale, impot, loyer,
+//   investissement, depense_diverse
+
+const CAISSE_CATEGORIES = {
+  entree: [
+    {id:"solde_initial",   label:"Solde initial de caisse"},
+    {id:"vente_directe",   label:"Vente (encaissement direct)"},
+    {id:"paiement_client", label:"Paiement client (créance)"},
+    {id:"apport_associe",  label:"Apport associé"},
+    {id:"emprunt",         label:"Emprunt reçu"},
+    {id:"revenu_divers",   label:"Revenu divers"},
+  ],
+  sortie: [
+    {id:"achat",           label:"Achat marchandise"},
+    {id:"salaire",         label:"Salaire"},
+    {id:"charge_sociale",  label:"Charge sociale"},
+    {id:"impot",           label:"Impôt / taxe"},
+    {id:"loyer",           label:"Loyer"},
+    {id:"investissement",  label:"Investissement"},
+    {id:"depense_diverse", label:"Dépense diverse"},
+  ],
+};
+
+function libelleCategorieCaisse(sens, id){
+  const found = (CAISSE_CATEGORIES[sens]||[]).find(c=>c.id===id);
+  return found ? found.label : id;
+}
+
+/**
+ * Flux de trésorerie AUTOMATIQUES dérivés des données métier existantes :
+ *  - Entrées : chaque vente (encaissement présumé au comptant)
+ *  - Sorties : chaque achat reçu (coût marchandise + frais accessoires)
+ * Ces flux sont des objets de même forme que les mouvements manuels, avec
+ * un flag `auto:true` (non modifiables/supprimables, non stockés en base).
+ */
+function fluxCaisseAuto(){
+  const flux = [];
+  ventes.forEach(v=>{
+    const montant = (v.quantite||0)*(v.prix_vente||0);
+    if(montant>0) flux.push({
+      id:"auto_v_"+v.id, date:v.date, sens:"entree", categorie:"vente_directe",
+      montant, mode_paiement:v.mode_paiement||"", note:"Vente "+(v.produit||"")+" — "+(v.client||""),
+      auto:true
+    });
+  });
+  achats.filter(a=>a.statut==="recu").forEach(a=>{
+    const frais=(a.droit_terre||0)+(a.transport||0)+(a.droit_vente||0)+(a.charrette||0);
+    const montant=(a.quantite||0)*(a.prix_unitaire||0)+frais;
+    if(montant>0) flux.push({
+      id:"auto_a_"+a.id, date:a.date_reception||a.date, sens:"sortie", categorie:"achat",
+      montant, mode_paiement:"", note:"Achat "+(a.produit||"")+" — "+(a.fournisseur||""),
+      auto:true
+    });
+  });
+  return flux;
+}
+
+/**
+ * Ensemble complet des mouvements = flux auto (ventes/achats) + mouvements
+ * manuels saisis. Utilisé pour tous les calculs et l'affichage.
+ */
+function tousMouvementsCaisse(){
+  return fluxCaisseAuto().concat(mouvementsCaisse);
+}
+
+function totalEntreesCaisse(arr){ return (arr||tousMouvementsCaisse()).filter(m=>m.sens==="entree").reduce((s,m)=>s+(+m.montant||0),0); }
+function totalSortiesCaisse(arr){ return (arr||tousMouvementsCaisse()).filter(m=>m.sens==="sortie").reduce((s,m)=>s+(+m.montant||0),0); }
+function soldeCaisse(arr){ const a=arr||tousMouvementsCaisse(); return totalEntreesCaisse(a) - totalSortiesCaisse(a); }
+
+/**
+ * Seuil minimum de trésorerie (alerte si solde en dessous).
+ * Stocké en localStorage, configurable par l'admin.
+ */
+function seuilTresorerie(){
+  return parseFloat(localStorage.getItem("va_seuil_tresorerie")) || 0;
+}
+function configurerSeuilTresorerie(){
+  if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
+  const actuel = seuilTresorerie();
+  const saisie = prompt("Seuil minimum de trésorerie (F)\nUne alerte s'affichera si le solde passe en dessous :", actuel);
+  if(saisie===null) return;
+  const val = parseFloat(saisie)||0;
+  localStorage.setItem("va_seuil_tresorerie", val);
+  showToast("✓ Seuil fixé à "+fmt(val));
+  render();
+}
+
+/**
+ * Écran Trésorerie (rendu inline dans Finance & Gestion).
+ */
+function renderTresorerie(){
+  const target = document.getElementById("tresorerieInline");
+  if(!target) return;
+
+  const now = new Date();
+  const moisCourant = now.toISOString().slice(0,7);
+  const tous = tousMouvementsCaisse();
+  const mvtsMois = tous.filter(m=>(m.date||"").slice(0,7)===moisCourant);
+
+  const solde = soldeCaisse(tous);
+  const entreesMois = totalEntreesCaisse(mvtsMois);
+  const sortiesMois = totalSortiesCaisse(mvtsMois);
+
+  // Historique trié par date décroissante
+  const historique = tous.slice().sort((a,b)=>(b.date||"").localeCompare(a.date||"")||(b.created_at||"").localeCompare(a.created_at||""));
+
+  const carte = (titre, valeur, couleur, bg, border) =>
+    '<div style="flex:1;min-width:150px;background:'+bg+';border:1.5px solid '+border+';border-radius:12px;padding:12px;">'
+      +'<div style="font-size:9px;font-weight:700;color:#6b8c7a;text-transform:uppercase;letter-spacing:.06em;">'+titre+'</div>'
+      +'<div style="font-size:18px;font-weight:900;color:'+couleur+';margin-top:4px;">'+fmt(valeur)+'</div>'
+    +'</div>';
+
+  const lignesHist = historique.slice(0,150).map(m=>{
+    const estEntree = m.sens==="entree";
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:#fff;border:1px solid #e4ede7;border-radius:10px;margin-bottom:5px;">'
+      +'<div style="flex:1;min-width:0;">'
+        +'<div style="font-weight:700;color:#0f1f16;font-size:12px;">'+libelleCategorieCaisse(m.sens,m.categorie)
+          +(m.auto?' <span style="font-size:8px;font-weight:700;color:#6d28d9;background:#f5f3ff;border-radius:6px;padding:1px 5px;vertical-align:middle;">AUTO</span>':'')+'</div>'
+        +'<div style="font-size:10px;color:#6b8c7a;">'+m.date+(m.mode_paiement?' · '+m.mode_paiement:'')+(m.note?' · '+m.note:'')+'</div>'
+      +'</div>'
+      +'<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">'
+        +'<div style="font-weight:900;font-size:13px;color:'+(estEntree?'#166534':'#dc2626')+';">'+(estEntree?'+':'−')+fmt(m.montant)+'</div>'
+        +(m.auto?'' :'<button onclick="supprimerMouvementCaisse(\''+m.id+'\')" style="background:#fef2f2;border:none;border-radius:8px;width:26px;height:26px;cursor:pointer;font-size:12px;color:#dc2626;">🗑</button>')
+      +'</div>'
+    +'</div>';
+  }).join('');
+
+  target.innerHTML =
+    '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">💵 Trésorerie</div>'
+    +((solde < seuilTresorerie())
+      ? '<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:10px;padding:10px 12px;margin-bottom:10px;color:#dc2626;font-weight:700;font-size:12px;">⚠ Risque de tension de trésorerie — solde '+fmt(solde)+' sous le seuil de '+fmt(seuilTresorerie())+'</div>'
+      : '')
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
+      +carte("Solde de caisse", solde, solde>=0?'#166534':'#dc2626', solde>=0?'#f0fdf4':'#fef2f2', solde>=0?'#bbf7d0':'#fecaca')
+      +carte("Entrées du mois", entreesMois, '#166534', '#f0fdf4', '#bbf7d0')
+      +carte("Sorties du mois", sortiesMois, '#dc2626', '#fef2f2', '#fecaca')
+    +'</div>'
+
+    +'<div style="font-size:10px;color:#6b8c7a;margin-bottom:12px;">Les ventes et achats reçus alimentent automatiquement la trésorerie (mention <b>AUTO</b>). Ajoutez les autres flux réels (apports, salaires, loyers, etc.) manuellement.</div>'
+
+    +'<div style="display:flex;gap:8px;margin-bottom:14px;">'
+      +'<button onclick="modalMouvementCaisse(\'entree\')" style="flex:1;background:#166534;color:#fff;border:none;border-radius:10px;padding:11px;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;">+ Entrée</button>'
+      +'<button onclick="modalMouvementCaisse(\'sortie\')" style="flex:1;background:#dc2626;color:#fff;border:none;border-radius:10px;padding:11px;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;">− Sortie</button>'
+    +'</div>'
+
+    +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Historique des mouvements</div>'
+    +(historique.length ? lignesHist
+      : '<div style="text-align:center;padding:20px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;">Aucun mouvement de caisse enregistré.</div>');
+}
+
+function modalMouvementCaisse(sens){
+  if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
+  const cats = CAISSE_CATEGORIES[sens]||[];
+  const couleur = sens==="entree" ? "#166534" : "#dc2626";
+  const titre = sens==="entree" ? "Nouvelle entrée de caisse" : "Nouvelle sortie de caisse";
+
+  showModal(
+    '<div style="font-size:16px;font-weight:800;color:'+couleur+';margin-bottom:14px;">'+(sens==="entree"?'+ ':'− ')+titre+'</div>'
+
+    +'<div style="margin-bottom:10px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Catégorie</label>'
+      +'<select id="mc_cat" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;background:#fff;">'
+        +cats.map(c=>'<option value="'+c.id+'">'+c.label+'</option>').join('')
+      +'</select>'
+    +'</div>'
+    +'<div style="margin-bottom:10px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Montant (F)</label>'
+      +'<input type="number" id="mc_montant" min="0" inputmode="numeric" placeholder="0" style="width:100%;padding:12px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:16px;text-align:center;font-weight:700;"/>'
+    +'</div>'
+    +'<div style="margin-bottom:10px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Date</label>'
+      +'<input type="date" id="mc_date" value="'+new Date().toISOString().slice(0,10)+'" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/>'
+    +'</div>'
+    +'<div style="margin-bottom:10px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Mode de paiement</label>'
+      +'<select id="mc_mode" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;background:#fff;">'
+        +'<option value="Espèces">Espèces</option><option value="Mobile Money">Mobile Money</option><option value="Virement">Virement</option><option value="Chèque">Chèque</option>'
+      +'</select>'
+    +'</div>'
+    +'<div style="margin-bottom:14px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Note (facultatif)</label>'
+      +'<input type="text" id="mc_note" placeholder="Détail…" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/>'
+    +'</div>'
+
+    +'<div id="mc_msg" style="display:none;margin-bottom:10px;font-size:12px;font-weight:700;text-align:center;"></div>'
+    +'<div style="display:flex;gap:10px;">'
+      +'<button onclick="enregistrerMouvementCaisse(\''+sens+'\')" style="flex:1;padding:13px;background:'+couleur+';color:#fff;border:none;border-radius:12px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">Enregistrer</button>'
+      +'<button onclick="closeModal()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>'
+    +'</div>'
+  );
+  setTimeout(()=>document.getElementById("mc_montant")?.focus(), 150);
+}
+
+async function enregistrerMouvementCaisse(sens){
+  const msg = document.getElementById("mc_msg");
+  const montant = parseFloat(document.getElementById("mc_montant")?.value)||0;
+  if(montant<=0){ msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Saisissez un montant valide."; return; }
+
+  const payload = {
+    id: genId(),
+    date: document.getElementById("mc_date")?.value || new Date().toISOString().slice(0,10),
+    sens,
+    categorie: document.getElementById("mc_cat")?.value || (sens==="entree"?"revenu_divers":"depense_diverse"),
+    montant,
+    mode_paiement: document.getElementById("mc_mode")?.value || "Espèces",
+    note: document.getElementById("mc_note")?.value.trim() || "",
+    enregistre_par: currentUser?.nom || "Admin",
+  };
+
+  msg.style.cssText="display:block;color:#166534;"; msg.textContent="Enregistrement…";
+  try {
+    await sbInsert("mouvements_caisse", payload);
+    mouvementsCaisse.unshift(payload);
+    saveMouvementsCaisse();
+    logAdminAction("MOUVEMENT_CAISSE", sens+" "+payload.categorie+" "+fmt(montant));
+    showToast("✓ Mouvement enregistré");
+    closeModal();
+    renderTresorerie();
+  } catch(e) {
+    msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Erreur : "+e.message;
+  }
+}
+
+async function supprimerMouvementCaisse(id){
+  if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
+  const m = mouvementsCaisse.find(x=>x.id===id);
+  if(!m) return;
+  if(!confirm("Supprimer ce mouvement de "+fmt(m.montant)+" ?")) return;
+  try {
+    await sbDelete("mouvements_caisse", id);
+    mouvementsCaisse = mouvementsCaisse.filter(x=>x.id!==id);
+    saveMouvementsCaisse();
+    logAdminAction("SUPPR_MOUVEMENT_CAISSE", m.sens+" "+fmt(m.montant));
+    showToast("✓ Mouvement supprimé");
+    renderTresorerie();
+  } catch(e) {
+    showToast("Erreur : "+e.message,"error");
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE ANALYSE DES COÛTS (Pôle Financier — Lot 3)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Ventile les charges en coûts FIXES vs VARIABLES, identifie le top 10 des
+// postes de dépense et affiche un camembert (SVG, sans dépendance externe).
+//
+// Sources : sorties de mouvements_caisse (manuelles) + flux auto (achats +
+// frais terrain). Classement fixe/variable par catégorie :
+//   VARIABLES : achat marchandise, frais terrain (varient avec le volume)
+//   FIXES : salaire, loyer, charge sociale, impôt, dépense diverse
+//   (investissement traité à part, hors charges courantes)
+
+const COUT_NATURE = {
+  achat:          "variable",
+  frais_terrain:  "variable",
+  salaire:        "fixe",
+  charge_sociale: "fixe",
+  impot:          "fixe",
+  loyer:          "fixe",
+  depense_diverse:"fixe",
+  investissement: "investissement",
+};
+
+/**
+ * Agrège toutes les charges par poste, avec leur nature (fixe/variable).
+ * Décompose les achats en marchandise (variable) + frais terrain (variable).
+ */
+function agregerCouts(){
+  const postes = {}; // categorie -> {label, montant, nature}
+  const add = (cat, label, montant, nature) => {
+    if(montant<=0) return;
+    if(!postes[cat]) postes[cat] = {label, montant:0, nature};
+    postes[cat].montant += montant;
+  };
+
+  // Achats reçus : marchandise + frais terrain (deux postes distincts)
+  achats.filter(a=>a.statut==="recu").forEach(a=>{
+    add("achat", "Achat marchandise", (a.quantite||0)*(a.prix_unitaire||0), "variable");
+    const frais=(a.droit_terre||0)+(a.transport||0)+(a.droit_vente||0)+(a.charrette||0);
+    add("frais_terrain", "Frais terrain (transport, droits…)", frais, "variable");
+  });
+
+  // Commissions versées (variable, liées au volume vendu)
+  const commiss = totalCommissionsDues();
+  if(commiss>0) add("commission", "Commissions terrain", commiss, "variable");
+
+  // Pertes sur stock (variable)
+  const pertesV = totalPertesValeur();
+  if(pertesV>0) add("perte", "Pertes sur stock", pertesV, "variable");
+
+  // Sorties de caisse manuelles
+  mouvementsCaisse.filter(m=>m.sens==="sortie" && m.categorie!=="achat").forEach(m=>{
+    const nature = COUT_NATURE[m.categorie] || "fixe";
+    add(m.categorie, libelleCategorieCaisse("sortie", m.categorie), +m.montant||0, nature);
+  });
+
+  return postes;
+}
+
+function renderCouts(){
+  const target = document.getElementById("coutsInline");
+  if(!target) return;
+
+  const postes = agregerCouts();
+  const liste = Object.values(postes);
+
+  if(!liste.length){
+    target.innerHTML = '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">📉 Analyse des coûts</div>'
+      +'<div style="text-align:center;padding:20px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;">Aucune charge enregistrée.</div>';
+    return;
+  }
+
+  const totalFixe = liste.filter(p=>p.nature==="fixe").reduce((s,p)=>s+p.montant,0);
+  const totalVariable = liste.filter(p=>p.nature==="variable").reduce((s,p)=>s+p.montant,0);
+  const totalInvest = liste.filter(p=>p.nature==="investissement").reduce((s,p)=>s+p.montant,0);
+  const totalCharges = totalFixe + totalVariable; // hors investissement
+  const ca = totalVentes();
+  const tauxCharges = ca ? Math.round(totalCharges/ca*100) : 0;
+
+  // Top 10 postes par montant (hors investissement)
+  const top = liste.slice().sort((a,b)=>b.montant-a.montant).slice(0,10);
+
+  // ── Camembert SVG fixe vs variable ──
+  const pieData = [
+    {label:"Coûts variables", val:totalVariable, color:"#0369a1"},
+    {label:"Coûts fixes", val:totalFixe, color:"#f47820"},
+  ].filter(d=>d.val>0);
+  const pieTotal = pieData.reduce((s,d)=>s+d.val,0)||1;
+  let angle = -90;
+  const R=70, CX=80, CY=80;
+  const arcs = pieData.map(d=>{
+    const frac = d.val/pieTotal;
+    const a0 = angle, a1 = angle + frac*360;
+    angle = a1;
+    const rad = x=>(x*Math.PI/180);
+    const x0=CX+R*Math.cos(rad(a0)), y0=CY+R*Math.sin(rad(a0));
+    const x1=CX+R*Math.cos(rad(a1)), y1=CY+R*Math.sin(rad(a1));
+    const large = frac>0.5?1:0;
+    // cas 100% : dessiner un cercle complet
+    if(frac>=0.999) return '<circle cx="'+CX+'" cy="'+CY+'" r="'+R+'" fill="'+d.color+'"/>';
+    return '<path d="M'+CX+','+CY+' L'+x0.toFixed(2)+','+y0.toFixed(2)+' A'+R+','+R+' 0 '+large+',1 '+x1.toFixed(2)+','+y1.toFixed(2)+' Z" fill="'+d.color+'"/>';
+  }).join('');
+  const legende = pieData.map(d=>
+    '<div style="display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:4px;">'
+    +'<span style="width:12px;height:12px;border-radius:3px;background:'+d.color+';display:inline-block;"></span>'
+    +'<span style="color:#3d5c48;">'+d.label+'</span>'
+    +'<span style="margin-left:auto;font-weight:800;color:#0f1f16;">'+fmt(d.val)+' ('+Math.round(d.val/pieTotal*100)+'%)</span>'
+    +'</div>'
+  ).join('');
+
+  const maxTop = top.length?top[0].montant:1;
+  const barres = top.map(p=>{
+    const couleur = p.nature==="variable"?"#0369a1":p.nature==="investissement"?"#7c3aed":"#f47820";
+    const pct = Math.round(p.montant/maxTop*100);
+    return '<div style="margin-bottom:7px;">'
+      +'<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px;">'
+        +'<span style="color:#0f1f16;font-weight:600;">'+p.label+' <span style="font-size:9px;color:#6b8c7a;">('+(p.nature==="variable"?"variable":p.nature==="investissement"?"invest.":"fixe")+')</span></span>'
+        +'<span style="font-weight:800;color:#0f1f16;">'+fmt(p.montant)+'</span>'
+      +'</div>'
+      +'<div style="height:8px;background:#f1f5f2;border-radius:999px;overflow:hidden;"><div style="height:100%;width:'+pct+'%;background:'+couleur+';border-radius:999px;"></div></div>'
+    +'</div>';
+  }).join('');
+
+  const carte = (titre, valeur, couleur, sub) =>
+    '<div style="flex:1;min-width:130px;background:#fff;border:1.5px solid #e4ede7;border-radius:12px;padding:12px;">'
+      +'<div style="font-size:9px;font-weight:700;color:#6b8c7a;text-transform:uppercase;letter-spacing:.06em;">'+titre+'</div>'
+      +'<div style="font-size:17px;font-weight:900;color:'+couleur+';margin-top:4px;">'+fmt(valeur)+'</div>'
+      +(sub?'<div style="font-size:9px;color:#6b8c7a;margin-top:2px;">'+sub+'</div>':'')
+    +'</div>';
+
+  target.innerHTML =
+    '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">📉 Analyse des coûts</div>'
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">'
+      +carte("Coûts variables", totalVariable, "#0369a1", "Varient avec le volume")
+      +carte("Coûts fixes", totalFixe, "#f47820", "Indépendants du volume")
+      +carte("Total charges", totalCharges, "#0f1f16", "Taux : "+tauxCharges+"% du CA")
+    +'</div>'
+    +(totalInvest>0?'<div style="font-size:10px;color:#6b8c7a;margin-bottom:12px;">Investissements (hors charges courantes) : <b>'+fmt(totalInvest)+'</b></div>':'')
+
+    +'<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:12px;padding:14px;margin-bottom:14px;">'
+      +'<div style="font-size:11px;font-weight:700;color:#0f1f16;margin-bottom:10px;">Répartition fixe / variable</div>'
+      +'<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">'
+        +'<svg width="160" height="160" viewBox="0 0 160 160" style="flex-shrink:0;">'+arcs+'</svg>'
+        +'<div style="flex:1;min-width:160px;">'+legende+'</div>'
+      +'</div>'
+    +'</div>'
+
+    +'<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:12px;padding:14px;">'
+      +'<div style="font-size:11px;font-weight:700;color:#0f1f16;margin-bottom:10px;">Top '+top.length+' postes de dépense</div>'
+      +barres
+    +'</div>';
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE ANALYSE CLIENTS / FOURNISSEURS (Pôle Financier — Lot 4)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Top clients par CA, top fournisseurs par achats, fréquence et panier moyen.
+// NOTE : le délai moyen de paiement (DSO/DPO) n'est pas calculable car l'app
+// n'enregistre pas de date de règlement ni de statut crédit/comptant côté
+// client. On l'indique clairement comme non disponible plutôt que d'inventer
+// une valeur.
+
+function renderTiers(){
+  const target = document.getElementById("tiersInline");
+  if(!target) return;
+
+  // ── Clients (depuis ventes) ──
+  const clientsMap = {};
+  ventes.forEach(v=>{
+    const nom = (v.client||"—").trim() || "—";
+    if(!clientsMap[nom]) clientsMap[nom] = {nom, ca:0, nb:0, dates:[]};
+    clientsMap[nom].ca += (v.quantite||0)*(v.prix_vente||0);
+    clientsMap[nom].nb += 1;
+    if(v.date) clientsMap[nom].dates.push(v.date);
+  });
+  const clients = Object.values(clientsMap).sort((a,b)=>b.ca-a.ca);
+  const caTotal = clients.reduce((s,c)=>s+c.ca,0)||1;
+
+  // ── Fournisseurs (depuis achats) ──
+  const fournMap = {};
+  achats.forEach(a=>{
+    const nom = (a.fournisseur||"—").trim() || "—";
+    if(!fournMap[nom]) fournMap[nom] = {nom, montant:0, nb:0, du:0};
+    const frais=(a.droit_terre||0)+(a.transport||0)+(a.droit_vente||0)+(a.charrette||0);
+    const total=(a.quantite||0)*(a.prix_unitaire||0)+frais;
+    fournMap[nom].montant += total;
+    fournMap[nom].nb += 1;
+    fournMap[nom].du += Math.max(0, total - (a.avance_paye||0));
+  });
+  const fournisseurs = Object.values(fournMap).sort((a,b)=>b.montant-a.montant);
+  const achatTotal = fournisseurs.reduce((s,f)=>s+f.montant,0)||1;
+
+  const ligneTiers = (nom, montant, part, sub, couleur) =>
+    '<div style="margin-bottom:8px;">'
+      +'<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px;">'
+        +'<span style="color:#0f1f16;font-weight:700;">'+nom+'</span>'
+        +'<span style="font-weight:800;color:#0f1f16;">'+fmt(montant)+' <span style="font-size:9px;color:#6b8c7a;">('+part+'%)</span></span>'
+      +'</div>'
+      +(sub?'<div style="font-size:10px;color:#6b8c7a;margin-bottom:3px;">'+sub+'</div>':'')
+      +'<div style="height:7px;background:#f1f5f2;border-radius:999px;overflow:hidden;"><div style="height:100%;width:'+part+'%;background:'+couleur+';border-radius:999px;"></div></div>'
+    +'</div>';
+
+  const clientsHtml = clients.slice(0,10).map(c=>{
+    const part = Math.round(c.ca/caTotal*100);
+    const panier = c.nb ? Math.round(c.ca/c.nb) : 0;
+    return ligneTiers(c.nom, c.ca, part, c.nb+" achat"+(c.nb>1?"s":"")+" · panier moyen "+fmt(panier), "#0369a1");
+  }).join('');
+
+  const fournHtml = fournisseurs.slice(0,10).map(f=>{
+    const part = Math.round(f.montant/achatTotal*100);
+    return ligneTiers(f.nom, f.montant, part, f.nb+" lot"+(f.nb>1?"s":"")+(f.du>0?" · reste dû "+fmt(f.du):" · soldé"), "#f47820");
+  }).join('');
+
+  target.innerHTML =
+    '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">👥 Clients</div>'
+    +'<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:12px;padding:14px;margin-bottom:14px;">'
+      +'<div style="display:flex;justify-content:space-between;font-size:11px;color:#6b8c7a;margin-bottom:10px;"><span>'+clients.length+' client'+(clients.length>1?'s':'')+'</span><span>CA total : '+fmt(caTotal)+'</span></div>'
+      +(clients.length?clientsHtml:'<div style="text-align:center;padding:14px;color:#6b8c7a;font-size:12px;">Aucune vente enregistrée.</div>')
+    +'</div>'
+
+    +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">🚚 Fournisseurs</div>'
+    +'<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:12px;padding:14px;margin-bottom:14px;">'
+      +'<div style="display:flex;justify-content:space-between;font-size:11px;color:#6b8c7a;margin-bottom:10px;"><span>'+fournisseurs.length+' fournisseur'+(fournisseurs.length>1?'s':'')+'</span><span>Achats : '+fmt(achatTotal)+'</span></div>'
+      +(fournisseurs.length?fournHtml:'<div style="text-align:center;padding:14px;color:#6b8c7a;font-size:12px;">Aucun achat enregistré.</div>')
+    +'</div>'
+
+    +'<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:10px;padding:10px 12px;font-size:10px;color:#92400e;">'
+      +'<b>Délai moyen de paiement (DSO / DPO) : donnée non disponible.</b> L\'application n\'enregistre pas encore les dates de règlement ni le statut crédit/comptant des ventes. Pour activer ce calcul, il faudra ajouter un suivi des encaissements clients et décaissements fournisseurs datés.'
+    +'</div>';
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE RAPPORT FINANCIER PDF (Pôle Financier — Lot 6)
+// ════════════════════════════════════════════════════════════════════════════
+function genererRapportFinancierPDF(){
+  if(typeof window.jspdf==="undefined"){ showToast("Génération PDF indisponible (hors-ligne)","error"); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({unit:"mm", format:"a4"});
+  const W=210, M=14;
+  let y=0;
+
+  // Données
+  const ca = totalVentes();
+  const margeBrute = margebrute(ventes);
+  const margeNetteCom = margenette(ventes);
+  const cmv = ca - margeBrute;
+  const frais = margeBrute - margeNetteCom;
+  const totalCommiss = totalCommissionsDues();
+  const totalPertesV = totalPertesValeur();
+  const resultatExpl = margeNetteCom - totalCommiss - totalPertesV;
+  const totalDus = totalAchats() - totalAvances();
+  const tauxB = ca?Math.round(margeBrute/ca*100):0;
+  const tauxN = ca?Math.round(margeNetteCom/ca*100):0;
+  const tauxRE = ca?Math.round(resultatExpl/ca*100):0;
+  const soldeTreso = soldeCaisse(tousMouvementsCaisse());
+
+  // En-tête
+  doc.setFillColor(13,61,26); doc.rect(0,0,W,26,"F");
+  doc.setTextColor(255,255,255); doc.setFontSize(17); doc.setFont(undefined,"bold");
+  doc.text("VerdApp CI", M, 12);
+  doc.setFontSize(9); doc.setFont(undefined,"normal");
+  doc.text("Rapport financier", M, 19);
+  const moisLabel = new Date().toLocaleDateString("fr-CI",{month:"long",year:"numeric"});
+  doc.setFontSize(11); doc.setFont(undefined,"bold");
+  doc.text(moisLabel, W-M, 12, {align:"right"});
+  doc.setFontSize(8); doc.setFont(undefined,"normal");
+  doc.text("Édité le "+new Date().toLocaleDateString("fr-CI"), W-M, 19, {align:"right"});
+
+  y=36;
+  doc.setTextColor(20,20,20);
+
+  // Section : Compte de résultat (SIG)
+  function titreSection(t){
+    doc.setFillColor(240,244,240); doc.rect(M,y-5,W-2*M,8,"F");
+    doc.setFontSize(10); doc.setFont(undefined,"bold"); doc.setTextColor(13,61,26);
+    doc.text(t, M+2, y); y+=9; doc.setTextColor(20,20,20);
+  }
+  function ligne(label, valeur, opts){
+    opts=opts||{};
+    doc.setFontSize(opts.gras?10:9); doc.setFont(undefined,opts.gras?"bold":"normal");
+    doc.text(label, M+2, y);
+    doc.text(valeur, W-M-2, y, {align:"right"});
+    y+=opts.gras?7:6;
+  }
+
+  titreSection("COMPTE DE RÉSULTAT (SIG)");
+  ligne("Chiffre d'affaires (CA)", fmt(ca));
+  ligne("− Coût d'achat des marchandises vendues (FIFO)", "−"+fmt(cmv));
+  ligne("= MARGE BRUTE  ("+tauxB+"%)", fmt(margeBrute), {gras:true});
+  ligne("− Frais accessoires d'achat", "−"+fmt(frais));
+  ligne("= MARGE NETTE COMMERCIALE  ("+tauxN+"%)", fmt(margeNetteCom), {gras:true});
+  ligne("− Commissions terrain", "−"+fmt(totalCommiss));
+  ligne("− Pertes sur stocks", "−"+fmt(totalPertesV));
+  ligne("= RÉSULTAT D'EXPLOITATION  ("+tauxRE+"%)", fmt(resultatExpl), {gras:true});
+  y+=4;
+
+  // Section : Indicateurs clés
+  titreSection("INDICATEURS CLÉS");
+  ligne("Trésorerie (solde de caisse)", fmt(soldeTreso));
+  ligne("Dû fournisseurs", fmt(totalDus));
+  ligne("Taux de marge brute", tauxB+"%");
+  ligne("Taux de marge nette", tauxN+"%");
+  y+=4;
+
+  // Section : Diagnostic
+  titreSection("DIAGNOSTIC");
+  const diag = [];
+  if(tauxB>=20) diag.push("+ Marge brute solide"); else diag.push("- Marge brute faible");
+  if(tauxN>=15) diag.push("+ Marge nette saine"); else diag.push("- Marge nette sous le seuil de 15%");
+  if(resultatExpl>=0) diag.push("+ Activité bénéficiaire"); else diag.push("- Résultat d'exploitation négatif");
+  if(totalDus>0) diag.push("- Dettes fournisseurs à régler : "+fmt(totalDus));
+  doc.setFontSize(9); doc.setFont(undefined,"normal");
+  diag.forEach(d=>{ doc.text(d, M+2, y); y+=6; });
+
+  // Pied de page
+  doc.setFontSize(7); doc.setTextColor(120,120,120);
+  doc.text("Document généré par VerdApp CI — conforme au cadre SYSCOHADA. Les charges fixes générales (loyer, salaires administratifs, amortissements,", M, 285);
+  doc.text("impôts) ne sont pas incluses dans le résultat d'exploitation ci-dessus et doivent être intégrées par le comptable pour le résultat net.", M, 289);
+
+  doc.save("rapport_financier_verdapp_"+new Date().toISOString().slice(0,7)+".pdf");
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE INVESTISSEMENTS (ROI, Payback, VAN, TRI)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Hypothèse de modèle : un investissement a un coût initial (sortie en année 0),
+// puis un flux net annuel constant attendu (gain ou économie) sur un horizon
+// donné, plus une valeur résiduelle en fin d'horizon. Ces flux sont des
+// PRÉVISIONS saisies par l'utilisateur — l'app ne peut pas les deviner.
+//
+// Méthodes :
+//   ROI = (flux cumulés + valeur résiduelle − coût) / coût
+//   Payback = coût / flux annuel (en années, si flux>0)
+//   VAN (NPV) = −coût + Σ flux_t/(1+i)^t + résiduelle/(1+i)^n
+//   TRI (IRR) = taux i tel que VAN = 0 (résolu par bissection)
+
+function vanInvest(inv){
+  const cout = +inv.cout_initial||0;
+  const flux = +inv.flux_annuel||0;
+  const n = Math.max(1, parseInt(inv.duree_annees)||1);
+  const i = (+inv.taux_actualisation||0)/100;
+  const residuelle = +inv.valeur_residuelle||0;
+  let van = -cout;
+  for(let t=1;t<=n;t++){ van += flux/Math.pow(1+i,t); }
+  van += residuelle/Math.pow(1+i,n);
+  return van;
+}
+
+function triInvest(inv){
+  const cout = +inv.cout_initial||0;
+  const flux = +inv.flux_annuel||0;
+  const n = Math.max(1, parseInt(inv.duree_annees)||1);
+  const residuelle = +inv.valeur_residuelle||0;
+  if(cout<=0) return null;
+  // VAN en fonction du taux r
+  const vanAt = r => {
+    let v=-cout;
+    for(let t=1;t<=n;t++){ v += flux/Math.pow(1+r,t); }
+    v += residuelle/Math.pow(1+r,n);
+    return v;
+  };
+  // Si même le taux 0 donne une VAN négative, pas de TRI positif
+  if(vanAt(0) < 0) return null;
+  // Bissection entre 0 et 1000%
+  let lo=0, hi=10; // 0% à 1000%
+  if(vanAt(hi) > 0) return null; // TRI > 1000%, non pertinent
+  for(let k=0;k<100;k++){
+    const mid=(lo+hi)/2;
+    const v=vanAt(mid);
+    if(Math.abs(v)<1) return mid*100;
+    if(v>0) lo=mid; else hi=mid;
+  }
+  return ((lo+hi)/2)*100;
+}
+
+function renderInvestissements(){
+  const target = document.getElementById("investInline");
+  if(!target) return;
+
+  const cartes = investissements.map(inv=>{
+    const cout = +inv.cout_initial||0;
+    const flux = +inv.flux_annuel||0;
+    const n = Math.max(1, parseInt(inv.duree_annees)||1);
+    const residuelle = +inv.valeur_residuelle||0;
+    const fluxCumules = flux*n + residuelle;
+    const roi = cout>0 ? Math.round((fluxCumules-cout)/cout*100) : 0;
+    const payback = flux>0 ? (cout/flux) : null;
+    const van = vanInvest(inv);
+    const tri = triInvest(inv);
+
+    const verdict = van>=0 ? {label:"Rentable", color:"#15803d"} : {label:"Non rentable", color:"#dc2626"};
+
+    const kpi = (t,v,c)=>'<div style="flex:1;min-width:90px;text-align:center;background:#f8faf8;border-radius:10px;padding:8px;">'
+      +'<div style="font-size:9px;color:#6b8c7a;font-weight:700;text-transform:uppercase;">'+t+'</div>'
+      +'<div style="font-size:14px;font-weight:900;color:'+(c||"#0f1f16")+';margin-top:2px;">'+v+'</div></div>';
+
+    return '<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:14px;padding:14px;margin-bottom:10px;">'
+      +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">'
+        +'<div><div style="font-weight:800;color:#0f1f16;font-size:14px;">'+inv.libelle+'</div>'
+          +'<div style="font-size:10px;color:#6b8c7a;">'+(inv.categorie||"—")+' · '+(inv.date_acquisition||"")+' · coût '+fmt(cout)+' · horizon '+n+' an'+(n>1?'s':'')+'</div></div>'
+        +'<div style="display:flex;gap:6px;flex-shrink:0;">'
+          +'<span style="font-size:9px;font-weight:800;color:#fff;background:'+verdict.color+';border-radius:999px;padding:3px 9px;height:fit-content;">'+verdict.label+'</span>'
+          +'<button onclick="supprimerInvestissement(\''+inv.id+'\')" style="background:#fef2f2;border:none;border-radius:8px;width:26px;height:26px;cursor:pointer;font-size:12px;color:#dc2626;">🗑</button>'
+        +'</div>'
+      +'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;">'
+        +kpi("ROI", roi+"%", roi>=0?"#15803d":"#dc2626")
+        +kpi("Récupération", payback!==null?payback.toFixed(1)+" ans":"—")
+        +kpi("VAN", fmt(van), van>=0?"#15803d":"#dc2626")
+        +kpi("TRI", tri!==null?tri.toFixed(1)+"%":"—", (tri!==null&&tri>=(+inv.taux_actualisation||0))?"#15803d":"#dc2626")
+      +'</div>'
+      +'<div style="font-size:9px;color:#6b8c7a;margin-top:8px;">Flux annuel attendu : '+fmt(flux)+' · Valeur résiduelle : '+fmt(residuelle)+' · Taux d\'actualisation : '+(+inv.taux_actualisation||0)+'%'
+        +(tri!==null?' · TRI '+(tri>=(+inv.taux_actualisation||0)?'≥':'<')+' taux exigé → '+(tri>=(+inv.taux_actualisation||0)?'projet acceptable':'projet à rejeter'):'')+'</div>'
+    +'</div>';
+  }).join('');
+
+  target.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
+      +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;">🏗 Investissements</div>'
+      +'<button onclick="modalInvestissement()" style="background:#0369a1;color:#fff;border:none;border-radius:10px;padding:8px 14px;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;">+ Ajouter</button>'
+    +'</div>'
+    +'<div style="font-size:10px;color:#6b8c7a;margin-bottom:12px;">VAN = valeur actuelle nette (positive = crée de la valeur). TRI = taux de rentabilité interne (acceptable si ≥ taux d\'actualisation exigé). Les flux sont des prévisions que vous saisissez.</div>'
+    +(investissements.length ? cartes
+      : '<div style="text-align:center;padding:20px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;">Aucun investissement enregistré.</div>');
+}
+
+function modalInvestissement(){
+  if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
+  showModal(
+    '<div style="font-size:16px;font-weight:800;color:#0369a1;margin-bottom:14px;">🏗 Nouvel investissement</div>'
+    +'<div style="margin-bottom:10px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Libellé</label>'
+      +'<input type="text" id="inv_libelle" placeholder="Ex: Camionnette de livraison" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/></div>'
+    +'<div style="margin-bottom:10px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Catégorie</label>'
+      +'<select id="inv_cat" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;background:#fff;">'
+        +'<option value="equipement">Équipement</option><option value="vehicule">Véhicule</option><option value="immobilier">Immobilier</option><option value="autre">Autre</option></select></div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:10px;">'
+      +'<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Coût initial (F)</label>'
+        +'<input type="number" id="inv_cout" min="0" placeholder="0" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:14px;"/></div>'
+      +'<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Date</label>'
+        +'<input type="date" id="inv_date" value="'+new Date().toISOString().slice(0,10)+'" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/></div>'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:10px;">'
+      +'<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Gain net annuel attendu (F)</label>'
+        +'<input type="number" id="inv_flux" min="0" placeholder="0" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:14px;"/></div>'
+      +'<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Durée (années)</label>'
+        +'<input type="number" id="inv_duree" min="1" value="3" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:14px;"/></div>'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:14px;">'
+      +'<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Taux d\'actualisation (%)</label>'
+        +'<input type="number" id="inv_taux" min="0" value="10" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:14px;"/></div>'
+      +'<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Valeur résiduelle (F)</label>'
+        +'<input type="number" id="inv_residu" min="0" value="0" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:14px;"/></div>'
+    +'</div>'
+    +'<div id="inv_msg" style="display:none;margin-bottom:10px;font-size:12px;font-weight:700;text-align:center;"></div>'
+    +'<div style="display:flex;gap:10px;">'
+      +'<button onclick="enregistrerInvestissement()" style="flex:1;padding:13px;background:#0369a1;color:#fff;border:none;border-radius:12px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">Enregistrer</button>'
+      +'<button onclick="closeModal()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>'
+    +'</div>'
+  );
+}
+
+async function enregistrerInvestissement(){
+  const msg = document.getElementById("inv_msg");
+  const libelle = document.getElementById("inv_libelle")?.value.trim();
+  if(!libelle){ msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Saisissez un libellé."; return; }
+  const payload = {
+    id: genId(),
+    libelle,
+    categorie: document.getElementById("inv_cat")?.value || "autre",
+    cout_initial: parseFloat(document.getElementById("inv_cout")?.value)||0,
+    date_acquisition: document.getElementById("inv_date")?.value || new Date().toISOString().slice(0,10),
+    flux_annuel: parseFloat(document.getElementById("inv_flux")?.value)||0,
+    duree_annees: parseInt(document.getElementById("inv_duree")?.value)||1,
+    taux_actualisation: parseFloat(document.getElementById("inv_taux")?.value)||0,
+    valeur_residuelle: parseFloat(document.getElementById("inv_residu")?.value)||0,
+    enregistre_par: currentUser?.nom || "Admin",
+  };
+  msg.style.cssText="display:block;color:#166534;"; msg.textContent="Enregistrement…";
+  try {
+    await sbInsert("investissements", payload);
+    investissements.unshift(payload);
+    saveInvestissements();
+    logAdminAction("INVESTISSEMENT", libelle+" "+fmt(payload.cout_initial));
+    showToast("✓ Investissement enregistré");
+    closeModal();
+    renderInvestissements();
+  } catch(e) {
+    msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Erreur : "+e.message;
+  }
+}
+
+async function supprimerInvestissement(id){
+  if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
+  const inv = investissements.find(x=>x.id===id);
+  if(!inv || !confirm("Supprimer l'investissement \""+inv.libelle+"\" ?")) return;
+  try {
+    await sbDelete("investissements", id);
+    investissements = investissements.filter(x=>x.id!==id);
+    saveInvestissements();
+    showToast("✓ Supprimé");
+    renderInvestissements();
+  } catch(e) { showToast("Erreur : "+e.message,"error"); }
+}
+
 function voirJournalComptable(){
   if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
 
@@ -2662,7 +3467,6 @@ function voirJournalComptable(){
       +'<div style="font-size:17px;font-weight:800;color:#0f1f16;">📒 Journal comptable</div>'
       +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">'+lignes.length+' écriture'+(lignes.length>1?'s':'')+' · Plan SYSCOHADA</div>'
     +'</div>'
-    +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
     +'</div>'
 
     +'<div style="display:flex;gap:8px;margin-bottom:12px;">'
@@ -2825,12 +3629,8 @@ function renderDashboard(){
   // ── LIGNE 1 : 4 KPI CARDS ──
   html+=`<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
     <div class="section-title" style="margin-bottom:0;">📊 Tableau de bord</div>
-    <div style="display:flex;gap:8px;">
-      ${isAdmin?`<button onclick="bilanFinancier()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">💼 Bilan</button>
-      <button onclick="voirCommissionAdmin()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">💰 Commissions</button>
-      <button onclick="exportDashboardCSV()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">⬇ CSV</button>`:""}
-    </div>
   </div>
+  <div style="font-size:10px;color:#6b8c7a;margin:-4px 0 10px;">Bilan, commissions et export se trouvent désormais dans <b>Finance &amp; Gestion</b>.</div>
   <div class="grid-4" style="margin-bottom:14px;">
     <div style="background:linear-gradient(135deg,#1e3a5f,#1a2e4a);border:none;border-radius:14px;padding:14px;box-shadow:0 3px 12px rgba(30,58,95,.3);">
       <div style="font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;letter-spacing:.1em;">Total achats</div>
@@ -2862,6 +3662,46 @@ function renderDashboard(){
     html+=`<div onclick="switchTab('commercial');switchCommercialSub('demandes')" style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:10px 14px;margin-bottom:10px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
       <div style="color:#c2410c;font-weight:700;font-size:12px;">⏳ ${pending} demande${pending>1?"s":""} en attente de validation</div>
       <div style="color:#3d5c48;font-size:11px;">Voir →</div>
+    </div>`;
+  }
+
+  // ── TRÉSORERIE (Lot 2) ──
+  if(isAdmin){
+    const tousMvts = tousMouvementsCaisse();
+    const moisCourantD = new Date().toISOString().slice(0,7);
+    const mvtsMoisD = tousMvts.filter(m=>(m.date||"").slice(0,7)===moisCourantD);
+    const soldeTreso = soldeCaisse(tousMvts);
+    const encMois = totalEntreesCaisse(mvtsMoisD);
+    const decMois = totalSortiesCaisse(mvtsMoisD);
+    const seuil = seuilTresorerie();
+    const sousSeuil = soldeTreso < seuil;
+
+    if(sousSeuil){
+      html+=`<div onclick="switchTab('finance');switchFinanceSub('tresorerie')" style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:12px;padding:10px 14px;margin-bottom:10px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
+        <div style="color:#dc2626;font-weight:700;font-size:12px;">⚠ Risque de tension de trésorerie — solde ${fmt(soldeTreso)} sous le seuil de ${fmt(seuil)}</div>
+        <div style="color:#3d5c48;font-size:11px;">Voir →</div>
+      </div>`;
+    }
+
+    html+=`<div class="card" style="margin-bottom:12px;cursor:pointer;" onclick="switchTab('finance');switchFinanceSub('tresorerie')">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div class="label" style="margin-bottom:0;">💵 Trésorerie</div>
+        <span onclick="event.stopPropagation();configurerSeuilTresorerie()" style="font-size:10px;color:#6d28d9;font-weight:700;background:#f5f3ff;padding:3px 9px;border-radius:999px;border:1px solid #ddd6fe;">⚙ Seuil : ${fmt(seuil)}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+        <div style="background:${soldeTreso>=seuil?'#f0fdf4':'#fef2f2'};border:1.5px solid ${soldeTreso>=seuil?'#bbf7d0':'#fecaca'};border-radius:12px;padding:10px;text-align:center;">
+          <div style="font-size:16px;font-weight:900;color:${soldeTreso>=0?'#166534':'#dc2626'};">${fmt(soldeTreso)}</div>
+          <div style="font-size:9px;color:#3d5c48;font-weight:700;margin-top:2px;">Solde de caisse</div>
+        </div>
+        <div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:12px;padding:10px;text-align:center;">
+          <div style="font-size:16px;font-weight:900;color:#166534;">${fmt(encMois)}</div>
+          <div style="font-size:9px;color:#3d5c48;font-weight:700;margin-top:2px;">Encaissé ce mois</div>
+        </div>
+        <div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:12px;padding:10px;text-align:center;">
+          <div style="font-size:16px;font-weight:900;color:#dc2626;">${fmt(decMois)}</div>
+          <div style="font-size:9px;color:#3d5c48;font-weight:700;margin-top:2px;">Décaissé ce mois</div>
+        </div>
+      </div>
     </div>`;
   }
 
@@ -3225,7 +4065,7 @@ function calculerFIFO(produit) {
       qteRestante: Math.max(0, restante),
       statut,
       coutUnitaire: lot.prix_unitaire,
-      fraisUnitaires: (lot.droit_terre||0+lot.transport||0+lot.droit_vente||0+lot.charrette||0) / qteInitiale,
+      fraisUnitaires: ((lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0)) / qteInitiale,
       coutRevient: lot.prix_unitaire + ((lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0)) / qteInitiale
     };
   });
@@ -3373,8 +4213,8 @@ function updatePerteCalc(coutRevient, prixAchat) {
   calcDiv.style.display="block";
   const elAchat = document.getElementById("cp_valAchat");
   const elRevient = document.getElementById("cp_valRevient");
-  if(elAchat) elAchat.textContent = "−"+fmt(qte*prixAchat)+" F";
-  if(elRevient) elRevient.textContent = "−"+fmt(qte*coutRevient)+" F";
+  if(elAchat) elAchat.textContent = "−"+fmt(qte*prixAchat);
+  if(elRevient) elRevient.textContent = "−"+fmt(qte*coutRevient);
 }
 
 async function enregistrerPerteLot(lotId, produit, fournisseur, qteRestante, coutRevient, prixAchat) {
@@ -3428,7 +4268,7 @@ async function enregistrerPerteLot(lotId, produit, fournisseur, qteRestante, cou
 
     logAdminAction("PERTE_LOT", produit+" · "+qte+"u · "+fmt(valeurPerte)+"F (lot:"+lotId+")");
 
-    showToast("✓ Perte enregistrée : "+qte+" u. · "+fmt(valeurPerte)+" F");
+    showToast("✓ Perte enregistrée : "+qte+" u. · "+fmt(valeurPerte));
     closeModal();
     renderStock();
 
@@ -3602,7 +4442,7 @@ async function enregistrerModifPerte(perteId) {
 
     logAdminAction("MODIF_PERTE", p.produit+" · "+ancienneQte+"→"+nouvelleQte+"u · "+fmt(nouvelleValeur)+"F (lot:"+p.lot_id+")");
 
-    showToast("✓ Perte corrigée : "+nouvelleQte+" u. · "+fmt(nouvelleValeur)+" F");
+    showToast("✓ Perte corrigée : "+nouvelleQte+" u. · "+fmt(nouvelleValeur));
     closeModal();
     // Recalcul en cascade : stock FIFO, marges, dashboard, commissions —
     // toutes ces vues relisent pertesLots/pertes dynamiquement au render().
@@ -4616,14 +5456,64 @@ let bilanOnglet = "jour";
  * Petite carte d'affichage d'un ratio financier pour l'onglet
  * "Compte de résultat" du bilan.
  */
-function ratioCard(label, valeur, sain, note){
+/**
+ * Interprète une valeur numérique selon une grille de seuils décroissante.
+ * @param {number} valeur
+ * @param {Array} grille - [{min, label, color}], du meilleur au pire,
+ *   évaluée par valeur >= min. Pour les ratios "plus c'est bas, mieux c'est"
+ *   (ex. taux de perte), passer inverse=true et une grille en max.
+ * @param {boolean} inverse - si true, compare valeur <= max
+ */
+function interpreterRatio(valeur, grille, inverse){
+  for(const niveau of grille){
+    if(inverse ? valeur <= niveau.seuil : valeur >= niveau.seuil){
+      return niveau;
+    }
+  }
+  return grille[grille.length-1];
+}
+
+// Grilles d'interprétation par type de ratio (couleurs OHADA-friendly)
+const GRILLE_MARGE_BRUTE = [
+  {seuil:30, label:"Excellent", color:"#15803d"},
+  {seuil:20, label:"Bon",       color:"#65a30d"},
+  {seuil:12, label:"Moyen",     color:"#ca8a04"},
+  {seuil:5,  label:"Faible",    color:"#ea580c"},
+  {seuil:-1e9, label:"Critique",color:"#dc2626"},
+];
+const GRILLE_MARGE_NETTE = [
+  {seuil:20, label:"Excellent", color:"#15803d"},
+  {seuil:15, label:"Bon",       color:"#65a30d"},
+  {seuil:8,  label:"Moyen",     color:"#ca8a04"},
+  {seuil:2,  label:"Faible",    color:"#ea580c"},
+  {seuil:-1e9, label:"Critique",color:"#dc2626"},
+];
+const GRILLE_ROTATION = [
+  {seuil:12, label:"Excellent", color:"#15803d"},
+  {seuil:6,  label:"Bon",       color:"#65a30d"},
+  {seuil:3,  label:"Moyen",     color:"#ca8a04"},
+  {seuil:1,  label:"Faible",    color:"#ea580c"},
+  {seuil:-1e9, label:"Critique",color:"#dc2626"},
+];
+const GRILLE_PERTE = [ // inverse : plus c'est bas, mieux c'est
+  {seuil:1,  label:"Excellent", color:"#15803d"},
+  {seuil:3,  label:"Bon",       color:"#65a30d"},
+  {seuil:5,  label:"Moyen",     color:"#ca8a04"},
+  {seuil:10, label:"Faible",    color:"#ea580c"},
+  {seuil:1e9, label:"Critique", color:"#dc2626"},
+];
+
+function ratioCard(label, valeur, sain, note, interpretation){
   const color = sain ? "#166534" : "#dc2626";
   const bg = sain ? "#f0fdf4" : "#fef2f2";
   const border = sain ? "#bbf7d0" : "#fecaca";
   return '<div style="background:'+bg+';border:1.5px solid '+border+';border-radius:12px;padding:10px;text-align:center;">'
     +'<div style="font-size:9px;font-weight:700;color:#6b8c7a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">'+label+'</div>'
     +'<div style="font-size:18px;font-weight:900;color:'+color+';">'+valeur+'</div>'
-    +'<div style="font-size:9px;color:#6b8c7a;margin-top:3px;">'+note+'</div>'
+    +(interpretation
+      ? '<div style="display:inline-block;margin-top:4px;font-size:9px;font-weight:800;color:#fff;background:'+interpretation.color+';border-radius:999px;padding:2px 8px;">'+interpretation.label+'</div>'
+      : '')
+    +'<div style="font-size:9px;color:#6b8c7a;margin-top:4px;">'+note+'</div>'
   +'</div>';
 }
 
@@ -4910,7 +5800,7 @@ function bilanFinancier(onglet, inline) {
       return '<div style="display:flex;justify-content:space-between;align-items:center;padding:'+(isTotal?'10px 12px':'7px 12px')+';'
         +(isTotal?'background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:10px;margin:6px 0;':'border-bottom:1px solid #f1f5f2;')+'">'
         +'<span style="font-size:'+(isTotal?'12px':'11px')+';font-weight:'+(isTotal?'800':'600')+';color:'+(isTotal?'#0f1f16':'#3d5c48')+';">'+label+'</span>'
-        +'<span style="font-size:'+(isTotal?'14px':'12px')+';font-weight:900;color:'+color+';">'+(isNeg?'− ':(isTotal&&montant>=0?'':''))+fmt(Math.abs(montant))+' F'+(opts.taux!==undefined?' <span style="font-size:10px;font-weight:700;color:#6b8c7a;">('+opts.taux+'%)</span>':'')+'</span>'
+        +'<span style="font-size:'+(isTotal?'14px':'12px')+';font-weight:900;color:'+color+';">'+(isNeg?'− ':(isTotal&&montant>=0?'':''))+fmt(Math.abs(montant))+(opts.taux!==undefined?' <span style="font-size:10px;font-weight:700;color:#6b8c7a;">('+opts.taux+'%)</span>':'')+'</span>'
       +'</div>';
     }
 
@@ -4930,12 +5820,51 @@ function bilanFinancier(onglet, inline) {
 
       +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">📐 Ratios financiers</div>'
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
-        +ratioCard("Taux de marge brute", tauxB+"%", tauxB>=20, "Seuil sain : > 20%")
-        +ratioCard("Taux de marge nette", tauxN+"%", tauxN>=15, "Seuil sain : > 15%")
-        +ratioCard("Rotation des stocks", rotationStock.toFixed(1)+"x", rotationStock>=1, "CMV / Stock valorisé (période)")
-        +ratioCard("Taux de perte", tauxPerte+"%", tauxPerte<3, "Pertes / (CMV+Pertes) — seuil sain : < 3%")
-        +ratioCard("Stock valorisé (FIFO)", fmt(stockValorise)+" F", true, "Coût d'achat du stock disponible")
-        +ratioCard("Dû fournisseurs", fmt(totalDus)+" F", totalDus<=stockValorise, "À régler sur le stock en cours")
+        +ratioCard("Taux de marge brute", tauxB+"%", tauxB>=20, "Seuil sain : > 20%", interpreterRatio(tauxB, GRILLE_MARGE_BRUTE))
+        +ratioCard("Taux de marge nette", tauxN+"%", tauxN>=15, "Seuil sain : > 15%", interpreterRatio(tauxN, GRILLE_MARGE_NETTE))
+        +ratioCard("Rotation des stocks", rotationStock.toFixed(1)+"x", rotationStock>=1, "CMV / Stock valorisé (période)", interpreterRatio(rotationStock, GRILLE_ROTATION))
+        +ratioCard("Taux de perte", tauxPerte+"%", tauxPerte<3, "Pertes / (CMV+Pertes) — seuil sain : < 3%", interpreterRatio(tauxPerte, GRILLE_PERTE, true))
+        +ratioCard("Stock valorisé (FIFO)", fmt(stockValorise), true, "Coût d'achat du stock disponible")
+        +ratioCard("Dû fournisseurs", fmt(totalDus), totalDus<=stockValorise, "À régler sur le stock en cours")
+      +'</div>';
+
+    // ── Diagnostic financier automatique (points forts / faibles / reco) ──
+    const forts = [], faibles = [], recos = [];
+    if(tauxB>=20) forts.push("Marge brute solide ("+tauxB+"%)"); else faibles.push("Marge brute faible ("+tauxB+"%)");
+    if(tauxN>=15) forts.push("Marge nette saine ("+tauxN+"%)"); else { faibles.push("Marge nette sous le seuil ("+tauxN+"%)"); recos.push("Réduire les charges variables (frais terrain, commissions) ou augmenter les prix de vente."); }
+    if(rotationStock>=6) forts.push("Bonne rotation des stocks ("+rotationStock.toFixed(1)+"x)"); else if(rotationStock<3 && rotationStock>0){ faibles.push("Rotation des stocks lente ("+rotationStock.toFixed(1)+"x)"); recos.push("Écouler le stock plus vite pour limiter l'immobilisation de trésorerie et les pertes."); }
+    if(tauxPerte<3) forts.push("Pertes maîtrisées ("+tauxPerte+"%)"); else { faibles.push("Taux de perte élevé ("+tauxPerte+"%)"); recos.push("Améliorer la conservation/écoulement des produits périssables pour réduire les pertes."); }
+    if(totalDus>stockValorise) { faibles.push("Dettes fournisseurs ("+fmt(totalDus)+") supérieures au stock disponible"); recos.push("Surveiller la capacité à régler les fournisseurs ; négocier des délais."); }
+    if(resultatExploitation<0){ faibles.push("Résultat d'exploitation négatif"); recos.push("Action urgente : l'activité ne couvre pas ses charges courantes."); }
+
+    // Score financier 0-100 (moyenne pondérée simple des indicateurs sains)
+    let score = 0;
+    score += Math.min(30, Math.max(0, tauxB)); // marge brute jusqu'à 30 pts
+    score += Math.min(30, Math.max(0, tauxN*2)); // marge nette jusqu'à 30 pts
+    score += Math.min(20, rotationStock*2);      // rotation jusqu'à 20 pts
+    score += Math.max(0, 20 - tauxPerte*4);      // pertes : 20 pts si 0%, 0 si >=5%
+    score = Math.round(Math.min(100, Math.max(0, score)));
+    const scoreColor = score>=70?"#15803d":score>=45?"#ca8a04":"#dc2626";
+    const scoreLabel = score>=70?"Bonne santé":score>=45?"Vigilance":"Situation à risque";
+
+    const blocListe = (titre, items, couleur) => items.length
+      ? '<div style="margin-bottom:8px;"><div style="font-size:10px;font-weight:800;color:'+couleur+';text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">'+titre+'</div>'
+        +items.map(i=>'<div style="font-size:11px;color:#3d5c48;margin-bottom:2px;">• '+i+'</div>').join('')+'</div>'
+      : '';
+
+    contenu += '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px;">🩺 Diagnostic financier automatique</div>'
+      +'<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:12px;padding:14px;margin-bottom:4px;">'
+        +'<div style="display:flex;align-items:center;gap:14px;margin-bottom:12px;">'
+          +'<div style="width:64px;height:64px;border-radius:999px;border:5px solid '+scoreColor+';display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0;">'
+            +'<div style="font-size:20px;font-weight:900;color:'+scoreColor+';line-height:1;">'+score+'</div><div style="font-size:7px;color:#6b8c7a;">/ 100</div>'
+          +'</div>'
+          +'<div><div style="font-size:14px;font-weight:800;color:'+scoreColor+';">'+scoreLabel+'</div>'
+            +'<div style="font-size:10px;color:#6b8c7a;">Score financier global (marge, rotation, pertes)</div></div>'
+        +'</div>'
+        +blocListe("Points forts", forts, "#15803d")
+        +blocListe("Points faibles", faibles, "#dc2626")
+        +blocListe("Recommandations", recos, "#0369a1")
+        +(recos.length===0 && faibles.length===0 ? '<div style="font-size:11px;color:#15803d;">Aucune alerte : les indicateurs sont dans les seuils sains.</div>':'')
       +'</div>';
 
     // ── Seuil de rentabilité (point mort) ──
@@ -4952,8 +5881,8 @@ function bilanFinancier(onglet, inline) {
       +'<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:12px;padding:12px;">'
         +'<div style="font-size:11px;color:#3d5c48;margin-bottom:8px;">Charges fixes estimées (commissions + pertes) : <b>'+fmt(chargesFixesProxy)+' F</b> · Taux de marge brute / CA : <b>'+Math.round(tauxMargeSurCA*100)+'%</b></div>'
         +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
-          +ratioCard("CA minimum requis", fmt(seuilRentabilite)+" F", ca>=seuilRentabilite, "Pour couvrir les charges fixes")
-          +ratioCard("Marge de sécurité", (margeSecurite>=0?'+':'')+fmt(margeSecurite)+" F", margeSecurite>=0, "CA actuel − Seuil ("+tauxMargeSecurite+"%)")
+          +ratioCard("CA minimum requis", fmt(seuilRentabilite), ca>=seuilRentabilite, "Pour couvrir les charges fixes")
+          +ratioCard("Marge de sécurité", (margeSecurite>=0?'+':'')+fmt(margeSecurite), margeSecurite>=0, "CA actuel − Seuil ("+tauxMargeSecurite+"%)")
         +'</div>'
         +'<div style="font-size:10px;color:#6b8c7a;margin-top:8px;">Cette estimation utilise commissions + pertes comme proxy des charges fixes. Pour un calcul précis, saisissez vos charges fixes réelles (loyer, salaires administratifs, etc.) dans l\'onglet Budget.</div>'
       +'</div>';

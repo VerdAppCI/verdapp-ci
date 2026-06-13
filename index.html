@@ -987,8 +987,59 @@ function setElProp(id, prop, val){
 
 // ─── UTILS ───────────────────────────────────────────────────────────────────
 const genId=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+// UUID v4 — requis pour les comptes utilisateur (l'authentification crée un
+// compte auth.users qui exige un identifiant au format UUID v4).
+const genUUID=()=>{
+  if(typeof crypto!=="undefined" && crypto.randomUUID) return crypto.randomUUID();
+  // Fallback RFC 4122 v4 si crypto.randomUUID indisponible
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,c=>{
+    const r=Math.random()*16|0, v=c==="x"?r:(r&0x3|0x8);
+    return v.toString(16);
+  });
+};
 const fmt=n=>new Intl.NumberFormat("fr-CI").format(Math.round(n||0))+" F";
 const today=()=>new Date().toISOString().slice(0,10);
+// Comparaison de noms d'utilisateur insensible à la casse et aux accents/espaces.
+// Évite qu'un lot enregistré sous "Salifou" ne soit pas reconnu pour le compte "SALIFOU".
+const normNom=(s)=>(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim().toLowerCase();
+const sameName=(a,b)=>normNom(a)===normNom(b);
+
+// ─── SEMAINE ISO 8601 (lundi → dimanche) ─────────────────────────────────────
+// Le lundi est le 1er jour ; la semaine appartient à l'année de son jeudi.
+// Utilisé pour regrouper les commissions par semaine calendaire.
+function lundiDeLaSemaine(dateStr){
+  const d = new Date(dateStr+"T00:00:00");
+  const jour = (d.getDay()+6)%7; // 0=lundi … 6=dimanche
+  d.setDate(d.getDate()-jour);
+  d.setHours(0,0,0,0);
+  return d;
+}
+function dimancheDeLaSemaine(dateStr){
+  const lundi = lundiDeLaSemaine(dateStr);
+  const dim = new Date(lundi);
+  dim.setDate(lundi.getDate()+6);
+  return dim;
+}
+// Numéro de semaine ISO + année ISO → clé triable "YYYY-Www"
+function cleSemaineISO(dateStr){
+  const d = new Date(dateStr+"T00:00:00");
+  const target = new Date(d);
+  const jour = (d.getDay()+6)%7;
+  target.setDate(d.getDate()-jour+3); // jeudi de la semaine
+  const premierJanvier = new Date(target.getFullYear(),0,1);
+  const semaine = 1 + Math.round(((target-premierJanvier)/86400000 - 3 + ((premierJanvier.getDay()+6)%7))/7);
+  const anneeISO = target.getFullYear();
+  return anneeISO+"-W"+String(semaine).padStart(2,"0");
+}
+// Libellé lisible d'une semaine à partir d'une date quelconque de la semaine
+function libelleSemaine(dateStr){
+  const lundi = lundiDeLaSemaine(dateStr);
+  const dim = dimancheDeLaSemaine(dateStr);
+  const optMois = {day:"numeric",month:"long"};
+  const l = lundi.toLocaleDateString("fr-CI",optMois);
+  const dm = dim.toLocaleDateString("fr-CI",optMois);
+  return "Semaine du "+l+" au "+dm;
+}
 const saveLocal=()=>{
   localStorage.setItem("va_achats",JSON.stringify(achats));
   localStorage.setItem("va_ventes",JSON.stringify(ventes));
@@ -1062,14 +1113,16 @@ async function syncAll(silent=false){
   const btn = getEl("syncBtn");
   if(!silent && btn){ btn.innerHTML='<span class="spinner"></span>'; btn.disabled=true; }
   try{
-    const [a,v,d,p,cp,jc,bm,mc,inv]=await Promise.all([
+    const [a,v,d,p,cp,jc,bm,mc,inv,emp,empr]=await Promise.all([
       sbGet("achats"),sbGet("ventes"),sbGet("demandes"),
       sbFetch(`/rest/v1/produits?order=nom.asc`).then(r=>r.json()),
       sbFetch(`/rest/v1/commissions_paiements?order=created_at.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
       sbFetch(`/rest/v1/journal_comptable?order=date.asc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
       sbFetch(`/rest/v1/budgets_mensuels?order=annee.desc,mois.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
       sbFetch(`/rest/v1/mouvements_caisse?order=date.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
-      sbFetch(`/rest/v1/investissements?order=date_acquisition.desc`).then(r=>r.ok?r.json():[]).catch(()=>[])
+      sbFetch(`/rest/v1/investissements?order=date_acquisition.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
+      sbFetch(`/rest/v1/emprunts?order=date_debut.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
+      sbFetch(`/rest/v1/emprunts_remboursements?order=date.desc`).then(r=>r.ok?r.json():[]).catch(()=>[])
     ]);
     achats=a||[]; localStorage.setItem("va_achats",JSON.stringify(achats));
     ventes=v||[]; localStorage.setItem("va_ventes",JSON.stringify(ventes));
@@ -1080,6 +1133,8 @@ async function syncAll(silent=false){
     budgetsMensuels=bm||[]; saveBudgetsMensuels();
     mouvementsCaisse=mc||[]; saveMouvementsCaisse();
     investissements=inv||[]; saveInvestissements();
+    emprunts=emp||[]; saveEmprunts();
+    empruntsRemboursements=empr||[]; saveEmpruntsRemboursements();
     updateDemandesBadge();
     render();
     if(!silent) showToast("✓ Synchronisé");
@@ -1517,6 +1572,7 @@ const FINANCE_SUBTABS = [
   {id:"couts",       label:"Coûts"},
   {id:"tiers",       label:"Clients / Fournisseurs"},
   {id:"investissements", label:"Investissements"},
+  {id:"emprunts",    label:"Emprunts"},
   {id:"budget",      label:"Budget"},
   {id:"commissions", label:"Commissions"},
   {id:"journal",     label:"Journal comptable"},
@@ -1579,6 +1635,7 @@ function renderFinanceContent(){
   else if(financeSubTab==="couts"){ el.innerHTML = '<div id="coutsInline"></div>'; renderCouts(); }
   else if(financeSubTab==="tiers"){ el.innerHTML = '<div id="tiersInline"></div>'; renderTiers(); }
   else if(financeSubTab==="investissements"){ el.innerHTML = '<div id="investInline"></div>'; renderInvestissements(); }
+  else if(financeSubTab==="emprunts"){ el.innerHTML = '<div id="empruntsInline"></div>'; renderEmprunts(); }
   else if(financeSubTab==="commissions"){ el.innerHTML = '<div id="commissionsInline"></div>'; renderCommissionsInline(); }
   else if(financeSubTab==="journal"){ el.innerHTML = '<div id="journalInline"></div>'; renderJournalInline(); }
 }
@@ -1764,7 +1821,7 @@ function calculerCommission(nomUtilisateur) {
   // Lots enregistrés par cet utilisateur
   const lotsUser = achats.filter(a =>
     a.statut === "recu" &&
-    (a.enregistre_par === nomUtilisateur || a.auteur === nomUtilisateur)
+    (sameName(a.enregistre_par, nomUtilisateur) || sameName(a.auteur, nomUtilisateur))
   );
 
   if(!lotsUser.length) return {lots:[], totalCommission:0, totalMargeNette:0};
@@ -1853,7 +1910,7 @@ function voirCommissionUtilisateur(nom) {
   // Lots enregistrés par cet utilisateur (reçus)
   const lotsUser = achats.filter(a =>
     a.statut === "recu" &&
-    ((a.enregistre_par||"") === nom)
+    sameName(a.enregistre_par, nom)
   );
 
   if(!lotsUser.length) {
@@ -1870,39 +1927,38 @@ function voirCommissionUtilisateur(nom) {
   // Identifier les produits de l'utilisateur
   const produitsUser = [...new Set(lotsUser.map(l=>l.produit))];
 
-  // Grouper les ventes par date, pour chaque produit de l'utilisateur
-  const parDate = {};
+  // Grouper les ventes par SEMAINE ISO (lundi→dimanche), pour chaque produit
+  const parSemaine = {};
   ventes
     .filter(v => produitsUser.includes(v.produit))
     .sort((a,b) => new Date(a.date)-new Date(b.date))
     .forEach(v => {
       const j = (v.date||"").slice(0,10);
       if(!j) return;
-      if(!parDate[j]) parDate[j] = [];
-      parDate[j].push(v);
+      const cle = cleSemaineISO(j);
+      if(!parSemaine[cle]) parSemaine[cle] = {ventes:[], dateRef:j};
+      parSemaine[cle].ventes.push(v);
     });
 
-  const dates = Object.keys(parDate).sort().reverse();
+  // Tri des semaines de la plus récente à la plus ancienne
+  const semaines = Object.keys(parSemaine).sort().reverse();
 
-  // Calculer la commission par date
-  // Pour chaque date, identifier quels lots (de l'utilisateur) ont été consommés
   let totalCommission = 0;
   let totalMargeNette = 0;
 
-  const lignesParDate = dates.map(j => {
-    const ventesJ = parDate[j];
-    let commissionJ = 0;
-    let margeNetteJ = 0;
+  const lignesParSemaine = semaines.map(cle => {
+    const ventesS = parSemaine[cle].ventes;
+    const dateRef = parSemaine[cle].dateRef;
+    let commissionS = 0;
+    let margeNetteS = 0;
     const lotsImputes = [];
 
-    // Pour chaque vente de ce jour, calculer la part qui consomme les lots de l'utilisateur
-    ventesJ.forEach(v => {
-      const fifo = calculerFIFO(v.produit);
+    // Pour chaque vente de la semaine, calculer la part qui consomme les lots de l'utilisateur
+    ventesS.forEach(v => {
       const ventesAvant = ventes
         .filter(x => x.produit===v.produit && new Date(x.date)<new Date(v.date))
         .sort((a,b)=>new Date(a.date)-new Date(b.date));
 
-      // Simuler le FIFO jusqu'à cette vente
       let qteDejaVendue = ventesAvant.reduce((s,x)=>s+x.quantite,0);
       const lotsRecu = achats
         .filter(a=>a.produit===v.produit&&a.statut==="recu")
@@ -1915,58 +1971,64 @@ function voirCommissionUtilisateur(nom) {
         return { ...lot, qteRestante: lot.quantite - consomme };
       }).filter(l=>l.qteRestante>0);
 
-      // Appliquer la vente sur les lots restants
       let aVendre = v.quantite;
       etatLots.forEach(lot => {
         if(aVendre<=0) return;
         const pris = Math.min(aVendre, lot.qteRestante);
         aVendre -= pris;
 
-        // Ce lot appartient-il à l'utilisateur ?
-        if((lot.enregistre_par||"")===nom && pris>0) {
-          // Calculer la marge nette sur cette portion
-          const venteVirtuelle = {...v, quantite: pris};
-          const mn = margenette([venteVirtuelle]);
-          margeNetteJ += mn;
-          commissionJ += Math.max(0, mn * 0.10);
-          // Ajouter ce lot à la liste des lots imputés si pas déjà dedans
+        if(sameName(lot.enregistre_par, nom) && pris>0) {
+          const fraisTotauxLot = (lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0);
+          const fraisUnitairesLot = lot.quantite ? fraisTotauxLot/lot.quantite : 0;
+          const caPortion = pris * v.prix_vente;
+          const coutPortion = pris * (lot.prix_unitaire + fraisUnitairesLot);
+          const mn = caPortion - coutPortion;
+          margeNetteS += mn;
+          commissionS += Math.max(0, mn * 0.10);
+          // Détail par lot, en conservant la date de vente de chaque portion
           if(!lotsImputes.find(l=>l.id===lot.id)) {
-            lotsImputes.push({...lot, qteVendueCeJour:0, mnCeJour:0, commCeJour:0});
+            lotsImputes.push({...lot, qteVendue:0, mn:0, comm:0, datesVente:new Set()});
           }
           const li = lotsImputes.find(l=>l.id===lot.id);
-          if(li){ li.qteVendueCeJour+=pris; li.mnCeJour+=mn; li.commCeJour+=Math.max(0,mn*0.10); }
+          if(li){
+            li.qteVendue+=pris; li.mn+=mn; li.comm+=Math.max(0,mn*0.10);
+            li.datesVente.add((v.date||"").slice(0,10));
+          }
         }
       });
     });
 
-    totalCommission += commissionJ;
-    totalMargeNette += margeNetteJ;
+    totalCommission += commissionS;
+    totalMargeNette += margeNetteS;
 
-    if(commissionJ<=0 && margeNetteJ===0) return null;
+    if(commissionS<=0 && margeNetteS===0) return null;
 
-    const dateAff = new Date(j).toLocaleDateString("fr-CI",{weekday:"long",day:"numeric",month:"long"});
-    const lotsHtml = lotsImputes.map(l=>
-      '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:#f8faf8;border-radius:8px;margin-top:4px;">'
+    const lotsHtml = lotsImputes.map(l=>{
+      const datesArr = [...l.datesVente].sort();
+      const datesAff = datesArr.length>1
+        ? datesArr[0]+" → "+datesArr[datesArr.length-1]
+        : (datesArr[0]||"");
+      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:#f8faf8;border-radius:8px;margin-top:4px;">'
         +'<div>'
           +'<div style="font-size:11px;font-weight:700;color:#0f1f16;">'+(getProduitIcon(l.produit)||"🌿")+' '+l.produit+' — '+l.fournisseur+'</div>'
-          +'<div style="font-size:10px;color:#6b8c7a;">Lot reçu le '+(l.date_reception||l.date)+' · '+l.qteVendueCeJour+' u. vendues ce jour</div>'
+          +'<div style="font-size:10px;color:#6b8c7a;">Lot reçu le '+(l.date_reception||l.date)+' · '+l.qteVendue+' u. vendues · vente '+datesAff+'</div>'
         +'</div>'
         +'<div style="text-align:right;">'
-          +'<div style="font-size:12px;font-weight:900;color:#f47820;">+'+fmt(l.commCeJour)+'</div>'
-          +'<div style="font-size:9px;color:#6b8c7a;">10% de '+fmt(l.mnCeJour)+'</div>'
+          +'<div style="font-size:12px;font-weight:900;color:#f47820;">+'+fmt(l.comm)+'</div>'
+          +'<div style="font-size:9px;color:#6b8c7a;">10% de '+fmt(l.mn)+'</div>'
         +'</div>'
-      +'</div>'
-    ).join('');
+      +'</div>';
+    }).join('');
 
     return '<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:12px;padding:12px;margin-bottom:8px;">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">'
         +'<div>'
-          +'<div style="font-weight:700;color:#0f1f16;font-size:13px;">'+dateAff+'</div>'
-          +'<div style="font-size:10px;color:#6b8c7a;">'+ventesJ.length+' vente'+(ventesJ.length>1?'s':'')+'</div>'
+          +'<div style="font-weight:700;color:#0f1f16;font-size:13px;">'+libelleSemaine(dateRef)+'</div>'
+          +'<div style="font-size:10px;color:#6b8c7a;">'+ventesS.length+' vente'+(ventesS.length>1?'s':'')+' · '+lotsImputes.length+' lot'+(lotsImputes.length>1?'s':'')+'</div>'
         +'</div>'
         +'<div style="text-align:right;">'
-          +'<div style="font-size:15px;font-weight:900;color:#f47820;">+'+fmt(commissionJ)+'</div>'
-          +'<div style="font-size:9px;color:#6b8c7a;">10% de '+fmt(margeNetteJ)+'</div>'
+          +'<div style="font-size:15px;font-weight:900;color:#f47820;">+'+fmt(commissionS)+'</div>'
+          +'<div style="font-size:9px;color:#6b8c7a;">10% de '+fmt(margeNetteS)+'</div>'
         +'</div>'
       +'</div>'
       +lotsHtml
@@ -1994,10 +2056,10 @@ function voirCommissionUtilisateur(nom) {
       +'</div>'
     +'</div>'
 
-    // Détail par date
-    +(lignesParDate.length
-      ? '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Par date de vente</div>'
-        +lignesParDate.join('')
+    // Détail par semaine
+    +(lignesParSemaine.length
+      ? '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Par semaine de vente (lun. → dim.)</div>'
+        +lignesParSemaine.join('')
       : '<div style="text-align:center;padding:24px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;">Aucune vente sur tes lots pour le moment.</div>'
     )
   );
@@ -2056,7 +2118,7 @@ function voirCommissionAdmin() {
 
   // Pour chaque utilisateur, calculer la commission par lot
   const usersHtml = usersAvecLots.map(nom => {
-    const lotsUser = achats.filter(a=>a.statut==="recu"&&a.enregistre_par===nom);
+    const lotsUser = achats.filter(a=>a.statut==="recu"&&sameName(a.enregistre_par,nom));
     let totalCommUser = 0;
 
     const lotsHtml = lotsUser.map(lot => {
@@ -2110,6 +2172,8 @@ function voirCommissionAdmin() {
     const u = usersCache.find(x=>x.nom===nom);
     const dejaPaye = commissionsPaiements.filter(c=>c.utilisateur===nom).reduce((s,c)=>s+(c.montant||0),0);
     const reste = Math.max(0, totalCommUser - dejaPaye);
+    const tropPercu = Math.max(0, dejaPaye - totalCommUser);
+    const estSolde = dejaPaye>0 && reste<=0;
     return '<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:14px;padding:14px;margin-bottom:10px;">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
         +'<div style="display:flex;align-items:center;gap:10px;">'
@@ -2124,8 +2188,13 @@ function voirCommissionAdmin() {
       +'</div>'
       +'<div style="display:flex;gap:8px;margin-bottom:8px;font-size:11px;">'
         +'<div style="flex:1;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:6px 10px;text-align:center;"><div style="font-weight:900;color:#166534;">'+fmt(dejaPaye)+'</div><div style="font-size:9px;color:#3d5c48;">Déjà payé</div></div>'
-        +'<div style="flex:1;background:'+(reste>0?'#fff7ed':'#f0fdf4')+';border:1px solid '+(reste>0?'#fed7aa':'#bbf7d0')+';border-radius:8px;padding:6px 10px;text-align:center;"><div style="font-weight:900;color:'+(reste>0?'#c2410c':'#166534')+';">'+fmt(reste)+'</div><div style="font-size:9px;color:#3d5c48;">Reste à payer</div></div>'
+        +(estSolde
+          ? '<div style="flex:1;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:6px 10px;text-align:center;"><div style="font-weight:900;color:#166534;">✓ Soldé</div><div style="font-size:9px;color:#3d5c48;">Tout payé</div></div>'
+          : '<div style="flex:1;background:'+(reste>0?'#fff7ed':'#f0fdf4')+';border:1px solid '+(reste>0?'#fed7aa':'#bbf7d0')+';border-radius:8px;padding:6px 10px;text-align:center;"><div style="font-weight:900;color:'+(reste>0?'#c2410c':'#166534')+';">'+fmt(reste)+'</div><div style="font-size:9px;color:#3d5c48;">Reste à payer</div></div>')
       +'</div>'
+      +(tropPercu>0
+        ? '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:6px 10px;margin-bottom:8px;text-align:center;"><span style="font-size:11px;font-weight:800;color:#b45309;">⚠ Trop-perçu : '+fmt(tropPercu)+'</span><div style="font-size:9px;color:#92704e;">Payé au-delà de la commission due (information, pas de report automatique)</div></div>'
+        : '')
       +'<div style="display:flex;gap:8px;margin-bottom:8px;">'
         +'<button onclick="modalPayerCommission(\''+nom+'\','+totalCommUser+','+dejaPaye+')" style="flex:1;background:#0d3d1a;color:#fff;border:none;border-radius:10px;padding:9px;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;">💳 Enregistrer un paiement</button>'
         +'<button onclick="voirHistoriquePaiementsCommission(\''+nom+'\')" style="background:#f1f5f2;border:none;border-radius:10px;padding:9px 12px;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;color:#3d5c48;">Historique</button>'
@@ -2484,6 +2553,15 @@ let journalComptable = JSON.parse(localStorage.getItem("va_journal_comptable")||
 let budgetsMensuels = JSON.parse(localStorage.getItem("va_budgets_mensuels")||"[]");
 let mouvementsCaisse = JSON.parse(localStorage.getItem("va_mouvements_caisse")||"[]");
 let investissements = JSON.parse(localStorage.getItem("va_investissements")||"[]");
+let emprunts = JSON.parse(localStorage.getItem("va_emprunts")||"[]");
+let empruntsRemboursements = JSON.parse(localStorage.getItem("va_emprunts_remboursements")||"[]");
+
+function saveEmprunts(){
+  localStorage.setItem("va_emprunts", JSON.stringify(emprunts));
+}
+function saveEmpruntsRemboursements(){
+  localStorage.setItem("va_emprunts_remboursements", JSON.stringify(empruntsRemboursements));
+}
 
 function saveBudgetsMensuels(){
   localStorage.setItem("va_budgets_mensuels", JSON.stringify(budgetsMensuels));
@@ -3296,6 +3374,132 @@ function triInvest(inv){
   return ((lo+hi)/2)*100;
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE EMPRUNTS — échéancier (annuités constantes / capital constant / libre)
+//                   + alertes d'échéance à 7 jours
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Génère le tableau d'amortissement théorique d'un emprunt.
+ * Méthodes :
+ *  - "annuites"          : mensualité constante (annuités) — formule bancaire classique
+ *  - "capital_constant"  : amortissement constant du capital (mensualité dégressive)
+ *  - "libre"             : pas d'échéancier auto (remboursements saisis manuellement)
+ * Taux et durée optionnels : si pas de taux → intérêts = 0 ; si pas de durée → []
+ * @returns {Array<{n, date, mensualite, interet, capital, capitalRestant}>}
+ */
+function genererEcheancier(emp){
+  const principal = +emp.montant_principal||0;
+  const n = parseInt(emp.duree_mois)||0;
+  const methode = emp.methode_amortissement||"annuites";
+  if(methode==="libre" || n<=0 || principal<=0) return [];
+
+  const tauxMensuel = (+emp.taux_annuel||0)/100/12;
+  const dateDebut = new Date(emp.date_debut||new Date().toISOString().slice(0,10));
+  const jourEch = parseInt(emp.jour_echeance)||dateDebut.getDate();
+
+  const lignes = [];
+  let capitalRestant = principal;
+
+  // Mensualité constante (annuités) : M = P·i / (1 − (1+i)^−n)
+  let mensualiteConst = 0;
+  if(methode==="annuites"){
+    mensualiteConst = tauxMensuel>0
+      ? principal * tauxMensuel / (1 - Math.pow(1+tauxMensuel, -n))
+      : principal / n;
+  }
+  const capitalConst = principal / n; // pour capital_constant
+
+  for(let k=1; k<=n; k++){
+    const interet = capitalRestant * tauxMensuel;
+    let capital, mensualite;
+    if(methode==="annuites"){
+      mensualite = mensualiteConst;
+      capital = mensualite - interet;
+    } else { // capital_constant
+      capital = capitalConst;
+      mensualite = capital + interet;
+    }
+    capitalRestant = Math.max(0, capitalRestant - capital);
+    // Date d'échéance : k mois après le début, au jour d'échéance
+    const dEch = new Date(dateDebut);
+    dEch.setMonth(dEch.getMonth()+k);
+    dEch.setDate(Math.min(jourEch, daysInMonth(dEch.getFullYear(), dEch.getMonth())));
+    lignes.push({
+      n:k,
+      date: dEch.toISOString().slice(0,10),
+      mensualite, interet, capital,
+      capitalRestant
+    });
+  }
+  return lignes;
+}
+
+function daysInMonth(y,m){ return new Date(y, m+1, 0).getDate(); }
+
+/** Total déjà remboursé (réel) pour un emprunt. */
+function totalRembourse(empruntId){
+  return empruntsRemboursements
+    .filter(r=>r.emprunt_id===empruntId)
+    .reduce((s,r)=>s+(+r.montant||0), 0);
+}
+
+/** Capital restant dû théorique (principal + intérêts − remboursé), version simple. */
+function resteAPayerEmprunt(emp){
+  const ech = genererEcheancier(emp);
+  if(ech.length){
+    const totalDu = ech.reduce((s,l)=>s+l.mensualite, 0);
+    return Math.max(0, totalDu - totalRembourse(emp.id));
+  }
+  // Emprunt libre : reste = principal − remboursé
+  return Math.max(0, (+emp.montant_principal||0) - totalRembourse(emp.id));
+}
+
+/**
+ * Prochaine échéance non encore couverte par les remboursements.
+ * On considère les mensualités couvertes tant que le cumul remboursé les couvre.
+ */
+function prochaineEcheance(emp){
+  const ech = genererEcheancier(emp);
+  if(!ech.length) return null;
+  let rembourse = totalRembourse(emp.id);
+  for(const l of ech){
+    if(rembourse >= l.mensualite){ rembourse -= l.mensualite; continue; }
+    return l; // première échéance non (entièrement) couverte
+  }
+  return null; // tout couvert
+}
+
+/** Liste des emprunts actifs dont la prochaine échéance tombe dans ≤ 7 jours. */
+function echeancesProches(joursAlerte){
+  const seuil = joursAlerte||7;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const res = [];
+  emprunts.filter(e=>e.statut==="actif").forEach(emp=>{
+    const pe = prochaineEcheance(emp);
+    if(!pe) return;
+    const dEch = new Date(pe.date); dEch.setHours(0,0,0,0);
+    const joursRestants = Math.round((dEch - today)/(1000*60*60*24));
+    if(joursRestants <= seuil){
+      res.push({emp, echeance:pe, joursRestants});
+    }
+  });
+  return res.sort((a,b)=>a.joursRestants-b.joursRestants);
+}
+
+/** Total du capital restant dû sur tous les emprunts actifs (pour dashboard/SIG). */
+function totalDetteEmprunts(){
+  return emprunts.filter(e=>e.statut==="actif").reduce((s,e)=>s+resteAPayerEmprunt(e), 0);
+}
+
+const TYPE_EMPRUNT_LABEL = {
+  bancaire:"🏦 Bancaire", tontine:"🤝 Tontine", decouvert:"💳 Découvert",
+  informel:"👥 Informel", autre:"📄 Autre"
+};
+const METHODE_LABEL = {
+  annuites:"Mensualités constantes", capital_constant:"Capital constant", libre:"Libre"
+};
+
 function renderInvestissements(){
   const target = document.getElementById("investInline");
   if(!target) return;
@@ -3424,6 +3628,380 @@ async function supprimerInvestissement(id){
     renderInvestissements();
   } catch(e) { showToast("Erreur : "+e.message,"error"); }
 }
+
+// ── RENDU EMPRUNTS ───────────────────────────────────────────────────────────
+function renderEmprunts(){
+  const target = document.getElementById("empruntsInline");
+  if(!target) return;
+
+  const actifs = emprunts.filter(e=>e.statut!=="annule");
+  const detteTotale = totalDetteEmprunts();
+  const proches = echeancesProches(7);
+
+  // Bandeau d'alerte échéances à 7 jours
+  let alerteHtml = "";
+  if(proches.length){
+    alerteHtml = '<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:12px;margin-bottom:12px;">'
+      +'<div style="font-size:12px;font-weight:800;color:#c2410c;margin-bottom:6px;">⏰ '+proches.length+' échéance'+(proches.length>1?'s':'')+' sous 7 jours</div>'
+      +proches.map(p=>{
+        const retard = p.joursRestants<0;
+        return '<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:4px 0;border-top:1px solid #fed7aa;">'
+          +'<div><span style="font-weight:700;color:#0f1f16;">'+p.emp.libelle+'</span> · '+p.echeance.date+'</div>'
+          +'<div style="text-align:right;"><span style="font-weight:900;color:#c2410c;">'+fmt(p.echeance.mensualite)+'</span> '
+          +'<span style="font-size:9px;color:'+(retard?'#dc2626':'#c2410c')+';font-weight:700;">'+(retard?('Retard '+Math.abs(p.joursRestants)+'j'):('dans '+p.joursRestants+'j'))+'</span></div>'
+        +'</div>';
+      }).join('')
+    +'</div>';
+  }
+
+  const cartes = actifs.map(emp=>{
+    const ech = genererEcheancier(emp);
+    const reste = resteAPayerEmprunt(emp);
+    const rembourse = totalRembourse(emp.id);
+    const totalDu = ech.length ? ech.reduce((s,l)=>s+l.mensualite,0) : (+emp.montant_principal||0);
+    const totalInterets = ech.reduce((s,l)=>s+l.interet,0);
+    const pe = prochaineEcheance(emp);
+    const pct = totalDu>0 ? Math.min(100, Math.round(rembourse/totalDu*100)) : 0;
+    const solde = emp.statut==="solde" || reste<=0;
+
+    const kpi = (t,v,c)=>'<div style="flex:1;min-width:80px;text-align:center;background:#f8faf8;border-radius:10px;padding:8px;">'
+      +'<div style="font-size:9px;color:#6b8c7a;font-weight:700;text-transform:uppercase;">'+t+'</div>'
+      +'<div style="font-size:13px;font-weight:900;color:'+(c||"#0f1f16")+';margin-top:2px;">'+v+'</div></div>';
+
+    return '<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:14px;padding:14px;margin-bottom:10px;">'
+      +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">'
+        +'<div><div style="font-weight:800;color:#0f1f16;font-size:14px;">'+emp.libelle+'</div>'
+          +'<div style="font-size:10px;color:#6b8c7a;">'+(TYPE_EMPRUNT_LABEL[emp.type_emprunt]||emp.type_emprunt)
+          +(emp.preteur?' · '+emp.preteur:'')+' · '+(METHODE_LABEL[emp.methode_amortissement]||'')
+          +' · début '+(emp.date_debut||'')+'</div></div>'
+        +'<div style="display:flex;gap:6px;flex-shrink:0;">'
+          +'<span style="font-size:9px;font-weight:800;color:#fff;background:'+(solde?'#15803d':'#6d28d9')+';border-radius:999px;padding:3px 9px;height:fit-content;">'+(solde?'Soldé':'Actif')+'</span>'
+          +'<button onclick="supprimerEmprunt(\''+emp.id+'\')" style="background:#fef2f2;border:none;border-radius:8px;width:26px;height:26px;cursor:pointer;font-size:12px;color:#dc2626;">🗑</button>'
+        +'</div>'
+      +'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">'
+        +kpi("Emprunté", fmt(+emp.montant_principal||0))
+        +kpi("Taux", (emp.taux_annuel!=null&&emp.taux_annuel!=="")?(emp.taux_annuel+"%/an"):"—")
+        +kpi("Remboursé", fmt(rembourse), "#15803d")
+        +kpi("Reste dû", fmt(reste), reste>0?"#c2410c":"#15803d")
+      +'</div>'
+      // Barre de progression
+      +'<div style="height:6px;background:#e2ece7;border-radius:999px;overflow:hidden;margin-bottom:6px;">'
+        +'<div style="height:100%;background:#6d28d9;border-radius:999px;width:'+pct+'%;"></div></div>'
+      +'<div style="font-size:9px;color:#6b8c7a;margin-bottom:8px;">'+pct+'% remboursé'
+        +(ech.length?' · '+ech.length+' mensualités · intérêts totaux '+fmt(totalInterets):'')
+        +(pe?' · prochaine échéance '+pe.date+' : '+fmt(pe.mensualite):'')+'</div>'
+      +'<div style="display:flex;gap:8px;">'
+        +(ech.length?'<button onclick="voirEcheancier(\''+emp.id+'\')" style="flex:1;background:#ede9fe;color:#6d28d9;border:none;border-radius:10px;padding:8px;font-weight:700;font-size:11px;cursor:pointer;font-family:inherit;">📅 Échéancier</button>':'')
+        +'<button onclick="modalRemboursement(\''+emp.id+'\')" style="flex:1;background:#0d3d1a;color:#fff;border:none;border-radius:10px;padding:8px;font-weight:700;font-size:11px;cursor:pointer;font-family:inherit;">💳 Remboursement</button>'
+        +'<button onclick="voirRemboursements(\''+emp.id+'\')" style="background:#f1f5f2;color:#3d5c48;border:none;border-radius:10px;padding:8px 12px;font-weight:700;font-size:11px;cursor:pointer;font-family:inherit;">Historique</button>'
+      +'</div>'
+    +'</div>';
+  }).join('');
+
+  target.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
+      +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;">🏦 Emprunts &amp; dettes</div>'
+      +'<button onclick="modalEmprunt()" style="background:#6d28d9;color:#fff;border:none;border-radius:10px;padding:8px 14px;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;">+ Ajouter</button>'
+    +'</div>'
+    +'<div style="background:linear-gradient(135deg,#4c1d95,#6d28d9);border-radius:12px;padding:14px;margin-bottom:12px;text-align:center;">'
+      +'<div style="font-size:10px;font-weight:700;color:#ddd6fe;text-transform:uppercase;letter-spacing:.06em;">Dette totale restante</div>'
+      +'<div style="font-size:24px;font-weight:900;color:#fff;margin-top:4px;">'+fmt(detteTotale)+'</div>'
+    +'</div>'
+    +alerteHtml
+    +(actifs.length ? cartes
+      : '<div style="text-align:center;padding:20px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;">Aucun emprunt enregistré.</div>');
+}
+
+// ── MODALE : NOUVEL EMPRUNT ──────────────────────────────────────────────────
+function modalEmprunt(){
+  if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
+  showModal(
+    '<div style="font-size:16px;font-weight:800;color:#6d28d9;margin-bottom:14px;">🏦 Nouvel emprunt / dette</div>'
+    +'<div style="margin-bottom:10px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Libellé *</label>'
+      +'<input type="text" id="emp_libelle" placeholder="Ex: Crédit camionnette BOA" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/></div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:10px;">'
+      +'<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Type</label>'
+        +'<select id="emp_type" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;background:#fff;">'
+          +'<option value="bancaire">🏦 Bancaire</option><option value="tontine">🤝 Tontine</option>'
+          +'<option value="decouvert">💳 Découvert</option><option value="informel">👥 Informel</option>'
+          +'<option value="autre">📄 Autre</option></select></div>'
+      +'<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Prêteur</label>'
+        +'<input type="text" id="emp_preteur" placeholder="Optionnel" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/></div>'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:10px;">'
+      +'<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Montant emprunté (F) *</label>'
+        +'<input type="number" id="emp_montant" min="0" placeholder="0" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:14px;"/></div>'
+      +'<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Date de début *</label>'
+        +'<input type="date" id="emp_date" value="'+new Date().toISOString().slice(0,10)+'" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/></div>'
+    +'</div>'
+    +'<div style="margin-bottom:10px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Méthode d\'amortissement</label>'
+      +'<select id="emp_methode" onchange="toggleEmpruntChamps()" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;background:#fff;">'
+        +'<option value="annuites">Mensualités constantes (annuités)</option>'
+        +'<option value="capital_constant">Capital constant (mensualité dégressive)</option>'
+        +'<option value="libre">Libre (remboursements manuels, sans échéancier)</option></select></div>'
+    +'<div id="emp_champs_calc">'
+      +'<div style="display:flex;gap:8px;margin-bottom:10px;">'
+        +'<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Taux annuel (%)</label>'
+          +'<input type="number" id="emp_taux" min="0" step="0.01" placeholder="Optionnel" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:14px;"/></div>'
+        +'<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Durée (mois)</label>'
+          +'<input type="number" id="emp_duree" min="1" placeholder="Ex: 12" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:14px;"/></div>'
+        +'<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Jour d\'échéance</label>'
+          +'<input type="number" id="emp_jour" min="1" max="31" placeholder="1-31" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:14px;"/></div>'
+      +'</div>'
+    +'</div>'
+    +'<div style="margin-bottom:14px;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Note</label>'
+      +'<input type="text" id="emp_note" placeholder="Optionnel" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/></div>'
+    +'<div id="emp_msg" style="display:none;margin-bottom:10px;font-size:12px;font-weight:700;text-align:center;"></div>'
+    +'<div style="display:flex;gap:10px;">'
+      +'<button onclick="enregistrerEmprunt()" style="flex:1;padding:13px;background:#6d28d9;color:#fff;border:none;border-radius:12px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">Enregistrer</button>'
+      +'<button onclick="closeModal()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>'
+    +'</div>'
+  );
+}
+
+function toggleEmpruntChamps(){
+  const methode = document.getElementById("emp_methode")?.value;
+  const champs = document.getElementById("emp_champs_calc");
+  if(champs) champs.style.opacity = methode==="libre" ? "0.4" : "1";
+}
+
+async function enregistrerEmprunt(){
+  const msg = document.getElementById("emp_msg");
+  const libelle = document.getElementById("emp_libelle")?.value.trim();
+  if(!libelle){ msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Saisissez un libellé."; return; }
+  const montant = parseFloat(document.getElementById("emp_montant")?.value)||0;
+  if(montant<=0){ msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Saisissez un montant."; return; }
+
+  const tauxVal = document.getElementById("emp_taux")?.value;
+  const dureeVal = document.getElementById("emp_duree")?.value;
+  const jourVal = document.getElementById("emp_jour")?.value;
+
+  const payload = {
+    id: genId(),
+    libelle,
+    type_emprunt: document.getElementById("emp_type")?.value || "bancaire",
+    preteur: document.getElementById("emp_preteur")?.value.trim() || null,
+    montant_principal: montant,
+    taux_annuel: tauxVal!==""&&tauxVal!=null ? parseFloat(tauxVal) : null,
+    duree_mois: dureeVal!==""&&dureeVal!=null ? parseInt(dureeVal) : null,
+    date_debut: document.getElementById("emp_date")?.value || new Date().toISOString().slice(0,10),
+    methode_amortissement: document.getElementById("emp_methode")?.value || "annuites",
+    jour_echeance: jourVal!==""&&jourVal!=null ? parseInt(jourVal) : null,
+    note: document.getElementById("emp_note")?.value.trim() || null,
+    statut: "actif",
+    enregistre_par: currentUser?.nom || "Admin",
+  };
+  msg.style.cssText="display:block;color:#166534;"; msg.textContent="Enregistrement…";
+  try {
+    await sbInsert("emprunts", payload);
+    emprunts.unshift(payload);
+    saveEmprunts();
+    logAdminAction("EMPRUNT", libelle+" "+fmt(montant));
+    showToast("✓ Emprunt enregistré");
+    closeModal();
+    renderEmprunts();
+  } catch(e) {
+    msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Erreur : "+e.message;
+  }
+}
+
+async function supprimerEmprunt(id){
+  if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
+  const emp = emprunts.find(x=>x.id===id);
+  if(!emp || !confirm("Supprimer l'emprunt \""+emp.libelle+"\" et tous ses remboursements ?")) return;
+  try {
+    await sbDelete("emprunts", id); // cascade supprime les remboursements
+    emprunts = emprunts.filter(x=>x.id!==id);
+    empruntsRemboursements = empruntsRemboursements.filter(r=>r.emprunt_id!==id);
+    saveEmprunts(); saveEmpruntsRemboursements();
+    showToast("✓ Supprimé");
+    renderEmprunts();
+  } catch(e) { showToast("Erreur : "+e.message,"error"); }
+}
+
+// ── ÉCHÉANCIER DÉTAILLÉ ──────────────────────────────────────────────────────
+function voirEcheancier(id){
+  const emp = emprunts.find(x=>x.id===id);
+  if(!emp) return;
+  const ech = genererEcheancier(emp);
+  if(!ech.length){ showToast("Pas d'échéancier (emprunt libre ou durée manquante)","warn"); return; }
+
+  const rembourse = totalRembourse(emp.id);
+  let cumulCouvert = rembourse;
+
+  const lignes = ech.map(l=>{
+    const couverte = cumulCouvert >= l.mensualite;
+    if(couverte) cumulCouvert -= l.mensualite;
+    const partielle = !couverte && cumulCouvert>0;
+    const restPartiel = partielle ? cumulCouvert : 0;
+    if(partielle) cumulCouvert = 0;
+    const statutTxt = couverte ? '<span style="color:#15803d;font-weight:700;">✓ payée</span>'
+      : partielle ? '<span style="color:#c2410c;font-weight:700;">partielle</span>'
+      : '<span style="color:#6b8c7a;">à venir</span>';
+    return '<tr style="border-bottom:1px solid #f1f5f2;font-size:10px;">'
+      +'<td style="padding:5px 4px;text-align:center;color:#6b8c7a;">'+l.n+'</td>'
+      +'<td style="padding:5px 4px;color:#0f1f16;">'+l.date+'</td>'
+      +'<td style="padding:5px 4px;text-align:right;color:#6d28d9;font-weight:700;">'+fmt(l.mensualite)+'</td>'
+      +'<td style="padding:5px 4px;text-align:right;color:#c2410c;">'+fmt(l.interet)+'</td>'
+      +'<td style="padding:5px 4px;text-align:right;color:#166534;">'+fmt(l.capital)+'</td>'
+      +'<td style="padding:5px 4px;text-align:right;color:#0f1f16;">'+fmt(l.capitalRestant)+'</td>'
+      +'<td style="padding:5px 4px;text-align:center;">'+statutTxt+'</td>'
+    +'</tr>';
+  }).join('');
+
+  const totalM = ech.reduce((s,l)=>s+l.mensualite,0);
+  const totalI = ech.reduce((s,l)=>s+l.interet,0);
+
+  showModal(
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
+    +'<div><div style="font-size:16px;font-weight:800;color:#6d28d9;">📅 Échéancier</div>'
+    +'<div style="font-size:11px;color:#6b8c7a;">'+emp.libelle+' · '+(METHODE_LABEL[emp.methode_amortissement]||'')+'</div></div>'
+    +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:12px;font-size:11px;">'
+      +'<div style="flex:1;background:#ede9fe;border-radius:8px;padding:8px;text-align:center;"><div style="font-weight:900;color:#6d28d9;">'+fmt(totalM)+'</div><div style="font-size:9px;color:#6b8c7a;">Total à payer</div></div>'
+      +'<div style="flex:1;background:#fff7ed;border-radius:8px;padding:8px;text-align:center;"><div style="font-weight:900;color:#c2410c;">'+fmt(totalI)+'</div><div style="font-size:9px;color:#6b8c7a;">Dont intérêts</div></div>'
+      +'<div style="flex:1;background:#f0fdf4;border-radius:8px;padding:8px;text-align:center;"><div style="font-weight:900;color:#15803d;">'+fmt(rembourse)+'</div><div style="font-size:9px;color:#6b8c7a;">Déjà remboursé</div></div>'
+    +'</div>'
+    +'<div style="overflow-x:auto;max-height:50vh;overflow-y:auto;">'
+    +'<table style="width:100%;border-collapse:collapse;">'
+      +'<thead><tr style="font-size:9px;color:#6b8c7a;text-transform:uppercase;border-bottom:2px solid #e4ede7;">'
+        +'<th style="padding:5px 4px;">N°</th><th style="padding:5px 4px;text-align:left;">Date</th>'
+        +'<th style="padding:5px 4px;text-align:right;">Mensualité</th><th style="padding:5px 4px;text-align:right;">Intérêt</th>'
+        +'<th style="padding:5px 4px;text-align:right;">Capital</th><th style="padding:5px 4px;text-align:right;">Restant</th>'
+        +'<th style="padding:5px 4px;text-align:center;">Statut</th></tr></thead>'
+      +'<tbody>'+lignes+'</tbody>'
+    +'</table></div>'
+  );
+}
+
+// ── MODALE : REMBOURSEMENT ───────────────────────────────────────────────────
+function modalRemboursement(id){
+  if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
+  const emp = emprunts.find(x=>x.id===id);
+  if(!emp) return;
+  const pe = prochaineEcheance(emp);
+  const montantSuggere = pe ? Math.round(pe.mensualite) : "";
+  const reste = resteAPayerEmprunt(emp);
+
+  showModal(
+    '<div style="font-size:16px;font-weight:800;color:#0d3d1a;margin-bottom:6px;">💳 Remboursement</div>'
+    +'<div style="font-size:11px;color:#6b8c7a;margin-bottom:14px;">'+emp.libelle+' · reste dû '+fmt(reste)
+      +(pe?' · prochaine échéance '+pe.date:'')+'</div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:10px;">'
+      +'<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Montant payé (F) *</label>'
+        +'<input type="number" id="rb_montant" min="0" value="'+montantSuggere+'" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:14px;"/></div>'
+      +'<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Date</label>'
+        +'<input type="date" id="rb_date" value="'+new Date().toISOString().slice(0,10)+'" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/></div>'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:14px;">'
+      +'<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Mode</label>'
+        +'<select id="rb_mode" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;background:#fff;">'
+          +'<option value="virement">Virement</option><option value="especes">Espèces</option>'
+          +'<option value="mobile_money">Mobile Money</option><option value="cheque">Chèque</option><option value="autre">Autre</option></select></div>'
+      +'<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:4px;">Note</label>'
+        +'<input type="text" id="rb_note" placeholder="Optionnel" style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/></div>'
+    +'</div>'
+    +'<label style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:12px;color:#0f1f16;cursor:pointer;">'
+      +'<input type="checkbox" id="rb_solde" style="accent-color:#15803d;width:16px;height:16px;"/> Marquer l\'emprunt comme soldé'
+    +'</label>'
+    +'<div id="rb_msg" style="display:none;margin-bottom:10px;font-size:12px;font-weight:700;text-align:center;"></div>'
+    +'<div style="display:flex;gap:10px;">'
+      +'<button onclick="enregistrerRemboursement(\''+id+'\')" style="flex:1;padding:13px;background:#0d3d1a;color:#fff;border:none;border-radius:12px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">Enregistrer</button>'
+      +'<button onclick="closeModal()" style="padding:13px 18px;background:#f1f5f2;border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;color:#3d5c48;">Annuler</button>'
+    +'</div>'
+  );
+}
+
+async function enregistrerRemboursement(id){
+  const msg = document.getElementById("rb_msg");
+  const emp = emprunts.find(x=>x.id===id);
+  if(!emp) return;
+  const montant = parseFloat(document.getElementById("rb_montant")?.value)||0;
+  if(montant<=0){ msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Saisissez un montant."; return; }
+
+  // Ventilation capital/intérêt sur la base de la prochaine échéance théorique
+  const pe = prochaineEcheance(emp);
+  let partInteret = null, partCapital = null;
+  if(pe){
+    partInteret = Math.min(montant, pe.interet);
+    partCapital = montant - partInteret;
+  }
+
+  const payload = {
+    id: genId(),
+    emprunt_id: id,
+    date: document.getElementById("rb_date")?.value || new Date().toISOString().slice(0,10),
+    montant,
+    part_capital: partCapital,
+    part_interet: partInteret,
+    mode_paiement: document.getElementById("rb_mode")?.value || "virement",
+    note: document.getElementById("rb_note")?.value.trim() || null,
+    enregistre_par: currentUser?.nom || "Admin",
+  };
+  const marquerSolde = document.getElementById("rb_solde")?.checked;
+
+  msg.style.cssText="display:block;color:#166534;"; msg.textContent="Enregistrement…";
+  try {
+    await sbInsert("emprunts_remboursements", payload);
+    empruntsRemboursements.unshift(payload);
+    saveEmpruntsRemboursements();
+    if(marquerSolde){
+      await sbUpdate("emprunts", id, {statut:"solde"});
+      emp.statut = "solde"; saveEmprunts();
+    }
+    logAdminAction("REMBOURSEMENT", emp.libelle+" "+fmt(montant));
+    showToast("✓ Remboursement enregistré");
+    closeModal();
+    renderEmprunts();
+  } catch(e) {
+    msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Erreur : "+e.message;
+  }
+}
+
+// ── HISTORIQUE DES REMBOURSEMENTS ────────────────────────────────────────────
+function voirRemboursements(id){
+  const emp = emprunts.find(x=>x.id===id);
+  if(!emp) return;
+  const liste = empruntsRemboursements
+    .filter(r=>r.emprunt_id===id)
+    .sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+
+  const lignes = liste.length ? liste.map(r=>
+    '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:#f8faf8;border-radius:8px;margin-bottom:6px;">'
+      +'<div><div style="font-size:12px;font-weight:700;color:#0f1f16;">'+r.date+' · '+(r.mode_paiement||'')+'</div>'
+      +(r.part_interet!=null?'<div style="font-size:9px;color:#6b8c7a;">dont intérêt '+fmt(r.part_interet)+' · capital '+fmt(r.part_capital||0)+'</div>':'')
+      +(r.note?'<div style="font-size:9px;color:#6b8c7a;font-style:italic;">'+r.note+'</div>':'')+'</div>'
+      +'<div style="display:flex;align-items:center;gap:8px;">'
+        +'<span style="font-size:13px;font-weight:900;color:#15803d;">'+fmt(r.montant)+'</span>'
+        +'<button onclick="supprimerRemboursement(\''+r.id+'\',\''+id+'\')" style="background:#fef2f2;border:none;border-radius:6px;width:24px;height:24px;cursor:pointer;font-size:11px;color:#dc2626;">🗑</button>'
+      +'</div>'
+    +'</div>'
+  ).join('') : '<div style="text-align:center;padding:20px;color:#6b8c7a;font-size:12px;">Aucun remboursement enregistré.</div>';
+
+  showModal(
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
+    +'<div><div style="font-size:16px;font-weight:800;color:#0d3d1a;">Historique des remboursements</div>'
+    +'<div style="font-size:11px;color:#6b8c7a;">'+emp.libelle+' · total '+fmt(totalRembourse(id))+'</div></div>'
+    +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+    +'</div>'+lignes
+  );
+}
+
+async function supprimerRemboursement(rid, empruntId){
+  if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
+  if(!confirm("Supprimer ce remboursement ?")) return;
+  try {
+    await sbDelete("emprunts_remboursements", rid);
+    empruntsRemboursements = empruntsRemboursements.filter(r=>r.id!==rid);
+    saveEmpruntsRemboursements();
+    showToast("✓ Supprimé");
+    voirRemboursements(empruntId);
+    renderEmprunts();
+  } catch(e) { showToast("Erreur : "+e.message,"error"); }
+}
+
 
 function voirJournalComptable(){
   if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
@@ -3679,6 +4257,16 @@ function renderDashboard(){
     if(sousSeuil){
       html+=`<div onclick="switchTab('finance');switchFinanceSub('tresorerie')" style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:12px;padding:10px 14px;margin-bottom:10px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
         <div style="color:#dc2626;font-weight:700;font-size:12px;">⚠ Risque de tension de trésorerie — solde ${fmt(soldeTreso)} sous le seuil de ${fmt(seuil)}</div>
+        <div style="color:#3d5c48;font-size:11px;">Voir →</div>
+      </div>`;
+    }
+
+    // Alerte échéances d'emprunt à 7 jours
+    const echProches = echeancesProches(7);
+    if(echProches.length){
+      const enRetard = echProches.filter(e=>e.joursRestants<0).length;
+      html+=`<div onclick="switchTab('finance');switchFinanceSub('emprunts')" style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:10px 14px;margin-bottom:10px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
+        <div style="color:#c2410c;font-weight:700;font-size:12px;">⏰ ${echProches.length} échéance${echProches.length>1?"s":""} d'emprunt sous 7 jours${enRetard?` · ${enRetard} en retard`:""}</div>
         <div style="color:#3d5c48;font-size:11px;">Voir →</div>
       </div>`;
     }
@@ -4454,6 +5042,147 @@ async function enregistrerModifPerte(perteId) {
   }
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// OUTIL DE RÉCONCILIATION DE STOCK
+// Liste chronologique de tous les mouvements (achats reçus, ventes, pertes)
+// d'un produit, avec solde courant. Surligne en rouge dès que le stock devient
+// négatif → permet de retrouver l'origine d'une incohérence de saisie.
+// ════════════════════════════════════════════════════════════════════════════
+function ouvrirReconciliation(produitInit){
+  if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
+  // Produits ayant au moins un mouvement
+  const produitsMvt = [...new Set([
+    ...achats.filter(a=>a.statut==="recu").map(a=>a.produit),
+    ...ventes.map(v=>v.produit),
+    ...pertesLots.map(p=>p.produit)
+  ])].filter(Boolean).sort();
+
+  if(!produitsMvt.length){
+    showModal('<div style="text-align:center;padding:32px;color:#6b8c7a;font-size:12px;">Aucun mouvement de stock à réconcilier.</div>');
+    return;
+  }
+  const produit = produitInit && produitsMvt.includes(produitInit) ? produitInit : produitsMvt[0];
+  renderReconciliation(produit, produitsMvt);
+}
+
+function renderReconciliation(produit, produitsMvt){
+  // Construire la liste des mouvements datés
+  const mvts = [];
+  achats.filter(a=>a.produit===produit && a.statut==="recu").forEach(a=>{
+    mvts.push({
+      date: (a.date_reception||a.date||"").slice(0,10),
+      type:"achat", sens:+1, qte:a.quantite,
+      libelle:"Achat reçu — "+(a.fournisseur||"?"),
+      ref:a.numero_document||"",
+      enregistre: a.enregistre_par||a.auteur||""
+    });
+  });
+  ventes.filter(v=>v.produit===produit).forEach(v=>{
+    mvts.push({
+      date:(v.date||"").slice(0,10),
+      type:"vente", sens:-1, qte:v.quantite,
+      libelle:"Vente"+(v.client?" — "+v.client:""),
+      ref:v.numero_document||"",
+      enregistre: v.enregistre_par||v.auteur||""
+    });
+  });
+  pertesLots.filter(p=>p.produit===produit).forEach(p=>{
+    mvts.push({
+      date:(p.date||"").slice(0,10),
+      type:"perte", sens:-1, qte:p.qte_perte,
+      libelle:"Perte"+(p.note?" — "+p.note:""),
+      ref:"", enregistre:p.constate_par||""
+    });
+  });
+
+  // Tri chronologique ; à date égale, achats d'abord (entrées avant sorties)
+  mvts.sort((a,b)=>{
+    const d = (a.date||"").localeCompare(b.date||"");
+    if(d!==0) return d;
+    return (b.sens) - (a.sens); // +1 (achat) avant -1
+  });
+
+  // Calcul du solde courant + repérage du premier passage négatif
+  let solde = 0;
+  let premierNegatifIdx = -1;
+  const lignesData = mvts.map((m,i)=>{
+    solde += m.sens * m.qte;
+    if(solde<0 && premierNegatifIdx===-1) premierNegatifIdx = i;
+    return {...m, soldeApres: solde};
+  });
+
+  const totalAchat = mvts.filter(m=>m.type==="achat").reduce((s,m)=>s+m.qte,0);
+  const totalVente = mvts.filter(m=>m.type==="vente").reduce((s,m)=>s+m.qte,0);
+  const totalPerte = mvts.filter(m=>m.type==="perte").reduce((s,m)=>s+m.qte,0);
+  const ecartFinal = totalAchat - totalVente - totalPerte;
+
+  const couleurType = {achat:"#166534", vente:"#0369a1", perte:"#dc2626"};
+  const signeType = {achat:"+", vente:"−", perte:"−"};
+
+  const lignesHtml = lignesData.map((m,i)=>{
+    const estNegatif = m.soldeApres<0;
+    const estPremierNeg = i===premierNegatifIdx;
+    return '<tr style="border-bottom:1px solid #f1f5f2;font-size:11px;'
+      +(estPremierNeg?'background:#fef2f2;':'')+'">'
+      +'<td style="padding:6px 4px;color:#6b8c7a;white-space:nowrap;">'+(m.date||"—")+'</td>'
+      +'<td style="padding:6px 4px;"><span style="font-weight:700;color:'+couleurType[m.type]+';">'+m.libelle+'</span>'
+        +(m.ref?'<span style="font-size:9px;color:#9ca3af;"> ('+m.ref+')</span>':'')
+        +(m.enregistre?'<div style="font-size:9px;color:#9ca3af;">'+m.enregistre+'</div>':'')+'</td>'
+      +'<td style="padding:6px 4px;text-align:right;font-weight:700;color:'+couleurType[m.type]+';white-space:nowrap;">'+signeType[m.type]+m.qte+'</td>'
+      +'<td style="padding:6px 4px;text-align:right;font-weight:900;color:'+(estNegatif?'#dc2626':'#0f1f16')+';white-space:nowrap;">'+m.soldeApres
+        +(estPremierNeg?' ⚠':'')+'</td>'
+    +'</tr>';
+  }).join('');
+
+  const selecteur = produitsMvt.map(p=>
+    '<option value="'+p+'"'+(p===produit?' selected':'')+'>'+(getProduitIcon(p)||"🌿")+' '+p+'</option>'
+  ).join('');
+
+  showModal(
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
+    +'<div><div style="font-size:16px;font-weight:800;color:#0f1f16;">🔍 Réconciliation de stock</div>'
+    +'<div style="font-size:11px;color:#6b8c7a;">Suivez le solde mouvement par mouvement</div></div>'
+    +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
+    +'</div>'
+
+    // Sélecteur de produit
+    +'<select onchange="renderReconciliation(this.value, '
+      +JSON.stringify(produitsMvt).replace(/"/g,'&quot;')+')" '
+      +'style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;background:#fff;margin-bottom:12px;">'
+      +selecteur+'</select>'
+
+    // Synthèse
+    +'<div style="display:flex;gap:6px;margin-bottom:12px;">'
+      +'<div style="flex:1;background:#f0fdf4;border-radius:8px;padding:8px;text-align:center;"><div style="font-weight:900;color:#166534;font-size:14px;">+'+totalAchat+'</div><div style="font-size:9px;color:#6b8c7a;">Achats</div></div>'
+      +'<div style="flex:1;background:#eff6ff;border-radius:8px;padding:8px;text-align:center;"><div style="font-weight:900;color:#0369a1;font-size:14px;">−'+totalVente+'</div><div style="font-size:9px;color:#6b8c7a;">Ventes</div></div>'
+      +'<div style="flex:1;background:#fef2f2;border-radius:8px;padding:8px;text-align:center;"><div style="font-weight:900;color:#dc2626;font-size:14px;">−'+totalPerte+'</div><div style="font-size:9px;color:#6b8c7a;">Pertes</div></div>'
+      +'<div style="flex:1;background:'+(ecartFinal<0?'#fef2f2':'#f0fdf4')+';border-radius:8px;padding:8px;text-align:center;"><div style="font-weight:900;color:'+(ecartFinal<0?'#dc2626':'#166534')+';font-size:14px;">'+ecartFinal+'</div><div style="font-size:9px;color:#6b8c7a;">Stock</div></div>'
+    +'</div>'
+
+    // Message de diagnostic
+    +(premierNegatifIdx>=0
+      ? '<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:11px;color:#3d5c48;">'
+        +'<span style="font-weight:800;color:#dc2626;">⚠ Première incohérence le '+(lignesData[premierNegatifIdx].date||"?")+'.</span> '
+        +'À ce mouvement, le stock devient négatif ('+lignesData[premierNegatifIdx].soldeApres+'). '
+        +'Cela signifie qu\'une sortie (vente/perte) a été enregistrée sans entrée (achat) correspondante avant cette date. '
+        +'Vérifiez : un achat reçu oublié avant cette date, ou une vente/perte saisie en trop ou en double.'
+      +'</div>'
+      : '<div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:11px;color:#166534;font-weight:700;">✓ Aucune incohérence : le stock reste positif sur toute la période.</div>')
+
+    // Tableau chronologique
+    +'<div style="overflow-y:auto;max-height:45vh;">'
+    +'<table style="width:100%;border-collapse:collapse;">'
+      +'<thead><tr style="font-size:9px;color:#6b8c7a;text-transform:uppercase;border-bottom:2px solid #e4ede7;position:sticky;top:0;background:#fff;">'
+        +'<th style="padding:6px 4px;text-align:left;">Date</th>'
+        +'<th style="padding:6px 4px;text-align:left;">Mouvement</th>'
+        +'<th style="padding:6px 4px;text-align:right;">Qté</th>'
+        +'<th style="padding:6px 4px;text-align:right;">Solde</th></tr></thead>'
+      +'<tbody>'+lignesHtml+'</tbody>'
+    +'</table></div>'
+    +'<div style="font-size:9px;color:#9ca3af;margin-top:8px;">À date égale, les achats (entrées) sont comptés avant les ventes/pertes (sorties).</div>'
+  );
+}
+
 function renderStock(){
   const produitsListe=[...new Set(achats.filter(a=>a.statut==="recu").map(a=>a.produit))];
   const pageEl = document.getElementById("page-stock");
@@ -4687,6 +5416,7 @@ function renderParams(){
         <button onclick="renderGestionUtilisateurs()" style="background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;border-radius:10px;padding:10px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;text-align:left;">👥 Utilisateurs</button>
         <button onclick="voirJournalAdmin()" style="background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8;border-radius:10px;padding:10px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;text-align:left;">🔐 Journal admin</button>
         <button onclick="verifierIntegriteDonnees()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#166534;border-radius:10px;padding:10px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;text-align:left;">🔍 Vérifier données</button>
+        <button onclick="ouvrirReconciliation()" style="background:#f5f3ff;border:1.5px solid #ddd6fe;color:#6d28d9;border-radius:10px;padding:10px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;text-align:left;">📊 Réconciliation stock</button>
       </div>
       <div style="font-size:10px;color:#6b8c7a;margin-top:10px;">Le catalogue produits est désormais dans <b>Commercial</b>, et les commissions/journal comptable dans <b>Finance &amp; Gestion</b>.</div>
     </div>`;
@@ -5781,15 +6511,27 @@ function bilanFinancier(onglet, inline) {
     const tauxRE = ca ? Math.round(resultatExploitation/ca*100) : 0;
 
     // ── Ratios financiers ──
-    const stockValorise = (function(){
-      let total=0;
-      [...new Set(achats.filter(a=>a.statut==="recu").map(a=>a.produit))].forEach(p=>{
-        const f=calculerFIFO(p);
-        total += (f.qteDispo>0?f.qteDispo:0) * (coutMoyen(p)||0);
-      });
-      return total;
-    })();
-    const rotationStock = stockValorise>0 ? (coutMarchandiseVendu/stockValorise) : 0;
+    // Stock valorisé = coût FIFO réel du stock restant (cohérent avec calculerFIFO,
+    // PAS l'hybride qteDispo × coûtMoyen qui mélangeait FIFO et CMP).
+    const produitsRecus = [...new Set(achats.filter(a=>a.statut==="recu").map(a=>a.produit))];
+    const stockValorise = produitsRecus.reduce((tot,p)=>tot + (calculerFIFO(p).coutFIFO||0), 0);
+
+    // Stock initial valorisé (= coût total des achats reçus) pour la rotation sur stock moyen.
+    const coutAchatsRecus = achats
+      .filter(a=>a.statut==="recu")
+      .reduce((s,a)=>s+a.quantite*a.prix_unitaire+((a.droit_terre||0)+(a.transport||0)+(a.droit_vente||0)+(a.charrette||0)),0);
+    // Stock moyen = (stock entré + stock restant) / 2 — base correcte du ratio de rotation.
+    const stockMoyen = (coutAchatsRecus + stockValorise) / 2;
+    const rotationStock = stockMoyen>0 ? (coutMarchandiseVendu/stockMoyen) : 0;
+
+    // Détection d'incohérence : stock théorique négatif (ventes+pertes > achats reçus)
+    const stockNegatifs = produitsRecus.map(p=>{
+      const qteAchat = achats.filter(a=>a.produit===p&&a.statut==="recu").reduce((s,a)=>s+a.quantite,0);
+      const qteVente = ventes.filter(v=>v.produit===p).reduce((s,v)=>s+v.quantite,0);
+      const qtePerte = pertes[p]||0;
+      const ecart = qteAchat - qteVente - qtePerte;
+      return {produit:p, qteAchat, qteVente, qtePerte, ecart};
+    }).filter(x=>x.ecart<0);
     const tauxPerte = (coutMarchandiseVendu+totalPertesV)>0 ? Math.round(totalPertesV/(coutMarchandiseVendu+totalPertesV)*1000)/10 : 0;
 
     function ligneSIG(label, montant, opts){
@@ -5806,6 +6548,19 @@ function bilanFinancier(onglet, inline) {
 
     contenu =
       '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">📊 Compte de résultat (Soldes Intermédiaires de Gestion)</div>'
+      +(stockNegatifs.length
+        ? '<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:12px;padding:12px;margin-bottom:14px;">'
+          +'<div style="font-size:12px;font-weight:800;color:#dc2626;margin-bottom:6px;">⚠ Incohérence de stock détectée</div>'
+          +'<div style="font-size:11px;color:#3d5c48;margin-bottom:8px;">Pour ces produits, les ventes + pertes dépassent les achats reçus. Les chiffres (rotation, stock valorisé, CMV) sont faussés tant que ce n\'est pas corrigé. Vérifie : des achats reçus non saisis, ou des pertes comptées en double avec des ventes.</div>'
+          +stockNegatifs.map(x=>
+            '<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:5px 0;border-top:1px solid #fecaca;">'
+            +'<span style="font-weight:700;color:#0f1f16;">'+(getProduitIcon(x.produit)||"🌿")+' '+x.produit+'</span>'
+            +'<span style="color:#3d5c48;">Achats '+x.qteAchat+' u. − Ventes '+x.qteVente+' u. − Pertes '+x.qtePerte+' u. = <span style="font-weight:900;color:#dc2626;">'+x.ecart+' u.</span></span>'
+            +'</div>'
+          ).join('')
+          +'<button onclick="ouvrirReconciliation(\''+stockNegatifs[0].produit+'\')" style="margin-top:10px;width:100%;background:#dc2626;color:#fff;border:none;border-radius:10px;padding:9px;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;">🔍 Ouvrir l\'outil de réconciliation</button>'
+        +'</div>'
+        : '')
       +'<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:12px;padding:6px 4px;margin-bottom:16px;">'
         +ligneSIG("Chiffre d'affaires (CA)", ca)
         +ligneSIG("− Coût d'achat des marchandises vendues (CMV, FIFO)", coutMarchandiseVendu, {neg:true})
@@ -5822,7 +6577,7 @@ function bilanFinancier(onglet, inline) {
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
         +ratioCard("Taux de marge brute", tauxB+"%", tauxB>=20, "Seuil sain : > 20%", interpreterRatio(tauxB, GRILLE_MARGE_BRUTE))
         +ratioCard("Taux de marge nette", tauxN+"%", tauxN>=15, "Seuil sain : > 15%", interpreterRatio(tauxN, GRILLE_MARGE_NETTE))
-        +ratioCard("Rotation des stocks", rotationStock.toFixed(1)+"x", rotationStock>=1, "CMV / Stock valorisé (période)", interpreterRatio(rotationStock, GRILLE_ROTATION))
+        +ratioCard("Rotation des stocks", rotationStock.toFixed(1)+"x", rotationStock>=1, "CMV / Stock moyen (période)", interpreterRatio(rotationStock, GRILLE_ROTATION))
         +ratioCard("Taux de perte", tauxPerte+"%", tauxPerte<3, "Pertes / (CMV+Pertes) — seuil sain : < 3%", interpreterRatio(tauxPerte, GRILLE_PERTE, true))
         +ratioCard("Stock valorisé (FIFO)", fmt(stockValorise), true, "Coût d'achat du stock disponible")
         +ratioCard("Dû fournisseurs", fmt(totalDus), totalDus<=stockValorise, "À régler sur le stock en cours")
@@ -6922,7 +7677,7 @@ async function sauvegarderUtilisateur() {
       showToast("✓ Utilisateur modifié");
     } else {
       const pin_hash = await hashPin(pin);
-      await sbCreateUser({id:genId(), nom, role, pin_hash, actif:true});
+      await sbCreateUser({id:genUUID(), nom, role, pin_hash, actif:true});
       logAdminAction("USER_CREATE","Création : "+nom+" ("+role+")");
       showToast("✓ Utilisateur créé");
     }

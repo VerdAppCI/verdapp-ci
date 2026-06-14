@@ -30,17 +30,37 @@ document.addEventListener("DOMContentLoaded",()=>{
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 
 :root{
-  --green-900:#0d2e15;--green-800:#1a5c2a;--green-700:#2d8c3e;
-  --green-600:#2d8c3e;--green-500:#3aad50;--green-400:#5cc96e;
+  /* ── Marque ── */
+  --green-900:#0a2e12;--green-800:#0d3d1a;--green-700:#166534;
+  --green-600:#1d7a3e;--green-500:#2d8c3e;--green-400:#5cc96e;
+  --green-100:#e8f4ec;--green-50:#f3f9f5;
   --orange:#f47820;--orange-light:#f9a45c;--orange-dark:#c45e10;
-  --green-100:#e8f8f0;--green-50:#f2fbf6;
-  --amber:#f47820;--red:#e74c3c;--blue:#2980b9;
-  --gray-900:#1a1a2e;--gray-800:#16213e;
-  --white:#ffffff;--gray-50:#f8fafb;--gray-100:#f0f5f1;
-  --gray-200:#e2ece7;--gray-300:#c8ddd1;--gray-500:#3d5c48;
-  --gray-600:#2a3d32;--text:#0f1f16;
-  --shadow:0 2px 12px rgba(20,90,50,.10);
-  --shadow-md:0 4px 24px rgba(20,90,50,.14);
+  --amber:#f47820;--red:#dc2626;--blue:#2563eb;
+
+  /* ── Neutres (sobre & corporate : beaucoup de blanc, gris froids) ── */
+  --white:#ffffff;
+  --gray-50:#fafbfb;      /* fond le plus clair */
+  --gray-100:#f7f9f8;     /* fond général de l'app */
+  --gray-150:#f1f4f2;     /* surfaces secondaires */
+  --gray-200:#e8ede9;     /* bordures hairline */
+  --gray-300:#d4ddd7;     /* bordures marquées */
+  --gray-400:#7c8a82;     /* texte tertiaire / placeholders (assombri) */
+  --gray-500:#4a5a51;     /* texte secondaire (assombri pour lisibilité) */
+  --gray-600:#33413a;     /* texte fort secondaire */
+  --text:#0f1f16;         /* texte principal */
+
+  /* ── Ombres douces neutres (signature fintech) ── */
+  --shadow-xs:0 1px 2px rgba(15,30,25,.04);
+  --shadow:0 1px 3px rgba(15,30,25,.05), 0 1px 2px rgba(15,30,25,.04);
+  --shadow-md:0 4px 16px rgba(15,30,25,.06), 0 2px 6px rgba(15,30,25,.04);
+  --shadow-lg:0 12px 32px rgba(15,30,25,.10), 0 4px 12px rgba(15,30,25,.05);
+
+  /* ── Rayons harmonisés ── */
+  --r-sm:8px; --r:12px; --r-lg:16px; --r-xl:20px; --r-pill:999px;
+
+  /* ── Espacements ── */
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px;
+
   --sidebar-w:220px;
   --topbar-h:96px;
 }
@@ -51,22 +71,23 @@ body{font-family:'Inter',sans-serif;background:var(--gray-100);color:var(--text)
 /* ── INPUTS ── */
 input,select,textarea{
   background:var(--white);border:1.5px solid var(--gray-200);color:var(--text);
-  border-radius:10px;padding:9px 12px;font-size:13px;width:100%;
+  border-radius:var(--r);padding:10px 12px;font-size:13px;width:100%;
   outline:none;font-family:inherit;-webkit-appearance:none;
-  box-shadow:0 1px 3px rgba(0,0,0,.04);transition:border .2s;
+  box-shadow:var(--shadow-xs);transition:border .18s ease, box-shadow .18s ease;
 }
-input:focus,select:focus,textarea:focus{border-color:#2d8c3e;box-shadow:0 0 0 3px rgba(45,140,62,.12);}
+input:focus,select:focus,textarea:focus{border-color:var(--green-600);box-shadow:0 0 0 3px rgba(29,122,62,.10);}
+input::placeholder,textarea::placeholder{color:var(--gray-400);}
 select option{background:var(--white);color:var(--text);}
 
 /* ── TOPBAR (mobile + desktop) ── */
 #topbar{
-  background:linear-gradient(135deg,#0d3d1a 0%,#1a4a22 50%,#0d3d1a 100%);
-  border-bottom:2px solid rgba(244,120,32,.3);
+  background:linear-gradient(180deg,#0d3d1a 0%,#0a2e12 100%);
+  border-bottom:1px solid rgba(244,120,32,.25);
   position:fixed;top:0;left:0;right:0;z-index:50;
   height:var(--topbar-h);
   display:flex;align-items:center;
   padding:0 16px;
-  box-shadow:0 3px 20px rgba(0,0,0,.35);
+  box-shadow:0 1px 12px rgba(10,46,18,.25);
 }
 #topbar-inner{display:flex;align-items:center;justify-content:space-between;width:100%;max-width:1400px;margin:0 auto;}
 
@@ -139,8 +160,8 @@ select option{background:var(--white);color:var(--text);}
 }
 
 /* ── CARDS ── */
-.card{background:var(--white);border:1.5px solid var(--gray-200);border-radius:16px;padding:16px;margin-bottom:12px;box-shadow:var(--shadow);}
-@media(min-width:768px){.card{padding:20px;border-radius:18px;}}
+.card{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r-lg);padding:16px;margin-bottom:12px;box-shadow:var(--shadow);}
+@media(min-width:768px){.card{padding:20px;}}
 
 /* ── KPI CARDS ── */
 .kpi-card{border-radius:16px;padding:16px;box-shadow:0 3px 16px rgba(0,0,0,.15);margin-bottom:0;}
@@ -157,44 +178,58 @@ select option{background:var(--white);color:var(--text);}
 .b-purple{background:#f3e8ff;color:#7c3aed;border:1px solid #ddd6fe;}
 
 /* ── LABELS ── */
-.label{font-size:10px;font-weight:700;color:#2a3d32;text-transform:uppercase;letter-spacing:.08em;display:block;margin-bottom:5px;}
+.label{font-size:10px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.08em;display:block;margin-bottom:5px;}
 
 /* ── SECTION TITLE ── */
-.section-title{font-size:16px;font-weight:800;color:#0d2e15;margin-bottom:14px;display:flex;align-items:center;gap:8px;}
+.section-title{font-size:16px;font-weight:800;color:var(--text);margin-bottom:14px;display:flex;align-items:center;gap:8px;letter-spacing:-.01em;}
 @media(min-width:768px){.section-title{font-size:18px;margin-bottom:18px;}}
 
 /* ── TOAST ── */
-.toast{position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:999;padding:12px 24px;border-radius:12px;font-weight:700;font-size:13px;text-align:center;display:none;box-shadow:0 8px 32px rgba(0,0,0,.15);white-space:nowrap;}
+.toast{position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:999;padding:12px 24px;border-radius:var(--r);font-weight:700;font-size:13px;text-align:center;display:none;box-shadow:var(--shadow-lg);white-space:nowrap;}
 
 /* ── SPINNER ── */
 .spinner{width:15px;height:15px;border:2px solid rgba(255,255,255,.2);border-top:2px solid #f47820;border-radius:50%;animation:spin .7s linear infinite;display:inline-block;flex-shrink:0;}
 @keyframes spin{to{transform:rotate(360deg);}}
 
 /* ── BUTTONS ── */
-.btn{padding:11px 16px;border-radius:12px;border:none;cursor:pointer;font-family:inherit;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;transition:all .2s;}
-.btn-green{background:linear-gradient(135deg,#1a5c2a,#2d8c3e);color:#fff;box-shadow:0 3px 12px rgba(45,140,62,.3);}
-.btn-green:hover{box-shadow:0 4px 16px rgba(46,204,113,.4);}
+.btn{padding:11px 16px;border-radius:var(--r);border:none;cursor:pointer;font-family:inherit;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;transition:all .18s ease;}
+.btn-green{background:var(--green-800);color:#fff;box-shadow:var(--shadow-xs);}
+.btn-green:hover{background:var(--green-700);box-shadow:var(--shadow);}
 .btn-green:active{transform:translateY(1px);}
-.btn-ghost{background:#f0f5f1;color:#0d2e15;border:1.5px solid var(--gray-200);}
-.btn-ghost:hover{background:var(--gray-200);}
+.btn-ghost{background:var(--gray-100);color:var(--green-800);border:1.5px solid var(--gray-200);}
+.btn-ghost:hover{background:var(--gray-150);border-color:var(--gray-300);}
 .btn-red{background:#fef2f2;color:#dc2626;border:1.5px solid #fecaca;}
 .btn-red:hover{background:#fee2e2;}
 .btn:disabled{opacity:.5;cursor:not-allowed;}
 
 /* ── FILTERS ── */
-.filter-btn{padding:6px 14px;border-radius:999px;font-size:11px;font-weight:700;border:none;cursor:pointer;font-family:inherit;transition:all .2s;}
-.f-active{background:#f47820;color:#fff;box-shadow:0 2px 8px rgba(244,120,32,.3);}
-.f-inactive{background:var(--gray-100);color:#2a3d32;border:1px solid var(--gray-200);}
+.filter-btn{padding:6px 14px;border-radius:var(--r-pill);font-size:11px;font-weight:700;border:none;cursor:pointer;font-family:inherit;transition:all .18s ease;}
+.f-active{background:var(--green-800);color:#fff;box-shadow:var(--shadow-xs);}
+.f-inactive{background:var(--white);color:var(--gray-500);border:1px solid var(--gray-200);}
+.f-inactive:hover{border-color:var(--gray-300);}
 
 /* ── ICON BUTTONS ── */
-.icon-btn{background:var(--gray-100);border:1.5px solid var(--gray-200);color:#2a3d32;padding:7px 10px;border-radius:8px;cursor:pointer;font-size:13px;line-height:1;transition:all .2s;}
-.icon-btn:hover{background:var(--gray-200);}
-.icon-btn-green{background:#dcfce7;border:1.5px solid #bbf7d0;color:#15803d;padding:7px 10px;border-radius:8px;cursor:pointer;font-size:13px;line-height:1;}
-.icon-btn-orange{background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;padding:7px 10px;border-radius:8px;cursor:pointer;font-size:13px;line-height:1;}
+.icon-btn{background:var(--white);border:1.5px solid var(--gray-200);color:var(--gray-500);padding:7px 10px;border-radius:var(--r-sm);cursor:pointer;font-size:13px;line-height:1;transition:all .18s ease;}
+.icon-btn:hover{background:var(--gray-100);border-color:var(--gray-300);}
+.icon-btn-green{background:var(--green-50);border:1.5px solid #bbf7d0;color:#15803d;padding:7px 10px;border-radius:var(--r-sm);cursor:pointer;font-size:13px;line-height:1;}
+.icon-btn-orange{background:#fff7ed;border:1.5px solid #fed7aa;color:#c2410c;padding:7px 10px;border-radius:var(--r-sm);cursor:pointer;font-size:13px;line-height:1;}
 
+/* ── CARTES & UTILITAIRES (design system sobre) ── */
+.card{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r-lg);padding:var(--sp-4);box-shadow:var(--shadow);}
+.card-flat{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r-lg);padding:var(--sp-4);}
+.eyebrow{font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:.08em;}
+.kpi{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r);padding:var(--sp-3);text-align:center;box-shadow:var(--shadow-xs);}
+.kpi-value{font-size:18px;font-weight:800;color:var(--text);letter-spacing:-.01em;}
+.kpi-label{font-size:10px;color:var(--gray-500);font-weight:600;margin-top:2px;}
+
+/* KPI cards du dashboard (style bancaire : blanc, accent latéral) */
+.kpi-card{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r-lg);padding:14px 16px;box-shadow:var(--shadow);}
+.kpi-card-label{font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:.07em;}
+.kpi-card-value{font-size:19px;font-weight:800;color:var(--text);margin-top:5px;line-height:1.1;letter-spacing:-.01em;}
+.kpi-card-sub{font-size:10.5px;color:var(--gray-500);margin-top:4px;}
 /* ── MODAL ── */
-.modal-overlay{position:fixed;inset:0;background:rgba(13,51,32,.55);backdrop-filter:blur(4px);z-index:200;display:flex;align-items:center;justify-content:center;padding:16px;}
-.modal{background:var(--white);border:1.5px solid var(--gray-200);border-radius:20px;padding:22px;width:100%;max-width:520px;max-height:90vh;overflow-y:auto;box-shadow:var(--shadow-md);}
+.modal-overlay{position:fixed;inset:0;background:rgba(15,30,25,.45);backdrop-filter:blur(3px);z-index:200;display:flex;align-items:center;justify-content:center;padding:16px;}
+.modal{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r-xl);padding:22px;width:100%;max-width:520px;max-height:90vh;overflow-y:auto;box-shadow:var(--shadow-lg);}
 
 /* ── TABLE ── */
 .data-table{width:100%;border-collapse:collapse;font-size:13px;}
@@ -319,11 +354,11 @@ select option{background:var(--white);color:var(--text);}
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
       <div class="section-title" style="margin-bottom:0;">📊 Finance &amp; Gestion</div>
       <div style="display:flex;gap:6px;">
-        <button onclick="genererRapportFinancierPDF()" style="background:#f5f3ff;border:1.5px solid #ddd6fe;color:#6d28d9;border-radius:10px;padding:8px 12px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">📄 Rapport PDF</button>
-        <button onclick="exportDashboardCSV()" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#15803d;border-radius:10px;padding:8px 12px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">⬇ CSV</button>
+        <button onclick="genererRapportFinancierPDF()" style="background:var(--white);border:1px solid var(--gray-200);color:var(--gray-600);border-radius:var(--r);padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;box-shadow:var(--shadow-xs);">📄 Rapport PDF</button>
+        <button onclick="exportDashboardCSV()" style="background:var(--white);border:1px solid var(--gray-200);color:var(--gray-600);border-radius:var(--r);padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;box-shadow:var(--shadow-xs);">⬇ CSV</button>
       </div>
     </div>
-    <div id="financeSubnav" style="display:flex;gap:6px;margin-bottom:14px;background:#f0f5f1;border-radius:12px;padding:4px;overflow-x:auto;"></div>
+    <div id="financeSubnav" style="display:flex;flex-direction:column;margin-bottom:16px;background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r-lg);overflow:hidden;box-shadow:var(--shadow);"></div>
     <div id="page-financeContent"></div>
   </div>
 
@@ -932,14 +967,17 @@ function totalPertesValeur(){
  * ce qui a été chargé). Utilisé pour la marge nette commerciale du dashboard.
  */
 function totalCommissionsDues(){
-  // Commissions calculées dynamiquement (non encore enregistrées en paiement)
-  // + commissions déjà enregistrées comme dues.
-  // Pour le dashboard, on se base sur le calcul dynamique par utilisateur
-  // (calculerCommission), qui reflète la réalité des ventes/lots actuels.
+  // Source de vérité UNIQUE : calculerCommissionParSemaine (la même que les
+  // vues commission utilisateur et admin). Garantit que le dashboard, le SIG
+  // et les rapports affichent EXACTEMENT le même total de commissions que
+  // l'écran Commissions, sans divergence d'arrondi ou de méthode.
   const noms = [...new Set(achats.map(a=>a.enregistre_par||a.auteur).filter(Boolean))];
-  return noms.reduce((s,nom)=>{
-    const c = calculerCommission(nom);
-    return s + c.totalCommission;
+  // Dédoublonnage insensible à la casse pour ne pas compter deux fois un même
+  // utilisateur écrit différemment (ex: "Salifou" / "SALIFOU").
+  const nomsUniques = [];
+  noms.forEach(n=>{ if(!nomsUniques.some(x=>sameName(x,n))) nomsUniques.push(n); });
+  return nomsUniques.reduce((s,nom)=>{
+    return s + calculerCommissionParSemaine(nom).totalCommission;
   }, 0);
 }
 
@@ -1567,16 +1605,16 @@ const COMMERCIAL_SUBTABS = [
 ];
 
 const FINANCE_SUBTABS = [
-  {id:"sig",         label:"Compte de résultat"},
-  {id:"tresorerie",  label:"Trésorerie"},
-  {id:"couts",       label:"Coûts"},
-  {id:"tiers",       label:"Clients / Fournisseurs"},
-  {id:"investissements", label:"Investissements"},
-  {id:"emprunts",    label:"Emprunts"},
-  {id:"budget",      label:"Budget"},
-  {id:"commissions", label:"Commissions"},
-  {id:"journal",     label:"Journal comptable"},
-  {id:"pertes",      label:"Pertes"},
+  {id:"sig",         label:"Compte de résultat",   icon:"▣"},
+  {id:"tresorerie",  label:"Trésorerie",           icon:"≋"},
+  {id:"couts",       label:"Coûts",                icon:"◔"},
+  {id:"tiers",       label:"Clients / Fournisseurs", icon:"⇄"},
+  {id:"investissements", label:"Investissements",  icon:"↗"},
+  {id:"emprunts",    label:"Emprunts",             icon:"▤"},
+  {id:"budget",      label:"Budget",               icon:"◫"},
+  {id:"commissions", label:"Commissions",          icon:"％"},
+  {id:"journal",     label:"Journal comptable",    icon:"≣"},
+  {id:"pertes",      label:"Pertes",               icon:"▽"},
 ];
 
 function renderCommercialSubnav(){
@@ -1605,17 +1643,49 @@ function switchCommercialSub(sub){
   else if(sub==="catalogue") renderCatalogue();
 }
 
+let financeNavOuvert = false;
+
 function renderFinanceSubnav(){
-  document.getElementById("financeSubnav").innerHTML = FINANCE_SUBTABS.map(t=>
-    '<button onclick="switchFinanceSub(\''+t.id+'\')" style="flex:1;min-width:90px;padding:8px 6px;border:none;border-radius:9px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700;white-space:nowrap;'
-    +(financeSubTab===t.id?'background:#6d28d9;color:#fff;box-shadow:0 2px 8px rgba(109,40,217,.3);':'background:none;color:#3d5c48;')+'">'
-    +t.label
-    +'</button>'
-  ).join('');
+  const actifTab = FINANCE_SUBTABS.find(t=>t.id===financeSubTab) || FINANCE_SUBTABS[0];
+
+  const ligne = (t, estActif, estEntete)=>{
+    return '<button onclick="'+(estEntete?'toggleFinanceNav()':'switchFinanceSub(\''+t.id+'\')')+'" '
+      +'style="display:flex;align-items:center;gap:12px;width:100%;text-align:left;'
+      +'padding:13px 16px;border:none;cursor:pointer;font-family:inherit;font-size:13.5px;'
+      +'font-weight:'+(estActif?'700':'600')+';'
+      +(estEntete?'':'border-top:1px solid var(--gray-200);')
+      +'transition:all .15s ease;'
+      +(estActif
+        ? 'background:var(--green-800);color:#fff;'
+        : 'background:var(--white);color:var(--gray-600);')+'">'
+      +'<span style="font-size:16px;width:24px;text-align:center;flex-shrink:0;'
+        +'color:'+(estActif?'var(--orange)':'var(--gray-400)')+';">'+t.icon+'</span>'
+      +'<span style="flex:1;">'+t.label+'</span>'
+      +(estEntete
+        ? '<span style="color:'+(estActif?'rgba(255,255,255,.6)':'var(--gray-400)')+';font-size:13px;transition:transform .2s;transform:rotate('+(financeNavOuvert?'180':'0')+'deg);">▾</span>'
+        : (estActif?'<span style="color:rgba(255,255,255,.5);font-size:16px;">›</span>':''))
+    +'</button>';
+  };
+
+  // En-tête = rubrique active (toujours visible) ; le reste se déroule
+  let html = ligne(actifTab, true, true);
+  if(financeNavOuvert){
+    html += FINANCE_SUBTABS
+      .filter(t=>t.id!==actifTab.id)
+      .map(t=>ligne(t, false, false))
+      .join('');
+  }
+  document.getElementById("financeSubnav").innerHTML = html;
+}
+
+function toggleFinanceNav(){
+  financeNavOuvert = !financeNavOuvert;
+  renderFinanceSubnav();
 }
 
 function switchFinanceSub(sub){
   financeSubTab = sub;
+  financeNavOuvert = false;
   renderFinanceSubnav();
   renderFinanceContent();
 }
@@ -1903,31 +1973,18 @@ function voirCommission() {
   }
 }
 
-// ── VUE UTILISATEUR : commissions par date de vente ──────────────────────────
-function voirCommissionUtilisateur(nom) {
-  if(!nom) return showToast("Connectez-vous d'abord","error");
+// ── CALCUL CENTRALISÉ : commissions d'un utilisateur, regroupées par semaine ISO ──
+// Fonction PURE réutilisée par la vue utilisateur ET la vue admin, pour garantir
+// que les deux affichent EXACTEMENT le même montant et la même logique.
+// Retourne : { semaines:[{cle,dateRef,ventesCount,lots:[{...,qteVendue,mn,comm,datesVente[]}],
+//              commission,margeNette}], totalCommission, totalMargeNette, nbLots }
+function calculerCommissionParSemaine(nom){
+  const lotsUser = achats.filter(a => a.statut==="recu" && sameName(a.enregistre_par, nom));
+  if(!lotsUser.length) return {semaines:[], totalCommission:0, totalMargeNette:0, nbLots:0};
 
-  // Lots enregistrés par cet utilisateur (reçus)
-  const lotsUser = achats.filter(a =>
-    a.statut === "recu" &&
-    sameName(a.enregistre_par, nom)
-  );
-
-  if(!lotsUser.length) {
-    showModal(
-      '<div style="text-align:center;padding:32px;">'
-      +'<div style="font-size:40px;margin-bottom:12px;">💰</div>'
-      +'<div style="font-weight:800;color:#0f1f16;font-size:15px;margin-bottom:8px;">Aucun lot enregistré</div>'
-      +'<div style="font-size:12px;color:#6b8c7a;">Tes commissions apparaîtront ici quand tes lots seront vendus.</div>'
-      +'</div>'
-    );
-    return;
-  }
-
-  // Identifier les produits de l'utilisateur
   const produitsUser = [...new Set(lotsUser.map(l=>l.produit))];
 
-  // Grouper les ventes par SEMAINE ISO (lundi→dimanche), pour chaque produit
+  // Grouper les ventes par semaine ISO
   const parSemaine = {};
   ventes
     .filter(v => produitsUser.includes(v.produit))
@@ -1940,25 +1997,19 @@ function voirCommissionUtilisateur(nom) {
       parSemaine[cle].ventes.push(v);
     });
 
-  // Tri des semaines de la plus récente à la plus ancienne
-  const semaines = Object.keys(parSemaine).sort().reverse();
+  const clesSemaine = Object.keys(parSemaine).sort().reverse();
+  let totalCommission = 0, totalMargeNette = 0;
 
-  let totalCommission = 0;
-  let totalMargeNette = 0;
-
-  const lignesParSemaine = semaines.map(cle => {
+  const semaines = clesSemaine.map(cle => {
     const ventesS = parSemaine[cle].ventes;
     const dateRef = parSemaine[cle].dateRef;
-    let commissionS = 0;
-    let margeNetteS = 0;
+    let commissionS = 0, margeNetteS = 0;
     const lotsImputes = [];
 
-    // Pour chaque vente de la semaine, calculer la part qui consomme les lots de l'utilisateur
     ventesS.forEach(v => {
       const ventesAvant = ventes
         .filter(x => x.produit===v.produit && new Date(x.date)<new Date(v.date))
         .sort((a,b)=>new Date(a.date)-new Date(b.date));
-
       let qteDejaVendue = ventesAvant.reduce((s,x)=>s+x.quantite,0);
       const lotsRecu = achats
         .filter(a=>a.produit===v.produit&&a.statut==="recu")
@@ -1976,7 +2027,6 @@ function voirCommissionUtilisateur(nom) {
         if(aVendre<=0) return;
         const pris = Math.min(aVendre, lot.qteRestante);
         aVendre -= pris;
-
         if(sameName(lot.enregistre_par, nom) && pris>0) {
           const fraisTotauxLot = (lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0);
           const fraisUnitairesLot = lot.quantite ? fraisTotauxLot/lot.quantite : 0;
@@ -1985,7 +2035,6 @@ function voirCommissionUtilisateur(nom) {
           const mn = caPortion - coutPortion;
           margeNetteS += mn;
           commissionS += Math.max(0, mn * 0.10);
-          // Détail par lot, en conservant la date de vente de chaque portion
           if(!lotsImputes.find(l=>l.id===lot.id)) {
             lotsImputes.push({...lot, qteVendue:0, mn:0, comm:0, datesVente:new Set()});
           }
@@ -2000,40 +2049,76 @@ function voirCommissionUtilisateur(nom) {
 
     totalCommission += commissionS;
     totalMargeNette += margeNetteS;
-
     if(commissionS<=0 && margeNetteS===0) return null;
 
-    const lotsHtml = lotsImputes.map(l=>{
-      const datesArr = [...l.datesVente].sort();
-      const datesAff = datesArr.length>1
-        ? datesArr[0]+" → "+datesArr[datesArr.length-1]
-        : (datesArr[0]||"");
-      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:#f8faf8;border-radius:8px;margin-top:4px;">'
-        +'<div>'
-          +'<div style="font-size:11px;font-weight:700;color:#0f1f16;">'+(getProduitIcon(l.produit)||"🌿")+' '+l.produit+' — '+l.fournisseur+'</div>'
-          +'<div style="font-size:10px;color:#6b8c7a;">Lot reçu le '+(l.date_reception||l.date)+' · '+l.qteVendue+' u. vendues · vente '+datesAff+'</div>'
-        +'</div>'
-        +'<div style="text-align:right;">'
-          +'<div style="font-size:12px;font-weight:900;color:#f47820;">+'+fmt(l.comm)+'</div>'
-          +'<div style="font-size:9px;color:#6b8c7a;">10% de '+fmt(l.mn)+'</div>'
-        +'</div>'
-      +'</div>';
-    }).join('');
+    // Convertir datesVente (Set) en tableau trié pour chaque lot
+    lotsImputes.forEach(l=>{ l.datesVente = [...l.datesVente].sort(); });
 
-    return '<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:12px;padding:12px;margin-bottom:8px;">'
-      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">'
-        +'<div>'
-          +'<div style="font-weight:700;color:#0f1f16;font-size:13px;">'+libelleSemaine(dateRef)+'</div>'
-          +'<div style="font-size:10px;color:#6b8c7a;">'+ventesS.length+' vente'+(ventesS.length>1?'s':'')+' · '+lotsImputes.length+' lot'+(lotsImputes.length>1?'s':'')+'</div>'
-        +'</div>'
-        +'<div style="text-align:right;">'
-          +'<div style="font-size:15px;font-weight:900;color:#f47820;">+'+fmt(commissionS)+'</div>'
-          +'<div style="font-size:9px;color:#6b8c7a;">10% de '+fmt(margeNetteS)+'</div>'
-        +'</div>'
-      +'</div>'
-      +lotsHtml
-    +'</div>';
+    return {
+      cle, dateRef,
+      ventesCount: ventesS.length,
+      lots: lotsImputes,
+      commission: commissionS,
+      margeNette: margeNetteS
+    };
   }).filter(Boolean);
+
+  return {semaines, totalCommission, totalMargeNette, nbLots: lotsUser.length};
+}
+
+// Rendu HTML d'une carte-semaine (réutilisé par les deux vues)
+function htmlSemaineCommission(sem){
+  const lotsHtml = sem.lots.map(l=>{
+    const datesAff = l.datesVente.length>1
+      ? l.datesVente[0]+" → "+l.datesVente[l.datesVente.length-1]
+      : (l.datesVente[0]||"");
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:#f8faf8;border-radius:8px;margin-top:4px;">'
+      +'<div>'
+        +'<div style="font-size:11px;font-weight:700;color:#0f1f16;">'+(getProduitIcon(l.produit)||"🌿")+' '+l.produit+' — '+l.fournisseur+'</div>'
+        +'<div style="font-size:10px;color:#6b8c7a;">Lot reçu le '+(l.date_reception||l.date)+' · '+l.qteVendue+' u. vendues · vente '+datesAff+'</div>'
+      +'</div>'
+      +'<div style="text-align:right;">'
+        +'<div style="font-size:12px;font-weight:900;color:#f47820;">+'+fmt(l.comm)+'</div>'
+        +'<div style="font-size:9px;color:#6b8c7a;">10% de '+fmt(l.mn)+'</div>'
+      +'</div>'
+    +'</div>';
+  }).join('');
+
+  return '<div style="background:#fff;border:1.5px solid #e4ede7;border-radius:12px;padding:12px;margin-bottom:8px;">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">'
+      +'<div>'
+        +'<div style="font-weight:700;color:#0f1f16;font-size:13px;">'+libelleSemaine(sem.dateRef)+'</div>'
+        +'<div style="font-size:10px;color:#6b8c7a;">'+sem.ventesCount+' vente'+(sem.ventesCount>1?'s':'')+' · '+sem.lots.length+' lot'+(sem.lots.length>1?'s':'')+'</div>'
+      +'</div>'
+      +'<div style="text-align:right;">'
+        +'<div style="font-size:15px;font-weight:900;color:#f47820;">+'+fmt(sem.commission)+'</div>'
+        +'<div style="font-size:9px;color:#6b8c7a;">10% de '+fmt(sem.margeNette)+'</div>'
+      +'</div>'
+    +'</div>'
+    +lotsHtml
+  +'</div>';
+}
+
+// ── VUE UTILISATEUR : commissions par date de vente ──────────────────────────
+function voirCommissionUtilisateur(nom) {
+  if(!nom) return showToast("Connectez-vous d'abord","error");
+
+  const calc = calculerCommissionParSemaine(nom);
+
+  if(!calc.nbLots) {
+    showModal(
+      '<div style="text-align:center;padding:32px;">'
+      +'<div style="font-size:40px;margin-bottom:12px;">💰</div>'
+      +'<div style="font-weight:800;color:#0f1f16;font-size:15px;margin-bottom:8px;">Aucun lot enregistré</div>'
+      +'<div style="font-size:12px;color:#6b8c7a;">Tes commissions apparaîtront ici quand tes lots seront vendus.</div>'
+      +'</div>'
+    );
+    return;
+  }
+
+  const semainesHtml = calc.semaines.length
+    ? calc.semaines.map(htmlSemaineCommission).join('')
+    : '<div style="text-align:center;padding:24px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;">Aucune vente sur tes lots pour le moment.</div>';
 
   showModal(
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
@@ -2048,20 +2133,17 @@ function voirCommissionUtilisateur(nom) {
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">'
       +'<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:12px;text-align:center;">'
         +'<div style="font-size:10px;font-weight:700;color:#c2410c;text-transform:uppercase;letter-spacing:.06em;">Marge nette totale</div>'
-        +'<div style="font-size:18px;font-weight:900;color:#0f1f16;margin-top:4px;">'+fmt(totalMargeNette)+'</div>'
+        +'<div style="font-size:18px;font-weight:900;color:#0f1f16;margin-top:4px;">'+fmt(calc.totalMargeNette)+'</div>'
       +'</div>'
       +'<div style="background:linear-gradient(135deg,#0d3d1a,#166534);border-radius:12px;padding:12px;text-align:center;">'
         +'<div style="font-size:10px;font-weight:700;color:#86efac;text-transform:uppercase;letter-spacing:.06em;">Ma commission totale</div>'
-        +'<div style="font-size:22px;font-weight:900;color:#fff;margin-top:4px;">'+fmt(totalCommission)+'</div>'
+        +'<div style="font-size:22px;font-weight:900;color:#fff;margin-top:4px;">'+fmt(calc.totalCommission)+'</div>'
       +'</div>'
     +'</div>'
 
-    // Détail par semaine
-    +(lignesParSemaine.length
-      ? '<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Par semaine de vente (lun. → dim.)</div>'
-        +lignesParSemaine.join('')
-      : '<div style="text-align:center;padding:24px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;">Aucune vente sur tes lots pour le moment.</div>'
-    )
+    // Détail par semaine (même rendu que la vue admin)
+    +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Par semaine de vente (lun. → dim.)</div>'
+    +semainesHtml
   );
 }
 
@@ -2116,61 +2198,20 @@ function voirCommissionAdmin() {
     return;
   }
 
-  // Pour chaque utilisateur, calculer la commission par lot
+  // Pour chaque utilisateur, on s'appuie sur la MÊME source de vérité que la
+  // vue utilisateur (calculerCommissionParSemaine) pour garantir des montants
+  // et un découpage par semaine ISO strictement identiques entre les deux vues.
   const usersHtml = usersAvecLots.map(nom => {
-    const lotsUser = achats.filter(a=>a.statut==="recu"&&sameName(a.enregistre_par,nom));
-    let totalCommUser = 0;
+    const calc = calculerCommissionParSemaine(nom);
+    const totalCommUser = calc.totalCommission;
 
-    const lotsHtml = lotsUser.map(lot => {
-      const fifo = calculerFIFO(lot.produit);
-      const lotFifo = fifo.lots.find(l=>l.id===lot.id);
-      if(!lotFifo || !lotFifo.qteConsommee) return null;
-
-      // Ventes imputées à ce lot
-      const lotsAvant = fifo.lots.slice(0, fifo.lots.indexOf(lotFifo));
-      const qteAvant = lotsAvant.reduce((s,l)=>s+l.qteInitiale,0);
-      let aSkip=qteAvant, aPrendre=lotFifo.qteConsommee;
-      const ventesTriees = ventes
-        .filter(v=>v.produit===lot.produit)
-        .sort((a,b)=>new Date(a.date)-new Date(b.date));
-      const ventesImputees = [];
-      for(const v of ventesTriees){
-        if(aPrendre<=0) break;
-        if(aSkip>=v.quantite){aSkip-=v.quantite;continue;}
-        const skip=aSkip; aSkip=0;
-        const pris=Math.min(aPrendre,v.quantite-skip);
-        aPrendre-=pris;
-        ventesImputees.push({...v,quantite:pris});
-      }
-      // ── Marge nette du lot = CA proportionnel des ventes imputées
-      //    − coût d'achat réel du lot (qteConsommee × prix unitaire)
-      //    − frais accessoires réels du lot (qteConsommee × frais unitaires)
-      // (Remplace l'ancien recalcul via margenette(ventesImputees), qui
-      //  rejouait un FIFO partiel incohérent avec l'historique réel des
-      //  ventes et sous-évaluait les frais terrain imputés.)
-      const caImpute = ventesImputees.reduce((s,v)=>s+v.quantite*v.prix_vente, 0);
-      const fraisTotauxLot = (lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0);
-      const fraisUnitairesLot = lot.quantite ? fraisTotauxLot/lot.quantite : 0;
-      const coutLot = lotFifo.qteConsommee * (lot.prix_unitaire + fraisUnitairesLot);
-      const mn = caImpute - coutLot;
-      const comm = Math.max(0, mn*0.10);
-      totalCommUser += comm;
-
-      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:#f8faf8;border-radius:8px;margin-top:4px;font-size:11px;">'
-        +'<div>'
-          +'<div style="font-weight:700;color:#0f1f16;">'+(getProduitIcon(lot.produit)||"🌿")+' '+lot.produit+' — '+lot.fournisseur+'</div>'
-          +'<div style="font-size:10px;color:#6b8c7a;">'+(lot.date_reception||lot.date)+' · '+lotFifo.qteConsommee+'/'+lot.quantite+' u. vendues</div>'
-        +'</div>'
-        +'<div style="text-align:right;">'
-          +'<div style="font-weight:900;color:#f47820;">+'+fmt(comm)+'</div>'
-          +'<div style="font-size:9px;color:#6b8c7a;">MN: '+fmt(mn)+'</div>'
-        +'</div>'
-      +'</div>';
-    }).filter(Boolean).join('');
+    // Détail regroupé par semaine (même rendu que la vue utilisateur)
+    const semainesHtml = calc.semaines.length
+      ? calc.semaines.map(htmlSemaineCommission).join('')
+      : '<div style="text-align:center;padding:14px;color:#6b8c7a;font-size:11px;background:#f8faf8;border-radius:8px;margin-top:6px;">Aucune vente sur ses lots pour le moment.</div>';
 
     const col = ["#f47820","#0369a1","#166534","#7c3aed","#dc2626"][usersAvecLots.indexOf(nom)%5];
-    const u = usersCache.find(x=>x.nom===nom);
-    const dejaPaye = commissionsPaiements.filter(c=>c.utilisateur===nom).reduce((s,c)=>s+(c.montant||0),0);
+    const dejaPaye = commissionsPaiements.filter(c=>sameName(c.utilisateur,nom)).reduce((s,c)=>s+(c.montant||0),0);
     const reste = Math.max(0, totalCommUser - dejaPaye);
     const tropPercu = Math.max(0, dejaPaye - totalCommUser);
     const estSolde = dejaPaye>0 && reste<=0;
@@ -2179,7 +2220,7 @@ function voirCommissionAdmin() {
         +'<div style="display:flex;align-items:center;gap:10px;">'
           +'<div style="width:36px;height:36px;background:'+col+';border-radius:999px;display:flex;align-items:center;justify-content:center;font-weight:900;color:#fff;font-size:16px;">'+nom.charAt(0).toUpperCase()+'</div>'
           +'<div><div style="font-weight:800;color:#0f1f16;font-size:14px;">'+nom+'</div>'
-          +'<div style="font-size:10px;color:#6b8c7a;">'+lotsUser.length+' lot'+(lotsUser.length>1?'s':'')+'</div></div>'
+          +'<div style="font-size:10px;color:#6b8c7a;">'+calc.nbLots+' lot'+(calc.nbLots>1?'s':'')+'</div></div>'
         +'</div>'
         +'<div style="background:linear-gradient(135deg,#0d3d1a,#166534);border-radius:10px;padding:8px 14px;text-align:center;">'
           +'<div style="font-size:14px;font-weight:900;color:#fff;">'+fmt(totalCommUser)+'</div>'
@@ -2199,14 +2240,15 @@ function voirCommissionAdmin() {
         +'<button onclick="modalPayerCommission(\''+nom+'\','+totalCommUser+','+dejaPaye+')" style="flex:1;background:#0d3d1a;color:#fff;border:none;border-radius:10px;padding:9px;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;">💳 Enregistrer un paiement</button>'
         +'<button onclick="voirHistoriquePaiementsCommission(\''+nom+'\')" style="background:#f1f5f2;border:none;border-radius:10px;padding:9px 12px;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;color:#3d5c48;">Historique</button>'
       +'</div>'
-      +lotsHtml
+      +'<div style="font-size:10px;font-weight:700;color:#6b8c7a;text-transform:uppercase;letter-spacing:.05em;margin:6px 0 2px;">Par semaine de vente (lun. → dim.)</div>'
+      +semainesHtml
     +'</div>';
   }).join('');
 
   showModal(
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
     +'<div><div style="font-size:17px;font-weight:800;color:#0f1f16;">💰 Commissions équipe</div>'
-    +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">10% marge nette · Par utilisateur · Par lot</div></div>'
+    +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">10% marge nette · Par utilisateur · Par semaine</div></div>'
     +'</div>'
     +usersHtml
   );
@@ -4204,34 +4246,34 @@ function renderDashboard(){
     document.getElementById("page-dashboard").innerHTML=html; return;
   }
 
-  // ── LIGNE 1 : 4 KPI CARDS ──
-  html+=`<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
-    <div class="section-title" style="margin-bottom:0;">📊 Tableau de bord</div>
+  // ── LIGNE 1 : 4 KPI CARDS (style bancaire sobre) ──
+  html+=`<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:4px;">
+    <div class="section-title" style="margin-bottom:0;">Tableau de bord</div>
   </div>
-  <div style="font-size:10px;color:#6b8c7a;margin:-4px 0 10px;">Bilan, commissions et export se trouvent désormais dans <b>Finance &amp; Gestion</b>.</div>
+  <div style="font-size:11px;color:var(--gray-400);margin:0 0 14px;">Bilan, commissions et export dans <b style="color:var(--gray-500);">Finance &amp; Gestion</b></div>
   <div class="grid-4" style="margin-bottom:14px;">
-    <div style="background:linear-gradient(135deg,#1e3a5f,#1a2e4a);border:none;border-radius:14px;padding:14px;box-shadow:0 3px 12px rgba(30,58,95,.3);">
-      <div style="font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;letter-spacing:.1em;">Total achats</div>
-      <div style="font-size:17px;font-weight:900;color:#fff;margin-top:4px;line-height:1.1;">${fmt(totalA)}</div>
-      <div style="font-size:10px;color:#60a5fa;margin-top:4px;">${nbAchats} lot${nbAchats>1?"s":""}  ·  ${nbRecus} reçu${nbRecus>1?"s":""}</div>
-      <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:2px;">Coût vendu FIFO : ${fmt(totalV-marge)}</div>
+    <div class="kpi-card" style="border-left:3px solid #2563eb;">
+      <div class="kpi-card-label">Total achats</div>
+      <div class="kpi-card-value">${fmt(totalA)}</div>
+      <div class="kpi-card-sub">${nbAchats} lot${nbAchats>1?"s":""} · ${nbRecus} reçu${nbRecus>1?"s":""}</div>
+      <div class="kpi-card-sub" style="color:var(--gray-500);">Coût vendu FIFO : ${fmt(totalV-marge)}</div>
     </div>
-    <div style="background:linear-gradient(135deg,#14532d,#166534);border:none;border-radius:14px;padding:14px;box-shadow:0 3px 12px rgba(20,83,45,.3);">
-      <div style="font-size:9px;font-weight:700;color:#86efac;text-transform:uppercase;letter-spacing:.1em;">Total ventes</div>
-      <div style="font-size:17px;font-weight:900;color:#fff;margin-top:4px;line-height:1.1;">${fmt(totalV)}</div>
-      <div style="font-size:10px;color:#4ade80;margin-top:4px;">${nbVentes} vente${nbVentes>1?"s":""}</div>
-      <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:2px;">Brute : ${fmt(marge)}  ·  Nette : ${fmt(margeNette)}  ·  Commerciale : ${fmt(margeCommerciale)}</div>
+    <div class="kpi-card" style="border-left:3px solid var(--green-600);">
+      <div class="kpi-card-label">Total ventes</div>
+      <div class="kpi-card-value">${fmt(totalV)}</div>
+      <div class="kpi-card-sub">${nbVentes} vente${nbVentes>1?"s":""}</div>
+      <div class="kpi-card-sub" style="color:var(--gray-500);">Brute ${fmt(marge)} · Nette ${fmt(margeNette)} · Comm. ${fmt(margeCommerciale)}</div>
     </div>
-    <div style="background:${totalDus>0?"linear-gradient(135deg,#7f1d1d,#991b1b)":"linear-gradient(135deg,#14532d,#166534)"};border:none;border-radius:14px;padding:14px;box-shadow:0 3px 12px rgba(0,0,0,.15);">
-      <div style="font-size:9px;font-weight:700;color:${totalDus>0?"#fca5a5":"#86efac"};text-transform:uppercase;letter-spacing:.1em;">Dû fournisseurs</div>
-      <div style="font-size:17px;font-weight:900;color:#fff;margin-top:4px;line-height:1.1;">${fmt(totalDus)}</div>
-      <div style="font-size:10px;color:${totalDus>0?"#f87171":"#4ade80"};margin-top:4px;">${totalDus>0?"⚠ À régler":"✓ Tout soldé"}</div>
+    <div class="kpi-card" style="border-left:3px solid ${totalDus>0?'#dc2626':'var(--green-600)'};">
+      <div class="kpi-card-label">Dû fournisseurs</div>
+      <div class="kpi-card-value" style="color:${totalDus>0?'#dc2626':'var(--text)'};">${fmt(totalDus)}</div>
+      <div class="kpi-card-sub" style="color:${totalDus>0?'#dc2626':'var(--green-600)'};font-weight:700;">${totalDus>0?"⚠ À régler":"✓ Tout soldé"}</div>
     </div>
-    <div style="background:linear-gradient(135deg,#78350f,#92400e);border:none;border-radius:14px;padding:14px;box-shadow:0 3px 12px rgba(120,53,15,.3);">
-      <div style="font-size:9px;font-weight:700;color:#fdba74;text-transform:uppercase;letter-spacing:.1em;">Stocks transit</div>
-      <div style="font-size:17px;font-weight:900;color:#fff;margin-top:4px;line-height:1.1;">${nbTransit}</div>
-      <div style="font-size:10px;color:#c2410c;margin-top:4px;">En route vers Abidjan</div>
-      <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:2px;">${nbRecus} reçu${nbRecus>1?"s":""}</div>
+    <div class="kpi-card" style="border-left:3px solid var(--orange);">
+      <div class="kpi-card-label">Stocks en transit</div>
+      <div class="kpi-card-value">${nbTransit}</div>
+      <div class="kpi-card-sub">En route vers Abidjan</div>
+      <div class="kpi-card-sub" style="color:var(--gray-500);">${nbRecus} reçu${nbRecus>1?"s":""}</div>
     </div>
   </div>`;
 
@@ -4249,45 +4291,52 @@ function renderDashboard(){
     const moisCourantD = new Date().toISOString().slice(0,7);
     const mvtsMoisD = tousMvts.filter(m=>(m.date||"").slice(0,7)===moisCourantD);
     const soldeTreso = soldeCaisse(tousMvts);
-    const encMois = totalEntreesCaisse(mvtsMoisD);
+    const encTotal = totalEntreesCaisse(tousMvts);   // tous temps
+    const decTotal = totalSortiesCaisse(tousMvts);   // tous temps
+    const encMois = totalEntreesCaisse(mvtsMoisD);   // mois courant
     const decMois = totalSortiesCaisse(mvtsMoisD);
     const seuil = seuilTresorerie();
     const sousSeuil = soldeTreso < seuil;
 
     if(sousSeuil){
-      html+=`<div onclick="switchTab('finance');switchFinanceSub('tresorerie')" style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:12px;padding:10px 14px;margin-bottom:10px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
-        <div style="color:#dc2626;font-weight:700;font-size:12px;">⚠ Risque de tension de trésorerie — solde ${fmt(soldeTreso)} sous le seuil de ${fmt(seuil)}</div>
-        <div style="color:#3d5c48;font-size:11px;">Voir →</div>
+      html+=`<div onclick="switchTab('finance');switchFinanceSub('tresorerie')" style="background:#fef2f2;border:1px solid #fecaca;border-radius:var(--r);padding:10px 14px;margin-bottom:10px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
+        <div style="color:#b91c1c;font-weight:700;font-size:12px;">⚠ Tension de trésorerie — solde ${fmt(soldeTreso)} sous le seuil de ${fmt(seuil)}</div>
+        <div style="color:var(--gray-500);font-size:11px;">Voir →</div>
       </div>`;
     }
 
-    // Alerte échéances d'emprunt à 7 jours
     const echProches = echeancesProches(7);
     if(echProches.length){
       const enRetard = echProches.filter(e=>e.joursRestants<0).length;
-      html+=`<div onclick="switchTab('finance');switchFinanceSub('emprunts')" style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:10px 14px;margin-bottom:10px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
+      html+=`<div onclick="switchTab('finance');switchFinanceSub('emprunts')" style="background:#fff7ed;border:1px solid #fed7aa;border-radius:var(--r);padding:10px 14px;margin-bottom:10px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
         <div style="color:#c2410c;font-weight:700;font-size:12px;">⏰ ${echProches.length} échéance${echProches.length>1?"s":""} d'emprunt sous 7 jours${enRetard?` · ${enRetard} en retard`:""}</div>
-        <div style="color:#3d5c48;font-size:11px;">Voir →</div>
+        <div style="color:var(--gray-500);font-size:11px;">Voir →</div>
       </div>`;
     }
 
     html+=`<div class="card" style="margin-bottom:12px;cursor:pointer;" onclick="switchTab('finance');switchFinanceSub('tresorerie')">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-        <div class="label" style="margin-bottom:0;">💵 Trésorerie</div>
-        <span onclick="event.stopPropagation();configurerSeuilTresorerie()" style="font-size:10px;color:#6d28d9;font-weight:700;background:#f5f3ff;padding:3px 9px;border-radius:999px;border:1px solid #ddd6fe;">⚙ Seuil : ${fmt(seuil)}</span>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div class="label" style="margin-bottom:0;">Trésorerie</div>
+        <span onclick="event.stopPropagation();configurerSeuilTresorerie()" style="font-size:10px;color:var(--gray-500);font-weight:700;background:var(--gray-100);padding:4px 10px;border-radius:var(--r-pill);border:1px solid var(--gray-200);">⚙ Seuil ${fmt(seuil)}</span>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
-        <div style="background:${soldeTreso>=seuil?'#f0fdf4':'#fef2f2'};border:1.5px solid ${soldeTreso>=seuil?'#bbf7d0':'#fecaca'};border-radius:12px;padding:10px;text-align:center;">
-          <div style="font-size:16px;font-weight:900;color:${soldeTreso>=0?'#166534':'#dc2626'};">${fmt(soldeTreso)}</div>
-          <div style="font-size:9px;color:#3d5c48;font-weight:700;margin-top:2px;">Solde de caisse</div>
+
+      <!-- Solde global mis en avant -->
+      <div style="background:${soldeTreso>=seuil?'var(--green-50)':'#fef2f2'};border:1px solid ${soldeTreso>=seuil?'#bbf7d0':'#fecaca'};border-radius:var(--r);padding:14px;text-align:center;margin-bottom:10px;">
+        <div style="font-size:10px;color:var(--gray-500);font-weight:700;text-transform:uppercase;letter-spacing:.06em;">Solde de caisse</div>
+        <div style="font-size:26px;font-weight:800;color:${soldeTreso>=0?'var(--green-700)':'#dc2626'};margin-top:4px;letter-spacing:-.02em;">${fmt(soldeTreso)}</div>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:4px;">Encaissé ${fmt(encTotal)} − Décaissé ${fmt(decTotal)}</div>
+      </div>
+
+      <!-- Flux du mois courant, clairement étiquetés -->
+      <div style="font-size:10px;color:var(--gray-400);font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Ce mois-ci</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r);padding:10px;text-align:center;">
+          <div style="font-size:15px;font-weight:800;color:var(--green-700);">+${fmt(encMois)}</div>
+          <div style="font-size:10px;color:var(--gray-500);font-weight:600;margin-top:2px;">Encaissé</div>
         </div>
-        <div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:12px;padding:10px;text-align:center;">
-          <div style="font-size:16px;font-weight:900;color:#166534;">${fmt(encMois)}</div>
-          <div style="font-size:9px;color:#3d5c48;font-weight:700;margin-top:2px;">Encaissé ce mois</div>
-        </div>
-        <div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:12px;padding:10px;text-align:center;">
-          <div style="font-size:16px;font-weight:900;color:#dc2626;">${fmt(decMois)}</div>
-          <div style="font-size:9px;color:#3d5c48;font-weight:700;margin-top:2px;">Décaissé ce mois</div>
+        <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r);padding:10px;text-align:center;">
+          <div style="font-size:15px;font-weight:800;color:#dc2626;">−${fmt(decMois)}</div>
+          <div style="font-size:10px;color:var(--gray-500);font-weight:600;margin-top:2px;">Décaissé</div>
         </div>
       </div>
     </div>`;

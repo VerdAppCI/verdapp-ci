@@ -4747,20 +4747,39 @@ function calculerFIFO(produit) {
 
   if(!lots.length) return { lots:[], qteTotal:0, qteDispo:0, qteVendue:0, coutFIFO:0, lotsActifs:[] };
 
-  // Total vendu de ce produit
+  // Total vendu de ce produit (les VENTES suivent le FIFO : plus vieux d'abord)
   let qteAVendre = ventes
     .filter(v => v.produit === produit)
     .reduce((s,v) => s+v.quantite, 0);
 
-  // Pertes enregistrées
-  const qtePerte = pertes[produit] || 0;
-  qteAVendre += qtePerte;
+  // Pertes par lot : chaque perte est imputée au LOT qu'elle désigne (lot_id),
+  // PAS au flux FIFO global. Cela garantit la traçabilité exacte et une
+  // valorisation au coût de revient réel du lot défectueux.
+  const idsLots = new Set(lots.map(l=>l.id));
+  const pertesParLot = {};
+  let pertesOrphelines = 0; // pertes sans lot_id valide → repli FIFO global
+  pertesLots.filter(p => p.produit === produit).forEach(p => {
+    if(p.lot_id && idsLots.has(p.lot_id)){
+      pertesParLot[p.lot_id] = (pertesParLot[p.lot_id]||0) + (p.qte_perte||0);
+    } else {
+      pertesOrphelines += (p.qte_perte||0);
+    }
+  });
+  // Les pertes orphelines sont traitées comme des sorties FIFO (ajoutées au flux
+  // de consommation des plus vieux lots, comme l'ancien comportement).
+  qteAVendre += pertesOrphelines;
 
   // Appliquer le FIFO lot par lot
   const lotsAvecEtat = lots.map(lot => {
     const qteInitiale = lot.quantite;
-    const consommee = Math.min(qteAVendre, qteInitiale);
-    qteAVendre = Math.max(0, qteAVendre - qteInitiale);
+    // 1) Perte propre à ce lot (retirée en premier, traçabilité exacte)
+    const pertesLot = Math.min(pertesParLot[lot.id]||0, qteInitiale);
+    // 2) Disponible pour la vente après déduction de la perte du lot
+    const dispoApresPerte = qteInitiale - pertesLot;
+    // 3) Les ventes consomment ce disponible en FIFO
+    const vendue = Math.min(qteAVendre, dispoApresPerte);
+    qteAVendre = Math.max(0, qteAVendre - dispoApresPerte);
+    const consommee = pertesLot + vendue; // total sorti du lot
     const restante = qteInitiale - consommee;
 
     let statut;
@@ -4771,6 +4790,8 @@ function calculerFIFO(produit) {
     return {
       ...lot,
       qteInitiale,
+      qtePerteLot: pertesLot,
+      qteVendueLot: vendue,
       qteConsommee: consommee,
       qteRestante: Math.max(0, restante),
       statut,
@@ -4825,6 +4846,18 @@ function coutFIFOUnitaire(produit) {
 // Structure : [{id, lotId, produit, fournisseur, qtePerte, coutUnitaire,
 //               valeurPerte, date, constatePar, note}]
 let pertesLots = JSON.parse(localStorage.getItem("va_pertes_lots")||"[]");
+
+/**
+ * SOURCE UNIQUE DE VÉRITÉ pour les quantités perdues.
+ * Dérive la quantité totale perdue d'un produit directement depuis pertes_lots,
+ * au lieu de maintenir un compteur global pertes[produit] en parallèle (qui
+ * pouvait diverger). Tout le code doit lire les pertes via cette fonction.
+ */
+function pertesQteProduit(produit){
+  return pertesLots
+    .filter(p => p.produit === produit)
+    .reduce((s,p) => s + (p.qte_perte||0), 0);
+}
 
 // commissions_paiements : historique des paiements de commission (Supabase, RLS appliquée)
 // Structure : [{id, utilisateur, utilisateur_id, montant_du, montant (=payé), statut,
@@ -4969,12 +5002,10 @@ async function enregistrerPerteLot(lotId, produit, fournisseur, qteRestante, cou
       console.warn("Table pertes_lots inexistante, stockage local:", e.message);
     }
 
-    // Mettre à jour pertes[] local (total par produit)
+    // Source unique : pertes_lots. On ajoute la déclaration et c'est tout —
+    // les quantités de perte sont désormais dérivées via pertesQteProduit().
     pertesLots.unshift(payload);
     savePertesLots();
-    // Incrémenter le compteur de pertes global du produit
-    pertes[produit] = (pertes[produit]||0) + qte;
-    await updatePerte(produit, pertes[produit]);
 
     logAdminAction("PERTE_LOT", produit+" · "+qte+"u · "+fmt(valeurPerte)+"F (lot:"+lotId+")");
 
@@ -5139,16 +5170,9 @@ async function enregistrerModifPerte(perteId) {
       console.warn("sbUpdate pertes_lots a échoué, mise à jour locale seulement:", e.message);
     }
 
-    // Mettre à jour pertesLots[] local
+    // Mettre à jour pertesLots[] local (source unique)
     Object.assign(p, updatePayload);
     savePertesLots();
-
-    // Recalcul en cascade : ajuster le compteur global pertes[produit] par delta
-    const delta = nouvelleQte - ancienneQte;
-    if(delta !== 0) {
-      pertes[p.produit] = Math.max(0, (pertes[p.produit]||0) + delta);
-      await updatePerte(p.produit, pertes[p.produit]);
-    }
 
     logAdminAction("MODIF_PERTE", p.produit+" · "+ancienneQte+"→"+nouvelleQte+"u · "+fmt(nouvelleValeur)+"F (lot:"+p.lot_id+")");
 
@@ -5398,7 +5422,7 @@ function renderStock(){
           +'<div style="font-size:9px;font-weight:600;color:#3d5c48;margin-top:2px;">Vendu</div>'
         +'</div>'
         +'<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:10px;padding:8px;">'
-          +'<input type="number" value="'+(pertes[p]||0)+'" min="0" onchange="updatePerte(\''+p+'\',this.value)" style="font-weight:900;color:#c2410c;font-size:15px;background:transparent;border:none;text-align:center;width:100%;padding:0;font-family:inherit;"/>'
+          +'<div style="font-weight:900;color:#c2410c;font-size:15px;">'+pertesQteProduit(p)+'</div>'
           +'<div style="font-size:9px;font-weight:600;color:#3d5c48;margin-top:2px;">Pertes</div>'
         +'</div>'
         +'<div style="background:'+(fifo.qteDispo>0?"#f0fdf4;border:1.5px solid #bbf7d0":"#fef2f2;border:1.5px solid #fecaca")+';border-radius:10px;padding:8px;">'
@@ -6650,7 +6674,7 @@ function bilanFinancier(onglet, inline) {
     const stockNegatifs = produitsRecus.map(p=>{
       const qteAchat = achats.filter(a=>a.produit===p&&a.statut==="recu").reduce((s,a)=>s+a.quantite,0);
       const qteVente = ventes.filter(v=>v.produit===p).reduce((s,v)=>s+v.quantite,0);
-      const qtePerte = pertes[p]||0;
+      const qtePerte = pertesQteProduit(p);
       const ecart = qteAchat - qteVente - qtePerte;
       return {produit:p, qteAchat, qteVente, qtePerte, ecart};
     }).filter(x=>x.ecart<0);
@@ -6831,76 +6855,70 @@ function bilanFinancier(onglet, inline) {
         +'<div style="font-weight:700;color:#dc2626;font-size:14px;">Réservé à l\'administrateur</div>'
         +'</div>';
     } else {
-      // Pertes par produit
-      const pertesProds = Object.entries(pertes).filter(([,v])=>v>0);
-      // Pertes par lot (achats avec pertes détectées via stock négatif)
-      const pertesLots = [];
-      achats.filter(a=>a.statut==="recu").forEach(a=>{
-        const qteVendue=ventes.filter(v=>v.produit===a.produit).reduce((s,v)=>s+v.quantite,0);
-        const qtePerte=pertes[a.produit]||0;
-        const qteRestante=a.quantite-qteVendue-qtePerte;
-        const perteLot=a.quantite-(qteVendue+Math.max(qteRestante,0));
-        if(perteLot>0){
-          const valPerte=perteLot*a.prix_unitaire;
-          pertesLots.push({
-            fournisseur:a.fournisseur||"N/A",
-            produit:a.produit,
-            date:a.date,
-            qteAchetee:a.quantite,
-            qtePerte:perteLot,
-            valPerte,
-            lot:a.id
-          });
-        }
+      // SOURCE UNIQUE : pertes_lots (pertes réellement déclarées par lot)
+      // Agrégation par produit
+      const aggProd = {};
+      pertesLots.forEach(pl=>{
+        if(!aggProd[pl.produit]) aggProd[pl.produit]={qte:0, val:0};
+        aggProd[pl.produit].qte += (pl.qte_perte||0);
+        aggProd[pl.produit].val += (pl.valeur_perte||0);
       });
-      const totalPertesVal=pertesProds.reduce((s,[p,q])=>{const c=coutMoyen(p);return s+(c?q*c:0);},0);
+      const pertesProds = Object.entries(aggProd);
+      const totalPertesVal = pertesProds.reduce((s,[,o])=>s+o.val, 0);
 
-      contenu='<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:12px;padding:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;">'
+      // Détail par lot = directement les déclarations de pertes_lots
+      const MOTIF_LBL = {defectueux:"🔴 Défectueux",invendu:"📦 Invendu",perime:"⏳ Périmé",casse:"💥 Cassé",autre:"Autre"};
+      const DECISION_LBL = {detruire:"🗑 Détruit",garder:"📥 Gardé",brader:"🏷 Bradé"};
+      const lignesLots = pertesLots.slice().sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+
+      contenu='<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;">'
         +'<div><div style="font-size:12px;font-weight:700;color:#dc2626;">⚠ Pertes enregistrées</div>'
-          +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">'+pertesProds.length+' produit'+(pertesProds.length>1?'s':'')+" · Valeur estimée : "+fmt(totalPertesVal)+'</div>'
+          +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">'+pertesProds.length+' produit'+(pertesProds.length>1?'s':'')+" · Valeur réelle : "+fmt(totalPertesVal)+'</div>'
         +'</div>'
         +'<button onclick="switchTab(\'commercial\');switchCommercialSub(\'stock\')" style="background:#dc2626;color:#fff;border:none;border-radius:9px;padding:7px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">Gérer →</button>'
         +'</div>'
 
-        // Pertes par produit
+        // Pertes par produit (agrégées depuis pertes_lots)
         +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Par produit</div>'
         +(pertesProds.length
           ? '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;">'
-            +pertesProds.map(([p,q])=>{
-              const c=coutMoyen(p);
-              const val=c?q*c:null;
-              return '<div style="background:#fff;border:1.5px solid #fecaca;border-radius:10px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;">'
+            +pertesProds.map(([p,o])=>{
+              return '<div style="background:#fff;border:1px solid #fecaca;border-radius:10px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;">'
                 +'<div><div style="font-weight:700;color:#0f1f16;font-size:13px;">'+(getProduitIcon(p)||"🌿")+" "+p+'</div>'
-                  +'<div style="font-size:10px;color:#6b8c7a;">Qté perdue : '+q+' unités'+(c?' · Valeur : '+fmt(val):'')+'</div>'
+                  +'<div style="font-size:10px;color:#6b8c7a;">Qté perdue : '+o.qte+' unités · Valeur : '+fmt(o.val)+'</div>'
                 +'</div>'
                 +'<div style="text-align:right;">'
-                  +'<div style="font-size:14px;font-weight:900;color:#dc2626;">−'+q+'</div>'
-                  +(val?'<div style="font-size:10px;color:#6b8c7a;">−'+fmt(val)+'</div>':'')
+                  +'<div style="font-size:14px;font-weight:900;color:#dc2626;">−'+o.qte+'</div>'
+                  +'<div style="font-size:10px;color:#6b8c7a;">−'+fmt(o.val)+'</div>'
                 +'</div>'
               +'</div>';
             }).join("")
             +'</div>'
-          : '<div style="text-align:center;padding:16px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;margin-bottom:14px;">Aucune perte enregistrée par produit.</div>')
+          : '<div style="text-align:center;padding:16px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;margin-bottom:14px;">Aucune perte enregistrée.</div>')
 
-        // Pertes par lot (calcul automatique)
-        +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Par lot (déficit détecté)</div>'
-        +(pertesLots.length
+        // Pertes par lot (déclarations réelles)
+        +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Par lot (déclarations réelles)</div>'
+        +(lignesLots.length
           ? '<div style="display:flex;flex-direction:column;gap:6px;">'
-            +pertesLots.map(l=>{
-              return '<div style="background:#fff;border:1.5px solid #fed7aa;border-radius:10px;padding:10px 12px;">'
-                +'<div style="display:flex;justify-content:space-between;align-items:center;">'
-                  +'<div><div style="font-weight:700;color:#0f1f16;font-size:12px;">'+(getProduitIcon(l.produit)||"🌿")+" "+l.produit+' — '+l.fournisseur+'</div>'
-                    +'<div style="font-size:10px;color:#6b8c7a;">Date : '+l.date+' · Acheté : '+l.qteAchetee+' u.</div>'
+            +lignesLots.map(l=>{
+              return '<div style="background:#fff;border:1px solid #fed7aa;border-radius:10px;padding:10px 12px;">'
+                +'<div style="display:flex;justify-content:space-between;align-items:flex-start;">'
+                  +'<div style="flex:1;"><div style="font-weight:700;color:#0f1f16;font-size:12px;">'+(getProduitIcon(l.produit)||"🌿")+" "+l.produit+' — '+(l.fournisseur||"N/A")+'</div>'
+                    +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:3px 0;">'
+                      +(l.motif?'<span style="font-size:9px;font-weight:700;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:999px;padding:1px 7px;">'+(MOTIF_LBL[l.motif]||l.motif)+'</span>':'')
+                      +(l.decision?'<span style="font-size:9px;font-weight:700;background:#f1f5f2;color:#3d5c48;border:1px solid #e4ede7;border-radius:999px;padding:1px 7px;">'+(DECISION_LBL[l.decision]||l.decision)+'</span>':'')
+                    +'</div>'
+                    +'<div style="font-size:10px;color:#6b8c7a;">Perte le '+(l.date||"")+(l.date_reception?' · reçu le '+l.date_reception:'')+'</div>'
                   +'</div>'
-                  +'<div style="text-align:right;">'
-                    +'<div style="font-size:13px;font-weight:900;color:#c2410c;">−'+l.qtePerte+' u.</div>'
-                    +'<div style="font-size:10px;color:#6b8c7a;">−'+fmt(l.valPerte)+'</div>'
+                  +'<div style="text-align:right;flex-shrink:0;margin-left:8px;">'
+                    +'<div style="font-size:13px;font-weight:900;color:#c2410c;">−'+(l.qte_perte||0)+' u.</div>'
+                    +'<div style="font-size:10px;color:#6b8c7a;">−'+fmt(l.valeur_perte||0)+'</div>'
                   +'</div>'
                 +'</div>'
               +'</div>';
             }).join("")
             +'</div>'
-          : '<div style="text-align:center;padding:16px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;">Aucun déficit détecté sur les lots.</div>');
+          : '<div style="text-align:center;padding:16px;color:#6b8c7a;font-size:12px;background:#f8faf8;border-radius:10px;">Aucune perte déclarée sur les lots.</div>');
     }
   }
 
@@ -7589,7 +7607,7 @@ function verifierIntegriteDonnees(){
   prodsStock.forEach(p=>{
     const r=achats.filter(a=>a.produit===p&&a.statut==="recu").reduce((s,a)=>s+a.quantite,0);
     const v=ventes.filter(vv=>vv.produit===p).reduce((s,vv)=>s+vv.quantite,0);
-    const pt=pertes[p]||0;
+    const pt=pertesQteProduit(p);
     const dispo=r-v-pt;
     if(dispo<0) problemes.push(`Stock négatif : ${p} (${dispo})`);
   });

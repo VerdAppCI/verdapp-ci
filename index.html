@@ -2613,12 +2613,13 @@ function genererDocumentPDF(type, item){
 
   // Pied de page
   doc.setFontSize(8); doc.setFont(undefined,"normal"); doc.setTextColor(120,120,120);
-  pdfText(doc,"Document genere par VerdApp CI - "+new Date().toLocaleString("fr-FR"), 14, 285);
+  pdfText(doc,"Document genere par VerdApp CI - PDF corrige v2 - "+new Date().toLocaleString("fr-FR"), 14, 285);
   if(isVente){
     pdfText(doc,"Numerotation sequentielle conforme aux exigences OHADA (Acte uniforme - droit commercial general).", 14, 290);
   }
 
-  const filename = pdfCleanText(numero!=="—"?numero:(isVente?"facture":"bon_reception")) + ".pdf";
+  const baseName = pdfCleanText(numero!=="—"?numero:(isVente?"facture":"bon_reception"));
+  const filename = baseName + "-corrige.pdf";
   doc.save(filename);
 }
 
@@ -7841,6 +7842,7 @@ setInterval(()=>{
 </script>
 </body>
 </html>
+
 
 
 

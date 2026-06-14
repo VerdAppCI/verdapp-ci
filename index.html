@@ -4674,20 +4674,39 @@ function calculerFIFO(produit) {
 
   if(!lots.length) return { lots:[], qteTotal:0, qteDispo:0, qteVendue:0, coutFIFO:0, lotsActifs:[] };
 
-  // Total vendu de ce produit
+  // Total vendu de ce produit (les VENTES suivent le FIFO : plus vieux d'abord)
   let qteAVendre = ventes
     .filter(v => v.produit === produit)
     .reduce((s,v) => s+v.quantite, 0);
 
-  // Pertes enregistrées
-  const qtePerte = pertes[produit] || 0;
-  qteAVendre += qtePerte;
+  // Pertes par lot : chaque perte est imputée au LOT qu'elle désigne (lot_id),
+  // PAS au flux FIFO global. Cela garantit la traçabilité exacte et une
+  // valorisation au coût de revient réel du lot défectueux.
+  const idsLots = new Set(lots.map(l=>l.id));
+  const pertesParLot = {};
+  let pertesOrphelines = 0; // pertes sans lot_id valide → repli FIFO global
+  pertesLots.filter(p => p.produit === produit).forEach(p => {
+    if(p.lot_id && idsLots.has(p.lot_id)){
+      pertesParLot[p.lot_id] = (pertesParLot[p.lot_id]||0) + (p.qte_perte||0);
+    } else {
+      pertesOrphelines += (p.qte_perte||0);
+    }
+  });
+  // Les pertes orphelines sont traitées comme des sorties FIFO (ajoutées au flux
+  // de consommation des plus vieux lots, comme l'ancien comportement).
+  qteAVendre += pertesOrphelines;
 
   // Appliquer le FIFO lot par lot
   const lotsAvecEtat = lots.map(lot => {
     const qteInitiale = lot.quantite;
-    const consommee = Math.min(qteAVendre, qteInitiale);
-    qteAVendre = Math.max(0, qteAVendre - qteInitiale);
+    // 1) Perte propre à ce lot (retirée en premier, traçabilité exacte)
+    const pertesLot = Math.min(pertesParLot[lot.id]||0, qteInitiale);
+    // 2) Disponible pour la vente après déduction de la perte du lot
+    const dispoApresPerte = qteInitiale - pertesLot;
+    // 3) Les ventes consomment ce disponible en FIFO
+    const vendue = Math.min(qteAVendre, dispoApresPerte);
+    qteAVendre = Math.max(0, qteAVendre - dispoApresPerte);
+    const consommee = pertesLot + vendue; // total sorti du lot
     const restante = qteInitiale - consommee;
 
     let statut;
@@ -4698,6 +4717,8 @@ function calculerFIFO(produit) {
     return {
       ...lot,
       qteInitiale,
+      qtePerteLot: pertesLot,
+      qteVendueLot: vendue,
       qteConsommee: consommee,
       qteRestante: Math.max(0, restante),
       statut,
@@ -5004,7 +5025,7 @@ function voirPertesLots() {
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
     +'<div>'
       +'<div style="font-size:17px;font-weight:800;color:#0f1f16;">📋 Pertes constatées par lot</div>'
-      +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">'+all.length+' constatation'+(all.length>1?'s':'')+' · Valeur totale : '+fmt(totalVal)+' F</div>'
+      +'<div style="font-size:11px;color:#3d5c48;margin-top:2px;">'+all.length+' constatation'+(all.length>1?'s':'')+' · Valeur totale : '+fmt(totalVal)+'</div>'
     +'</div>'
     +'<button onclick="closeModal()" style="background:#f1f5f2;border:none;border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
     +'</div>'
@@ -5015,7 +5036,7 @@ function voirPertesLots() {
       +'</div>'
       +'<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:12px;padding:12px;text-align:center;">'
         +'<div style="font-size:11px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:.06em;">Valeur perdue</div>'
-        +'<div style="font-size:20px;font-weight:900;color:#dc2626;margin-top:4px;">−'+fmt(totalVal)+' F</div>'
+        +'<div style="font-size:20px;font-weight:900;color:#dc2626;margin-top:4px;">−'+fmt(totalVal)+'</div>'
       +'</div>'
     +'</div>'
     +(all.length
@@ -5333,15 +5354,15 @@ function renderStock(){
   let totalValeurFIFO=0, totalDispo=0;
   produitsListe.forEach(p=>{const f=calculerFIFO(p); totalValeurFIFO+=f.coutFIFO; totalDispo+=f.qteDispo;});
   html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;">'
-    +'<div style="background:linear-gradient(135deg,#0d3d1a,#166534);border-radius:12px;padding:12px;text-align:center;">'
-      +'<div style="font-size:9px;font-weight:700;color:#86efac;text-transform:uppercase;letter-spacing:.1em;">Unités disponibles</div>'
-      +'<div style="font-size:20px;font-weight:900;color:#fff;margin-top:4px;">'+totalDispo+'</div>'
-      +'<div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:2px;">'+produitsListe.length+' produit'+(produitsListe.length>1?"s":"")+'</div>'
+    +'<div class="kpi-card" style="border-left:3px solid var(--green-600);text-align:left;">'
+      +'<div class="kpi-card-label">Unités disponibles</div>'
+      +'<div class="kpi-card-value">'+totalDispo+'</div>'
+      +'<div class="kpi-card-sub">'+produitsListe.length+' produit'+(produitsListe.length>1?"s":"")+'</div>'
     +'</div>'
-    +'<div style="background:linear-gradient(135deg,#1e3a5f,#1a2e4a);border-radius:12px;padding:12px;text-align:center;">'
-      +'<div style="font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;letter-spacing:.1em;">Valeur stock FIFO</div>'
-      +'<div style="font-size:18px;font-weight:900;color:#fff;margin-top:4px;">'+fmt(totalValeurFIFO)+'</div>'
-      +'<div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:2px;">Au coût de revient</div>'
+    +'<div class="kpi-card" style="border-left:3px solid #2563eb;text-align:left;">'
+      +'<div class="kpi-card-label">Valeur stock FIFO</div>'
+      +'<div class="kpi-card-value">'+fmt(totalValeurFIFO)+'</div>'
+      +'<div class="kpi-card-sub">Au coût de revient</div>'
     +'</div>'
   +'</div>';
 
@@ -6471,25 +6492,25 @@ function bilanFinancier(onglet, inline) {
 
   const kpiHtml =
     '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px;">'
-    +'<div style="background:linear-gradient(135deg,#1e3a5f,#1a2e4a);border-radius:12px;padding:12px;text-align:center;">'
-      +'<div style="font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;letter-spacing:.1em;">Total achats</div>'
-      +'<div style="font-size:15px;font-weight:900;color:#fff;margin-top:3px;">'+fmt(totalA)+'</div>'
-      +'<div style="font-size:9px;color:#60a5fa;margin-top:2px;">Avances : '+fmt(totalAv)+'</div>'
+    +'<div class="kpi-card" style="border-left:3px solid #2563eb;text-align:left;">'
+      +'<div class="kpi-card-label">Total achats</div>'
+      +'<div class="kpi-card-value" style="font-size:16px;">'+fmt(totalA)+'</div>'
+      +'<div class="kpi-card-sub">Avances : '+fmt(totalAv)+'</div>'
     +'</div>'
-    +'<div style="background:linear-gradient(135deg,#14532d,#166534);border-radius:12px;padding:12px;text-align:center;">'
-      +'<div style="font-size:9px;font-weight:700;color:#86efac;text-transform:uppercase;letter-spacing:.1em;">Total ventes</div>'
-      +'<div style="font-size:15px;font-weight:900;color:#fff;margin-top:3px;">'+fmt(totalV)+'</div>'
-      +'<div style="font-size:9px;color:#4ade80;margin-top:2px;">Marge brute : '+fmt(margeB)+'</div>'
+    +'<div class="kpi-card" style="border-left:3px solid var(--green-600);text-align:left;">'
+      +'<div class="kpi-card-label">Total ventes</div>'
+      +'<div class="kpi-card-value" style="font-size:16px;">'+fmt(totalV)+'</div>'
+      +'<div class="kpi-card-sub">Marge brute : '+fmt(margeB)+'</div>'
     +'</div>'
-    +'<div style="background:'+(solde>=0?'linear-gradient(135deg,#14532d,#166534)':'linear-gradient(135deg,#7f1d1d,#991b1b)')+';border-radius:12px;padding:12px;text-align:center;">'
-      +'<div style="font-size:9px;font-weight:700;color:'+(solde>=0?'#86efac':'#fca5a5')+';text-transform:uppercase;letter-spacing:.1em;">Solde global</div>'
-      +'<div style="font-size:15px;font-weight:900;color:#fff;margin-top:3px;">'+(solde>=0?'+':'')+fmt(solde)+'</div>'
-      +'<div style="font-size:9px;color:rgba(255,255,255,.6);margin-top:2px;">Ventes − Achats</div>'
+    +'<div class="kpi-card" style="border-left:3px solid '+(solde>=0?'var(--green-600)':'#dc2626')+';text-align:left;">'
+      +'<div class="kpi-card-label">Solde global</div>'
+      +'<div class="kpi-card-value" style="font-size:16px;color:'+(solde>=0?'var(--green-700)':'#dc2626')+';">'+(solde>=0?'+':'')+fmt(solde)+'</div>'
+      +'<div class="kpi-card-sub">Ventes − Achats</div>'
     +'</div>'
-    +'<div style="background:'+(margeN>=0?'linear-gradient(135deg,#14532d,#166534)':'linear-gradient(135deg,#7f1d1d,#991b1b)')+';border-radius:12px;padding:12px;text-align:center;">'
-      +'<div style="font-size:9px;font-weight:700;color:'+(margeN>=0?'#86efac':'#fca5a5')+';text-transform:uppercase;letter-spacing:.1em;">Marge nette</div>'
-      +'<div style="font-size:15px;font-weight:900;color:#fff;margin-top:3px;">'+(margeN>=0?'+':'')+fmt(margeN)+'</div>'
-      +'<div style="font-size:9px;color:rgba(255,255,255,.6);margin-top:2px;">Dû fourn. : '+fmt(totalDus)+'</div>'
+    +'<div class="kpi-card" style="border-left:3px solid '+(margeN>=0?'var(--green-600)':'#dc2626')+';text-align:left;">'
+      +'<div class="kpi-card-label">Marge nette</div>'
+      +'<div class="kpi-card-value" style="font-size:16px;color:'+(margeN>=0?'var(--green-700)':'#dc2626')+';">'+(margeN>=0?'+':'')+fmt(margeN)+'</div>'
+      +'<div class="kpi-card-sub">Dû fourn. : '+fmt(totalDus)+'</div>'
     +'</div>'
     +'</div>';
 

@@ -2517,6 +2517,24 @@ function voirHistoriquePaiementsCommission(nom) {
  * à partir d'une vente ou d'un achat reçu, via jsPDF (chargé en CDN).
  * Le document porte le numéro séquentiel attribué (numero_document).
  */
+function pdfCleanText(value){
+  return String(value ?? "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[’‘]/g,"'").replace(/[“”]/g,'"')
+    .replace(/[–—]/g,"-")
+    .replace(/[✓✕⚠●○◐]/g,"")
+    .replace(/[\u{1F300}-\u{1FAFF}]/gu,"")
+    .replace(/[^\x20-\x7E]/g," ")
+    .replace(/\s+/g," ")
+    .trim();
+}
+function pdfMoney(value){
+  const n = Number(value)||0;
+  return n.toLocaleString("fr-FR").replace(/\u202f|\u00a0/g," ") + " F";
+}
+function pdfText(doc, value, x, y, options){
+  doc.text(pdfCleanText(value), x, y, options || {});
+}
 function genererDocumentPDF(type, item){
   if(typeof window.jspdf==="undefined"){ showToast("Génération PDF indisponible (hors-ligne)","error"); return; }
   const { jsPDF } = window.jspdf;
@@ -2530,24 +2548,24 @@ function genererDocumentPDF(type, item){
   doc.rect(0,0,210,28,"F");
   doc.setTextColor(255,255,255);
   doc.setFontSize(18); doc.setFont(undefined,"bold");
-  doc.text("VerdApp CI", 14, 17);
+  pdfText(doc,"VerdApp CI", 14, 17);
   doc.setFontSize(9); doc.setFont(undefined,"normal");
-  doc.text("Gestion Grossiste Légumes — Côte d'Ivoire", 14, 23);
+  pdfText(doc,"Gestion Grossiste Legumes - Cote d'Ivoire", 14, 23);
 
   doc.setTextColor(20,20,20);
   doc.setFontSize(14); doc.setFont(undefined,"bold");
-  doc.text(titre, 196, 17, {align:"right"});
+  pdfText(doc,titre, 196, 17, {align:"right"});
   doc.setFontSize(11); doc.setFont(undefined,"normal");
-  doc.text(numero, 196, 23, {align:"right"});
+  pdfText(doc,numero, 196, 23, {align:"right"});
 
   let y = 40;
   doc.setFontSize(10);
-  doc.text("Date : "+(item.date||""), 14, y);
+  pdfText(doc,"Date : "+(item.date||""), 14, y);
   if(isVente){
-    doc.text("Client : "+(item.client||"—"), 14, y+6);
+    pdfText(doc,"Client : "+(item.client||"-"), 14, y+6);
   } else {
-    doc.text("Fournisseur : "+(item.fournisseur||"—"), 14, y+6);
-    if(item.lieu) doc.text("Lieu : "+item.lieu, 14, y+12);
+    pdfText(doc,"Fournisseur : "+(item.fournisseur||"-"), 14, y+6);
+    if(item.lieu) pdfText(doc,"Lieu : "+item.lieu, 14, y+12);
   }
 
   y += isVente ? 16 : 22;
@@ -2559,17 +2577,17 @@ function genererDocumentPDF(type, item){
   doc.setFillColor(240,244,240);
   doc.rect(14,y,182,8,"F");
   doc.setFont(undefined,"bold"); doc.setFontSize(9);
-  doc.text("Produit",17,y+5.5);
-  doc.text("Quantité",110,y+5.5,{align:"right"});
-  doc.text("Prix unitaire",150,y+5.5,{align:"right"});
-  doc.text("Total",193,y+5.5,{align:"right"});
+  pdfText(doc,"Produit",17,y+5.5);
+  pdfText(doc,"Quantite",110,y+5.5,{align:"right"});
+  pdfText(doc,"Prix unitaire",150,y+5.5,{align:"right"});
+  pdfText(doc,"Total",193,y+5.5,{align:"right"});
 
   y+=8;
   doc.setFont(undefined,"normal");
-  doc.text((getProduitIcon(item.produit)||"")+" "+(item.produit||""),17,y+5.5);
-  doc.text(String(item.quantite||0)+" "+(item.unite||""),110,y+5.5,{align:"right"});
-  doc.text(fmt(prixUnit),150,y+5.5,{align:"right"});
-  doc.text(fmt(total),193,y+5.5,{align:"right"});
+  pdfText(doc,(item.produit||""),17,y+5.5);
+  pdfText(doc,String(item.quantite||0)+" "+(item.unite||""),110,y+5.5,{align:"right"});
+  pdfText(doc,pdfMoney(prixUnit),150,y+5.5,{align:"right"});
+  pdfText(doc,pdfMoney(total),193,y+5.5,{align:"right"});
 
   y+=12;
   doc.setDrawColor(220,220,220); doc.line(14,y,196,y);
@@ -2580,27 +2598,27 @@ function genererDocumentPDF(type, item){
     const frais = fraisAchat(item);
     if(frais>0){
       doc.setFontSize(9);
-      doc.text("Frais accessoires (transport, droit de terre, charrette) : "+fmt(frais), 14, y);
+      pdfText(doc,"Frais accessoires (transport, droit de terre, charrette) : "+pdfMoney(frais), 14, y);
       y+=6;
     }
     if(item.avance_paye>0){
-      doc.text("Avance versée : "+fmt(item.avance_paye), 14, y);
+      pdfText(doc,"Avance versee : "+pdfMoney(item.avance_paye), 14, y);
       y+=6;
     }
   }
 
   // Total
   doc.setFontSize(12); doc.setFont(undefined,"bold");
-  doc.text("TOTAL : "+fmt(total), 196, y+4, {align:"right"});
+  pdfText(doc,"TOTAL : "+pdfMoney(total), 196, y+4, {align:"right"});
 
   // Pied de page
   doc.setFontSize(8); doc.setFont(undefined,"normal"); doc.setTextColor(120,120,120);
-  doc.text("Document généré par VerdApp CI — "+new Date().toLocaleString("fr-CI"), 14, 285);
+  pdfText(doc,"Document genere par VerdApp CI - "+new Date().toLocaleString("fr-FR"), 14, 285);
   if(isVente){
-    doc.text("Numérotation séquentielle conforme aux exigences OHADA (Acte uniforme - droit commercial général).", 14, 290);
+    pdfText(doc,"Numerotation sequentielle conforme aux exigences OHADA (Acte uniforme - droit commercial general).", 14, 290);
   }
 
-  const filename = (numero!=="—"?numero:(isVente?"facture":"bon_reception")) + ".pdf";
+  const filename = pdfCleanText(numero!=="—"?numero:(isVente?"facture":"bon_reception")) + ".pdf";
   doc.save(filename);
 }
 
@@ -7823,6 +7841,7 @@ setInterval(()=>{
 </script>
 </body>
 </html>
+
 
 
 

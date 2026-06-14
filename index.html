@@ -4810,9 +4810,31 @@ function modalConstatePerte(lotId, produit, fournisseur, qteRestante, coutRevien
     +'</div>'
 
     // Note optionnelle
+    +'<div style="margin-bottom:12px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Motif *</label>'
+      +'<select id="cp_motif" style="width:100%;padding:11px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;background:#fff;">'
+        +'<option value="defectueux">🔴 Défectueux / avarié</option>'
+        +'<option value="invendu">📦 Invendu</option>'
+        +'<option value="perime">⏳ Périmé</option>'
+        +'<option value="casse">💥 Cassé / abîmé au transport</option>'
+        +'<option value="autre">Autre</option>'
+      +'</select>'
+    +'</div>'
+
+    // Décision
+    +'<div style="margin-bottom:12px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Décision</label>'
+      +'<select id="cp_decision" style="width:100%;padding:11px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;background:#fff;">'
+        +'<option value="detruire">🗑 Détruire (perte sèche)</option>'
+        +'<option value="garder">📥 Garder (à surveiller)</option>'
+        +'<option value="brader">🏷 Brader (vendre à perte)</option>'
+      +'</select>'
+    +'</div>'
+
+    // Note libre
     +'<div style="margin-bottom:16px;">'
-      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Motif (optionnel)</label>'
-      +'<input type="text" id="cp_note" placeholder="Ex : avarie, mévente, vol…" '
+      +'<label style="display:block;font-size:12px;font-weight:700;color:#0f1f16;margin-bottom:6px;">Note libre (optionnel)</label>'
+      +'<input type="text" id="cp_note" placeholder="Précisions sur l\'état, circonstances…" '
         +'style="width:100%;padding:10px;border:1.5px solid #e4ede7;border-radius:10px;font-family:inherit;font-size:13px;"/>'
     +'</div>'
 
@@ -4864,10 +4886,34 @@ async function enregistrerPerteLot(lotId, produit, fournisseur, qteRestante, cou
   if(!qte || qte<=0){ msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Saisissez une quantité."; return; }
   if(qte>qteRestante){ msg.style.cssText="display:block;color:#dc2626;"; msg.textContent="Quantité supérieure au stock disponible ("+qteRestante+" u.)"; return; }
 
+  // ── GARDE-FOU ANTI-DOUBLON ──
+  // Empêche de déclarer deux fois la même perte (même lot, même quantité) le
+  // même jour, cause des doublons constatés à l'audit. L'admin peut forcer si
+  // c'est une perte réellement distincte.
+  const dateJour = new Date().toISOString().slice(0,10);
+  const doublonPotentiel = pertesLots.find(p =>
+    p.lot_id===lotId && p.qte_perte===qte && (p.date||"").slice(0,10)===dateJour
+  );
+  if(doublonPotentiel && !window._forcePerteDoublon){
+    msg.style.cssText="display:block;color:#c2410c;";
+    msg.innerHTML = '⚠ Une perte de '+qte+' u. sur ce lot a déjà été déclarée aujourd\'hui.'
+      +'<br>S\'il s\'agit bien d\'une <b>nouvelle</b> perte distincte, cliquez à nouveau pour confirmer.';
+    window._forcePerteDoublon = true;
+    // Réinitialiser le drapeau après 8s pour éviter un forçage involontaire plus tard
+    setTimeout(()=>{ window._forcePerteDoublon = false; }, 8000);
+    return;
+  }
+  window._forcePerteDoublon = false;
+
   const mode = modeEl?.value || "achat";
   const coutUnitaire = mode==="revient" ? coutRevient : prixAchat;
   const valeurPerte = qte * coutUnitaire;
   const note = noteEl?.value.trim()||"";
+  const motif = document.getElementById("cp_motif")?.value || "defectueux";
+  const decision = document.getElementById("cp_decision")?.value || "detruire";
+  // Récupérer la date de réception du lot d'origine
+  const lotOrigine = achats.find(a=>a.id===lotId);
+  const dateReception = lotOrigine ? (lotOrigine.date_reception||lotOrigine.date||"") : "";
   const date = new Date().toISOString().slice(0,10);
 
   msg.style.cssText="display:block;color:#166534;"; msg.textContent="Enregistrement…";
@@ -4883,6 +4929,9 @@ async function enregistrerPerteLot(lotId, produit, fournisseur, qteRestante, cou
       cout_unitaire: coutUnitaire,
       valeur_perte: valeurPerte,
       mode_valorisation: mode,
+      motif,
+      decision,
+      date_reception: dateReception,
       note,
       date,
       constate_par: currentUser?.nom || "Admin"
@@ -4925,16 +4974,23 @@ function voirPertesLots() {
   const totalVal = all.reduce((s,p)=>s+p.valeur_perte,0);
   const totalQte = all.reduce((s,p)=>s+p.qte_perte,0);
 
+  const MOTIF_LABEL = {defectueux:"🔴 Défectueux",invendu:"📦 Invendu",perime:"⏳ Périmé",casse:"💥 Cassé",autre:"Autre"};
+  const DECISION_LABEL = {detruire:"🗑 Détruit",garder:"📥 Gardé",brader:"🏷 Bradé"};
+
   const lignes = all.map(p=>
     '<div style="background:#fff;border:1.5px solid #fecaca;border-radius:10px;padding:10px 12px;margin-bottom:6px;">'
-    +'<div style="display:flex;justify-content:space-between;align-items:center;">'
-      +'<div>'
+    +'<div style="display:flex;justify-content:space-between;align-items:flex-start;">'
+      +'<div style="flex:1;">'
         +'<div style="font-weight:700;color:#0f1f16;font-size:12px;">'+(getProduitIcon(p.produit)||"🌿")+' '+p.produit+' — '+p.fournisseur+'</div>'
-        +'<div style="font-size:10px;color:#6b8c7a;">'+p.date+' · Constaté par : '+p.constate_par+'</div>'
+        +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0;">'
+          +(p.motif?'<span style="font-size:9px;font-weight:700;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:999px;padding:2px 7px;">'+(MOTIF_LABEL[p.motif]||p.motif)+'</span>':'')
+          +(p.decision?'<span style="font-size:9px;font-weight:700;background:#f1f5f2;color:#3d5c48;border:1px solid #e4ede7;border-radius:999px;padding:2px 7px;">'+(DECISION_LABEL[p.decision]||p.decision)+'</span>':'')
+        +'</div>'
+        +'<div style="font-size:10px;color:#6b8c7a;">Perte le '+p.date+(p.date_reception?' · lot reçu le '+p.date_reception:'')+' · par '+p.constate_par+'</div>'
         +(p.note?'<div style="font-size:10px;color:#6b8c7a;font-style:italic;">'+p.note+'</div>':'')
         +(p.modifie_par?'<div style="font-size:9px;color:#c2410c;font-style:italic;">Modifié par '+p.modifie_par+' le '+p.modifie_le+'</div>':'')
       +'</div>'
-      +'<div style="text-align:right;flex-shrink:0;">'
+      +'<div style="text-align:right;flex-shrink:0;margin-left:8px;">'
         +'<div style="font-size:13px;font-weight:900;color:#dc2626;">−'+p.qte_perte+' u.</div>'
         +'<div style="font-size:11px;font-weight:700;color:#c2410c;">−'+fmt(p.valeur_perte)+' F</div>'
         +'<div style="font-size:9px;color:#6b8c7a;">Au '+( p.mode_valorisation==="revient"?"coût revient":"prix achat")+' : '+fmt(p.cout_unitaire)+'/u</div>'

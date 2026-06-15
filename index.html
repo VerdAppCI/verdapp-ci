@@ -994,10 +994,66 @@ function totalCommissionsDues(){
 }
 
 /**
- * Version filtrée : marge FIFO sur une période (jour/mois/année).
- * @param {Array} ventesF - ventes filtrées sur la période
- * @param {Array} achatsF - achats filtrés (pour les frais)
+ * RAPPROCHEMENT TRÉSORERIE ↔ RÉSULTAT
+ * Construit le pont entre le résultat d'exploitation (vision comptable) et la
+ * variation de trésorerie (vision caisse). Les deux ne sont JAMAIS censés être
+ * égaux : l'écart vient des charges sans sortie de caisse (pertes), des
+ * paiements qui diffèrent des charges comptées (commission payée ≠ due), du
+ * stock non vendu, et des flux hors exploitation (apports, revenus divers).
+ *
+ * Méthode robuste et auto-équilibrée : on calcule indépendamment le résultat
+ * d'exploitation et la variation de caisse hors apport, on isole les écarts
+ * explicables, et le reliquat tombe dans "autres décalages" pour que le pont
+ * boucle toujours exactement (pas de chiffre inventé).
  */
+function calculerRapprochement(){
+  // --- Côté RÉSULTAT (comptable) ---
+  const ca            = totalVentes();
+  const margeBrute    = margebrute(ventes);
+  const margeNetteCom = margenette(ventes);
+  const commissDues   = totalCommissionsDues();
+  const pertes        = totalPertesValeur();
+  const resultatExpl  = margeNetteCom - commissDues - pertes;
+
+  // --- Côté CAISSE (réel) ---
+  const mvts        = tousMouvementsCaisse();
+  const soldeTotal  = soldeCaisse(mvts);
+  // Apports de capital (entrées) : ce n'est pas un gain, on les isole
+  const apports     = mvts.filter(m=>m.sens==="entree" && m.categorie==="apport_associe")
+                          .reduce((s,m)=>s+(+m.montant||0),0);
+  const soldeHorsApport = soldeTotal - apports;
+
+  // --- Écarts explicables entre résultat et caisse ---
+  // 1) Commissions réellement payées en caisse (catégories salaire/commission)
+  const commissPayees = mvts.filter(m=>m.sens==="sortie"
+        && (m.categorie==="salaire" || m.categorie==="commission"))
+        .reduce((s,m)=>s+(+m.montant||0),0);
+  // Écart commission : payé - dû (positif = trop sorti de caisse vs charge comptée)
+  const ecartCommiss = commissPayees - commissDues;
+  // 2) Pertes : charge au résultat mais aucune sortie de caisse dédiée
+  //    (l'argent était déjà sorti à l'achat)
+  // 3) Revenus divers encaissés mais hors résultat d'exploitation
+  const revenusHorsExpl = mvts.filter(m=>m.sens==="entree"
+        && m.categorie!=="apport_associe" && m.categorie!=="vente_directe")
+        .reduce((s,m)=>s+(+m.montant||0),0);
+  // 4) Autres sorties manuelles hors exploitation (loyer, divers non commission)
+  const autresSorties = mvts.filter(m=>m.sens==="sortie"
+        && m.categorie!=="achat" && m.categorie!=="salaire" && m.categorie!=="commission")
+        .reduce((s,m)=>s+(+m.montant||0),0);
+
+  // --- Reliquat = décalage achats payés / CMV (stock non vendu + frais) ---
+  // On le déduit pour que le pont boucle exactement :
+  // soldeHorsApport = resultatExpl - ecartCommiss + pertes + revenusHorsExpl - autresSorties + reliquat
+  const reliquat = soldeHorsApport
+        - (resultatExpl - ecartCommiss + pertes + revenusHorsExpl - autresSorties);
+
+  return {
+    ca, margeBrute, margeNetteCom, commissDues, pertes, resultatExpl,
+    soldeTotal, apports, soldeHorsApport,
+    commissPayees, ecartCommiss, revenusHorsExpl, autresSorties, reliquat
+  };
+}
+
 function calculerMargeFIFO(ventesF, achatsF) {
   const ca     = ventesF.reduce((s,v)=>s+v.quantite*v.prix_vente, 0);
   const margeB = margebrute(ventesF);   // CA − coût marchandise pur
@@ -1659,6 +1715,7 @@ const FINANCE_SUBTABS = [
   {id:"budget",      label:"Budget",               icon:"◫"},
   {id:"commissions", label:"Commissions",          icon:"％"},
   {id:"journal",     label:"Journal comptable",    icon:"≣"},
+  {id:"rapprochement", label:"Rapprochement tréso", icon:"⇌"},
   {id:"pertes",      label:"Pertes",               icon:"▽"},
 ];
 
@@ -1753,6 +1810,7 @@ function renderFinanceContent(){
   else if(financeSubTab==="emprunts"){ el.innerHTML = '<div id="empruntsInline"></div>'; renderEmprunts(); }
   else if(financeSubTab==="commissions"){ el.innerHTML = '<div id="commissionsInline"></div>'; renderCommissionsInline(); }
   else if(financeSubTab==="journal"){ el.innerHTML = '<div id="journalInline"></div>'; renderJournalInline(); }
+  else if(financeSubTab==="rapprochement"){ el.innerHTML = renderRapprochementInline(); }
 }
 
 function appliquerRestrictionsRole(){
@@ -2521,7 +2579,7 @@ function pdfCleanText(value){
   return String(value ?? "")
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .replace(/[’‘]/g,"'").replace(/[“”]/g,'"')
-    .replace(/[–—]/g,"-")
+    .replace(/[–—−]/g,"-")
     .replace(/[✓✕⚠●○◐]/g,"")
     .replace(/[\u{1F300}-\u{1FAFF}]/gu,"")
     .replace(/[^\x20-\x7E]/g," ")
@@ -2535,6 +2593,35 @@ function pdfMoney(value){
 function pdfText(doc, value, x, y, options){
   doc.text(pdfCleanText(value), x, y, options || {});
 }
+/**
+ * Ajoute le logo VerdApp CI dans l'en-tête d'un PDF, récupéré depuis le DOM
+ * (image déjà chargée, évite de dupliquer le base64). Le logo source est un
+ * JPEG (signature /9j/) malgré le préfixe data:image/png — on force donc le
+ * format JPEG pour jsPDF. Retourne true si le logo a pu être ajouté.
+ * @param {jsPDF} doc
+ * @param {number} x position horizontale (mm)
+ * @param {number} y position verticale (mm)
+ * @param {number} h hauteur cible (mm) ; la largeur est calculée au prorata
+ */
+function pdfAjouterLogo(doc, x, y, h){
+  try {
+    const img = document.getElementById("topbarLogo");
+    const src = img && img.src ? img.src : "";
+    if(!src || src.indexOf("data:image")!==0) return false;
+    // Déduire le format réel depuis la signature base64 (le logo est un JPEG)
+    const b64 = src.split(",")[1] || "";
+    const fmtImg = b64.startsWith("/9j/") ? "JPEG" : "PNG";
+    // Ratio largeur/hauteur réel de l'image chargée
+    const ratio = (img.naturalWidth && img.naturalHeight)
+      ? img.naturalWidth / img.naturalHeight : 1;
+    const w = h * ratio;
+    doc.addImage(src, fmtImg, x, y, w, h);
+    return true;
+  } catch(e){
+    console.warn("Logo PDF non ajouté:", e.message);
+    return false;
+  }
+}
 function genererDocumentPDF(type, item){
   if(typeof window.jspdf==="undefined"){ showToast("Génération PDF indisponible (hors-ligne)","error"); return; }
   const { jsPDF } = window.jspdf;
@@ -2546,6 +2633,8 @@ function genererDocumentPDF(type, item){
   // En-tête
   doc.setFillColor(13,61,26); // vert VerdApp
   doc.rect(0,0,210,28,"F");
+  // Logo centré dans le bandeau (n'empiète ni sur le titre gauche ni à droite)
+  pdfAjouterLogo(doc, 95, 4, 20);
   doc.setTextColor(255,255,255);
   doc.setFontSize(18); doc.setFont(undefined,"bold");
   pdfText(doc,"VerdApp CI", 14, 17);
@@ -3366,15 +3455,17 @@ function genererRapportFinancierPDF(){
 
   // En-tête
   doc.setFillColor(13,61,26); doc.rect(0,0,W,26,"F");
+  // Logo (récupéré du DOM) à droite du bandeau
+  pdfAjouterLogo(doc, W-M-20, 4, 18);
   doc.setTextColor(255,255,255); doc.setFontSize(17); doc.setFont(undefined,"bold");
-  doc.text("VerdApp CI", M, 12);
+  pdfText(doc,"VerdApp CI", M, 12);
   doc.setFontSize(9); doc.setFont(undefined,"normal");
-  doc.text("Rapport financier", M, 19);
+  pdfText(doc,"Rapport financier", M, 19);
   const moisLabel = new Date().toLocaleDateString("fr-CI",{month:"long",year:"numeric"});
   doc.setFontSize(11); doc.setFont(undefined,"bold");
-  doc.text(moisLabel, W-M, 12, {align:"right"});
+  pdfText(doc,moisLabel, W-M-24, 12, {align:"right"});
   doc.setFontSize(8); doc.setFont(undefined,"normal");
-  doc.text("Édité le "+new Date().toLocaleDateString("fr-CI"), W-M, 19, {align:"right"});
+  pdfText(doc,"Edite le "+new Date().toLocaleDateString("fr-CI"), W-M-24, 19, {align:"right"});
 
   y=36;
   doc.setTextColor(20,20,20);
@@ -3383,13 +3474,13 @@ function genererRapportFinancierPDF(){
   function titreSection(t){
     doc.setFillColor(240,244,240); doc.rect(M,y-5,W-2*M,8,"F");
     doc.setFontSize(10); doc.setFont(undefined,"bold"); doc.setTextColor(13,61,26);
-    doc.text(t, M+2, y); y+=9; doc.setTextColor(20,20,20);
+    pdfText(doc,t, M+2, y); y+=9; doc.setTextColor(20,20,20);
   }
   function ligne(label, valeur, opts){
     opts=opts||{};
     doc.setFontSize(opts.gras?10:9); doc.setFont(undefined,opts.gras?"bold":"normal");
-    doc.text(label, M+2, y);
-    doc.text(valeur, W-M-2, y, {align:"right"});
+    pdfText(doc,label, M+2, y);
+    pdfText(doc,valeur, W-M-2, y, {align:"right"});
     y+=opts.gras?7:6;
   }
 
@@ -3420,12 +3511,12 @@ function genererRapportFinancierPDF(){
   if(resultatExpl>=0) diag.push("+ Activité bénéficiaire"); else diag.push("- Résultat d'exploitation négatif");
   if(totalDus>0) diag.push("- Dettes fournisseurs à régler : "+fmt(totalDus));
   doc.setFontSize(9); doc.setFont(undefined,"normal");
-  diag.forEach(d=>{ doc.text(d, M+2, y); y+=6; });
+  diag.forEach(d=>{ pdfText(doc,d, M+2, y); y+=6; });
 
   // Pied de page
   doc.setFontSize(7); doc.setTextColor(120,120,120);
-  doc.text("Document généré par VerdApp CI — conforme au cadre SYSCOHADA. Les charges fixes générales (loyer, salaires administratifs, amortissements,", M, 285);
-  doc.text("impôts) ne sont pas incluses dans le résultat d'exploitation ci-dessus et doivent être intégrées par le comptable pour le résultat net.", M, 289);
+  pdfText(doc,"Document genere par VerdApp CI - conforme au cadre SYSCOHADA. Les charges fixes generales (loyer, salaires administratifs, amortissements,", M, 285);
+  pdfText(doc,"impots) ne sont pas incluses dans le resultat d'exploitation ci-dessus et doivent etre integrees par le comptable pour le resultat net.", M, 289);
 
   doc.save("rapport_financier_verdapp_"+new Date().toISOString().slice(0,7)+".pdf");
 }
@@ -4975,6 +5066,22 @@ async function enregistrerPerteLot(lotId, produit, fournisseur, qteRestante, cou
   const valeurPerte = qte * coutUnitaire;
   const note = noteEl?.value.trim()||"";
   const date = new Date().toISOString().slice(0,10);
+
+  // Garde-fou anti-doublon : une perte identique (même lot, même quantité, même
+  // jour) existe déjà → on exige une 2e confirmation pour éviter les saisies en
+  // double (cause connue de surcomptage des pertes).
+  const doublon = pertesLots.some(p =>
+    p.lot_id===lotId && (p.qte_perte||0)===qte && p.date===date
+  );
+  if(doublon && !window._forcePerteDoublon){
+    window._forcePerteDoublon = true;
+    setTimeout(()=>{ window._forcePerteDoublon = false; }, 8000);
+    msg.style.cssText="display:block;color:#c2410c;";
+    msg.innerHTML="⚠ Une perte identique (même lot, "+qte+" u., aujourd'hui) existe déjà. "
+      +"Cliquez à nouveau sur Enregistrer pour confirmer le doublon volontaire.";
+    return;
+  }
+  window._forcePerteDoublon = false;
 
   msg.style.cssText="display:block;color:#166534;"; msg.textContent="Enregistrement…";
 
@@ -6945,6 +7052,87 @@ function bilanFinancier(onglet, inline) {
  * (selon bilanOnglet) sans onglets internes ni showModal, pour affichage
  * direct dans l'onglet Finance & Gestion.
  */
+/**
+ * Écran "Rapprochement trésorerie ↔ résultat" : matérialise le pont entre le
+ * résultat d'exploitation comptable et la variation de trésorerie réelle.
+ * Outil de pilotage : explique pourquoi l'argent en caisse diffère du bénéfice.
+ */
+function renderRapprochementInline(){
+  const r = calculerRapprochement();
+  const signe = n => (n>=0?"+":"−")+fmt(Math.abs(n));
+  const couleur = n => n>=0 ? "#166534" : "#dc2626";
+
+  // Ligne du pont : label + montant signé + explication
+  const ligne = (label, montant, explication, fort) => {
+    return '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;'
+      +'padding:11px 0;border-bottom:1px solid #eef2ef;">'
+      +'<div style="flex:1;">'
+        +'<div style="font-size:13px;font-weight:'+(fort?'800':'600')+';color:#0f1f16;">'+label+'</div>'
+        +(explication?'<div style="font-size:10.5px;color:#6b8c7a;margin-top:2px;line-height:1.4;">'+explication+'</div>':'')
+      +'</div>'
+      +'<div style="font-size:'+(fort?'15px':'13px')+';font-weight:'+(fort?'900':'700')+';color:'+couleur(montant)+';white-space:nowrap;">'+signe(montant)+'</div>'
+    +'</div>';
+  };
+  // Bandeau de total (vert foncé)
+  const bandeau = (label, montant, sub) => {
+    return '<div style="background:#0d3d1a;border-radius:12px;padding:14px 16px;margin:10px 0;">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;">'
+        +'<div style="font-size:13px;font-weight:700;color:rgba(255,255,255,.85);">'+label+'</div>'
+        +'<div style="font-size:18px;font-weight:900;color:#fff;">'+fmt(montant)+'</div>'
+      +'</div>'
+      +(sub?'<div style="font-size:10.5px;color:rgba(255,255,255,.6);margin-top:3px;">'+sub+'</div>':'')
+    +'</div>';
+  };
+
+  return '<div style="padding:4px 2px 20px;">'
+    // Intro
+    +'<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:12px 14px;margin-bottom:14px;">'
+      +'<div style="font-size:12px;font-weight:700;color:#1e40af;">⇌ Pourquoi le bénéfice ≠ l\'argent en caisse ?</div>'
+      +'<div style="font-size:11px;color:#1e3a5f;margin-top:4px;line-height:1.5;">'
+        +'Le <b>résultat</b> mesure la performance économique ; la <b>trésorerie</b> mesure l\'argent disponible. '
+        +'Ce tableau explique chaque écart entre les deux.</div>'
+    +'</div>'
+
+    // Point de départ : résultat d'exploitation
+    +bandeau("Résultat d\'exploitation", r.resultatExpl,
+        "Marge nette commerciale "+fmt(r.margeNetteCom)+" − commissions dues "+fmt(r.commissDues)+" − pertes "+fmt(r.pertes))
+
+    // Les ajustements
+    +'<div style="font-size:11px;font-weight:700;color:#0f1f16;text-transform:uppercase;letter-spacing:.06em;margin:14px 0 4px;">Ajustements vers la trésorerie</div>'
+    +'<div style="background:#fff;border:1px solid #e4ede7;border-radius:12px;padding:4px 14px;">'
+      +ligne("− Sur-paiement de commission", -r.ecartCommiss,
+          "Payé "+fmt(r.commissPayees)+" en caisse, mais seulement "+fmt(r.commissDues)+" comptés en charge. L\'excédent est une avance qui se régularisera.")
+      +ligne("+ Pertes (charge sans sortie de caisse)", r.pertes,
+          "Le résultat retire les pertes, mais aucun argent n\'est sorti : il l\'était déjà à l\'achat. On les rajoute côté caisse.")
+      +ligne("+ Revenus hors exploitation", r.revenusHorsExpl,
+          "Encaissés en caisse mais non comptés dans le résultat d\'exploitation (revenus divers, ajustements).")
+      +(r.autresSorties?ligne("− Autres sorties hors exploitation", -r.autresSorties,
+          "Loyers, frais divers payés en caisse, hors résultat d\'exploitation."):"")
+      +ligne("± Décalage achats / ventes", r.reliquat,
+          "Stock non encore vendu et frais accessoires : l\'argent est sorti à l\'achat, mais la charge ne frappe le résultat qu\'à la vente.")
+    +'</div>'
+
+    // Arrivée : trésorerie hors apport
+    +bandeau("Variation de trésorerie (hors apport)", r.soldeHorsApport,
+        "C\'est l\'argent que l\'activité a réellement généré, hors capital injecté.")
+
+    // Rappel apport + solde total
+    +'<div style="background:#f8faf8;border:1px solid #e4ede7;border-radius:12px;padding:4px 14px;margin-top:10px;">'
+      +ligne("+ Apport de capital", r.apports, "Argent injecté par l\'associé : ce n\'est pas un gain de l\'activité.")
+    +'</div>'
+    +bandeau("= Solde de caisse total", r.soldeTotal,
+        "Le montant réellement disponible en caisse aujourd\'hui.")
+
+    // Note de pilotage
+    +'<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:12px;padding:12px 14px;margin-top:14px;">'
+      +'<div style="font-size:11px;font-weight:700;color:#92400e;">💡 Lecture de gestion</div>'
+      +'<div style="font-size:11px;color:#78350f;margin-top:4px;line-height:1.5;">'
+        +'Ta <b>vraie rentabilité</b>, c\'est le résultat d\'exploitation ('+fmt(r.resultatExpl)+'), pas le gain de caisse. '
+        +'Si la caisse est plus basse que le résultat, c\'est souvent normal : argent immobilisé en stock, ou avances versées qui reviendront.</div>'
+    +'</div>'
+  +'</div>';
+}
+
 function renderBilanInline(){
   return bilanFinancier(bilanOnglet, true);
 }

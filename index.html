@@ -2714,32 +2714,62 @@ function pdfAjouterLogo(doc, x, y, h){
     if(!src || src.indexOf("data:image")!==0) return false;
     if(!img.naturalWidth || !img.naturalHeight) return false;
 
-    // Le logo source est un JPEG à FOND NOIR (rendu transparent à l'écran via
-    // mix-blend-mode:screen, qui n'existe pas en PDF). On reproduit l'effet
-    // "screen" sur un canvas : les pixels proches du noir deviennent
-    // transparents, pour que le logo s'intègre sur le bandeau vert du PDF.
-    const ratio = img.naturalWidth / img.naturalHeight;
-    const cw = 400, ch = Math.round(cw / ratio);
+    // L'image source (JPEG vertical à fond noir) contient beaucoup de noir
+    // autour du logo réel. On la dessine sur un canvas, on détecte la zone
+    // non-noire (bounding box du logo), on recadre dessus, puis on pose ce
+    // recadrage dans un CARTOUCHE BLANC pour qu'il ressorte sur le bandeau vert.
+    const NW = img.naturalWidth, NH = img.naturalHeight;
     const cv = document.createElement("canvas");
-    cv.width = cw; cv.height = ch;
+    cv.width = NW; cv.height = NH;
     const ctx = cv.getContext("2d");
-    ctx.drawImage(img, 0, 0, cw, ch);
-    const data = ctx.getImageData(0, 0, cw, ch);
-    const px = data.data;
-    for(let i=0; i<px.length; i+=4){
-      const r=px[i], g=px[i+1], b=px[i+2];
-      // Luminance : un pixel sombre (fond noir) → transparent ;
-      // un pixel clair (logo) → opaque, proportionnellement.
-      const lum = 0.299*r + 0.587*g + 0.114*b;
-      if(lum < 28){ px[i+3] = 0; }            // fond noir → transparent
-      else if(lum < 90){ px[i+3] = Math.round((lum-28)/62*255); } // bord doux
-      // sinon : on garde l'opacité d'origine
+    ctx.drawImage(img, 0, 0, NW, NH);
+    const px = ctx.getImageData(0, 0, NW, NH).data;
+    // Détecter la bounding box des pixels non-noirs (luminance > 30)
+    let xmin=NW, xmax=0, ymin=NH, ymax=0, found=false;
+    for(let py=0; py<NH; py++){
+      for(let pxn=0; pxn<NW; pxn++){
+        const o=(py*NW+pxn)*4;
+        const lum=0.299*px[o]+0.587*px[o+1]+0.114*px[o+2];
+        if(lum>30){
+          found=true;
+          if(pxn<xmin)xmin=pxn; if(pxn>xmax)xmax=pxn;
+          if(py<ymin)ymin=py; if(py>ymax)ymax=py;
+        }
+      }
     }
-    ctx.putImageData(data, 0, 0);
-    const pngTransparent = cv.toDataURL("image/png");
+    if(!found){ xmin=0; ymin=0; xmax=NW-1; ymax=NH-1; }
+    // Marge autour du contenu (5% de la dimension détectée)
+    const mx=Math.round((xmax-xmin)*0.05), my=Math.round((ymax-ymin)*0.05);
+    xmin=Math.max(0,xmin-mx); ymin=Math.max(0,ymin-my);
+    xmax=Math.min(NW-1,xmax+mx); ymax=Math.min(NH-1,ymax+my);
+    const cropW=xmax-xmin+1, cropH=ymax-ymin+1;
 
-    const w = h * ratio;
-    doc.addImage(pngTransparent, "PNG", x, y, w, h);
+    // Canvas recadré, sur fond blanc (le logo a un fond noir → on le pose sur blanc)
+    const crop=document.createElement("canvas");
+    crop.width=cropW; crop.height=cropH;
+    const cctx=crop.getContext("2d");
+    cctx.fillStyle="#ffffff"; cctx.fillRect(0,0,cropW,cropH);
+    // Recopier la zone recadrée, en blanchissant le fond noir résiduel
+    cctx.drawImage(cv, xmin,ymin,cropW,cropH, 0,0,cropW,cropH);
+    const cd=cctx.getImageData(0,0,cropW,cropH);
+    const cp=cd.data;
+    for(let i=0;i<cp.length;i+=4){
+      const lum=0.299*cp[i]+0.587*cp[i+1]+0.114*cp[i+2];
+      if(lum<28){ cp[i]=255; cp[i+1]=255; cp[i+2]=255; } // fond noir → blanc
+    }
+    cctx.putImageData(cd,0,0);
+    const logoPng=crop.toDataURL("image/png");
+
+    // Cartouche blanc arrondi + logo recadré à l'intérieur
+    const ratio=cropW/cropH;
+    const pad=1.5;                 // marge intérieure du cartouche (mm)
+    const logoH=h;                 // hauteur cible du logo
+    const logoW=logoH*ratio;
+    const boxW=logoW+pad*2, boxH=logoH+pad*2;
+    doc.setFillColor(255,255,255);
+    if(doc.roundedRect) doc.roundedRect(x, y, boxW, boxH, 1.5, 1.5, "F");
+    else doc.rect(x, y, boxW, boxH, "F");
+    doc.addImage(logoPng, "PNG", x+pad, y+pad, logoW, logoH);
     return true;
   } catch(e){
     console.warn("Logo PDF non ajouté:", e.message);

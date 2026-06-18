@@ -1235,7 +1235,7 @@ async function syncAll(silent=false){
   const btn = getEl("syncBtn");
   if(!silent && btn){ btn.innerHTML='<span class="spinner"></span>'; btn.disabled=true; }
   try{
-    const [a,v,d,p,cp,jc,bm,mc,inv,emp,empr]=await Promise.all([
+    const [a,v,d,p,cp,jc,bm,mc,inv,emp,empr,usr]=await Promise.all([
       sbGet("achats"),sbGet("ventes"),sbGet("demandes"),
       sbFetch(`/rest/v1/produits?order=nom.asc`).then(r=>r.json()),
       sbFetch(`/rest/v1/commissions_paiements?order=created_at.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
@@ -1244,12 +1244,16 @@ async function syncAll(silent=false){
       sbFetch(`/rest/v1/mouvements_caisse?order=date.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
       sbFetch(`/rest/v1/investissements?order=date_acquisition.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
       sbFetch(`/rest/v1/emprunts?order=date_debut.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
-      sbFetch(`/rest/v1/emprunts_remboursements?order=date.desc`).then(r=>r.ok?r.json():[]).catch(()=>[])
+      sbFetch(`/rest/v1/emprunts_remboursements?order=date.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
+      // Rôles utilisateurs : nécessaires pour exclure les admins du calcul de
+      // commission. On rafraîchit à chaque sync (pas seulement au login).
+      fetch(SB_URL + "/rest/v1/utilisateurs_public?order=nom.asc", {headers:{"apikey":SB_KEY,"Authorization":"Bearer "+SB_KEY}}).then(r=>r.ok?r.json():[]).catch(()=>[])
     ]);
     achats=a||[]; localStorage.setItem("va_achats",JSON.stringify(achats));
     ventes=v||[]; localStorage.setItem("va_ventes",JSON.stringify(ventes));
     demandes=d||[]; localStorage.setItem("va_demandes",JSON.stringify(demandes));
     if(p&&p.length){produits=p; localStorage.setItem("va_produits",JSON.stringify(p));}
+    if(usr&&usr.length){ usersCache=usr; }
     commissionsPaiements=cp||[]; localStorage.setItem("va_commissions_paiements",JSON.stringify(commissionsPaiements));
     if(jc&&jc.length){journalComptable=jc; saveJournalComptable();}
     budgetsMensuels=bm||[]; saveBudgetsMensuels();
@@ -2125,7 +2129,21 @@ function voirCommission() {
 // que les deux affichent EXACTEMENT le même montant et la même logique.
 // Retourne : { semaines:[{cle,dateRef,ventesCount,lots:[{...,qteVendue,mn,comm,datesVente[]}],
 //              commission,margeNette}], totalCommission, totalMargeNette, nbLots }
+/**
+ * Détermine si un nom correspond à un utilisateur de rôle admin ou super_admin.
+ * S'appuie sur usersCache (liste chargée au login, avec id/nom/role).
+ * Utilisé pour exclure les administrateurs du calcul de commission : un admin
+ * ne touche pas de commission de 10%.
+ */
+function estAdminParNom(nom){
+  if(typeof usersCache==="undefined" || !usersCache || !usersCache.length) return false;
+  const u = usersCache.find(x => sameName(x.nom, nom));
+  return !!u && (u.role === "admin" || u.role === "super_admin");
+}
+
 function calculerCommissionParSemaine(nom){
+  // Les administrateurs ne touchent pas de commission : on renvoie 0 d'emblée.
+  if(estAdminParNom(nom)) return {semaines:[], totalCommission:0, totalMargeNette:0, nbLots:0};
   const lotsUser = achats.filter(a => a.statut==="recu" && sameName(a.enregistre_par, nom));
   if(!lotsUser.length) return {semaines:[], totalCommission:0, totalMargeNette:0, nbLots:0};
 

@@ -1792,7 +1792,7 @@ let financeSubTab = "sig";
 
 const COMMERCIAL_SUBTABS = [
   {id:"achats",   label:"Achats",    icon:"⬡", role:"all"},
-  {id:"colis",    label:"Suivi colis",icon:"🚚", role:"all"},
+  {id:"colis",    label:"Suivi colis",icon:"🚚", role:"all", isNew:true},
   {id:"ventes",   label:"Ventes",    icon:"$", role:"admin"},
   {id:"stock",    label:"Stock",     icon:"◈", role:"admin"},
   {id:"demandes", label:"Demandes",  icon:"📋", role:"admin", badge:"demandes"},
@@ -1811,9 +1811,9 @@ const FINANCE_SUBTABS = [
   {id:"commissions", label:"Commissions",          icon:"％"},
   {id:"journal",     label:"Journal comptable",    icon:"≣"},
   {id:"pertes",      label:"Pertes",               icon:"▽"},
-  {id:"direction",   label:"Direction",             icon:"👑"},
-  {id:"agents",      label:"Agents terrain",        icon:"👤"},
-  {id:"previsions",  label:"Prévisions",            icon:"📈"},
+  {id:"direction",   label:"Direction",   icon:"👑", isNew:true},
+  {id:"agents",      label:"Agents",      icon:"👤", isNew:true},
+  {id:"previsions",  label:"Prévisions",  icon:"📈", isNew:true},
 ];
 
 function renderCommercialSubnav(){
@@ -1822,7 +1822,7 @@ function renderCommercialSubnav(){
   document.getElementById("commercialSubnav").innerHTML = tabs.map(t=>
     '<button onclick="switchCommercialSub(\''+t.id+'\')" style="flex:1;min-width:80px;padding:8px 6px;border:none;border-radius:9px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700;white-space:nowrap;position:relative;'
     +(commercialSubTab===t.id?'background:var(--green-800);color:#fff;box-shadow:0 2px 8px rgba(13,61,26,.3);':'background:none;color:var(--green-mid);')+'">'
-    +t.icon+' '+t.label
+    +t.icon+' '+t.label+(t.isNew?'<span style="background:var(--orange);color:#fff;font-size:8px;border-radius:999px;padding:1px 5px;margin-left:2px;vertical-align:middle;font-weight:800;">NEW</span>':'')
     +(t.badge==="demandes"?'<span id="demandesDotSub" class="notif-dot" style="display:none;position:absolute;top:4px;right:6px;"></span>':'')
     +'</button>'
   ).join('');
@@ -1853,14 +1853,18 @@ function renderFinanceSubnav(){
     {label:"Capital",    ids:["investissements","emprunts"]},
     {label:"Compta",     ids:["journal","pertes","agents"]}
   ];
-  const pill = (t, actif) =>
-    '<button onclick="switchFinanceSub(\''+t.id+'\')" style="'
-    +'flex-shrink:0;white-space:nowrap;padding:6px 12px;border:none;border-radius:var(--r-pill);'
-    +'cursor:pointer;font-family:inherit;font-size:11.5px;font-weight:700;transition:all .15s;'
-    +(actif
-      ? 'background:var(--green-800);color:#fff;'
-      : 'background:var(--white);color:var(--gray-500);border:1px solid var(--gray-200);')
-    +'">'+t.icon+' '+t.label+'</button>';
+  const pill = (t, actif) => {
+    const badge = (t.isNew && !actif)
+      ? '<span style="background:var(--orange);color:#fff;font-size:8px;border-radius:999px;padding:1px 5px;margin-left:2px;vertical-align:middle;font-weight:800;">NEW</span>'
+      : '';
+    return '<button onclick="switchFinanceSub(\''+t.id+'\')" style="'
+      +'flex-shrink:0;white-space:nowrap;padding:6px 12px;border:none;border-radius:var(--r-pill);'
+      +'cursor:pointer;font-family:inherit;font-size:11.5px;font-weight:700;transition:all .15s;'
+      +(actif
+        ? 'background:var(--green-800);color:#fff;'
+        : 'background:var(--white);color:var(--gray-500);border:1px solid var(--gray-200);')
+      +'">'+t.icon+' '+t.label+badge+'</button>';
+  };
 
   let html = '<div style="display:flex;flex-direction:column;gap:7px;">';
   grp.forEach(g=>{
@@ -8289,7 +8293,8 @@ async function renderDashboardDirection(){
   const tousFlux = tousMouvementsCaisse();
   const ca = totalVentes(), mb = margebrute(), mn = margenette();
   const treso = soldeCaisse(tousFlux);
-  const pertes = (pertesLots||[]).reduce((s,p)=>s+(p.valeur_perte||0),0);
+  const pertesArr = typeof pertesLots !== "undefined" ? pertesLots : (typeof pertes_lots !== "undefined" ? pertes_lots : []);
+  const pertesVal = (pertesArr||[]).reduce((s,p)=>s+(p.valeur_perte||0),0);
   const nbTransit = achats.filter(a=>a.statut_livraison==="en_transit").length;
   const nbArrive  = achats.filter(a=>a.statut_livraison==="arrive").length;
   const taux_mb = ca ? Math.round(mb/ca*100) : 0;
@@ -8338,8 +8343,8 @@ async function renderDashboardDirection(){
       </div>
     </div>
 
-    ${pertes>0?`<div style="background:var(--red-50);border:1px solid var(--red-200);border-radius:var(--r);padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--red);font-weight:700;">
-      ⚠️ Pertes valorisées : ${fmt(pertes)} F — à réduire en priorité
+    ${pertesVal>0?`<div style="background:var(--red-50);border:1px solid var(--red-200);border-radius:var(--r);padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--red);font-weight:700;">
+      ⚠️ Pertes valorisées : ${fmt(pertesVal)} F — à réduire en priorité
     </div>`:""}
 
     <!-- Top clients -->
@@ -8418,8 +8423,15 @@ async function sauvegarderConfigAlertes(){
   const dir   = document.getElementById("cfg_wa_dir")?.value?.trim();
   const alert = document.getElementById("cfg_wa_alert")?.value?.trim();
   try {
-    if(dir)   await sbUpdate("config", null, {valeur:dir},   {match:{cle:"whatsapp_direction"}});
-    if(alert) await sbUpdate("config", null, {valeur:alert}, {match:{cle:"whatsapp_alerte"}});
+    // Utiliser PATCH directement avec filtre sur la clé
+    if(dir){
+      await sbFetch(`/rest/v1/config?cle=eq.whatsapp_direction`,
+        {method:"PATCH", body:JSON.stringify({valeur:dir})});
+    }
+    if(alert){
+      await sbFetch(`/rest/v1/config?cle=eq.whatsapp_alerte`,
+        {method:"PATCH", body:JSON.stringify({valeur:alert})});
+    }
     showToast("✅ Configuration sauvegardée");
   } catch(e) { showToast("Erreur : "+e.message,"error"); }
 }
@@ -8695,7 +8707,8 @@ async function sauvegarderWaveKey(){
   const key = document.getElementById("wave_api_key")?.value?.trim();
   if(!key) return showToast("Entrez la clé API Wave","error");
   try {
-    await sbUpdate("config", null, {valeur:key}, {match:{cle:"wave_api_key"}});
+    await sbFetch(`/rest/v1/config?cle=eq.wave_api_key`,
+      {method:"PATCH", body:JSON.stringify({valeur:key})});
     showToast("✅ Clé Wave sauvegardée — intégration activée");
   } catch(e){ showToast("Erreur : "+e.message,"error"); }
 }

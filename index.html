@@ -7846,9 +7846,13 @@ function syncLogos() {
 function afficherApp() {
   document.getElementById("loginScreen").style.display = "none";
   document.getElementById("main").style.display = "";
-  document.getElementById("sidebar") && (document.getElementById("sidebar").style.display = "");
-  document.getElementById("bottomnav") && (document.getElementById("bottomnav").style.display = "");
   document.getElementById("topbar") && (document.getElementById("topbar").style.display = "");
+  // Respecter le responsive : sidebar desktop (≥768px) uniquement, bottomnav mobile uniquement
+  const isDesktop = window.innerWidth >= 768;
+  const sidebar   = document.getElementById("sidebar");
+  const bottomnav = document.getElementById("bottomnav");
+  if(sidebar)   sidebar.style.display   = isDesktop ? "block" : "none";
+  if(bottomnav) bottomnav.style.display = isDesktop ? "none"  : "flex";
 
   const label = getEl("modeLabel");
   const logoutBtn = getEl("logoutBtn");

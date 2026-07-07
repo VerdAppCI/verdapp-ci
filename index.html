@@ -429,6 +429,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
     <div class="section-title" style="margin-bottom:10px;">🛒 Commercial</div>
     <div id="commercialSubnav" style="display:flex;gap:var(--sp-2);margin-bottom:14px;background:var(--green-pale2);border-radius:var(--r);padding:4px;overflow-x:auto;"></div>
     <div id="page-achats" style="display:none;"></div>
+  <div id="page-colis" style="display:none;"></div>
     <div id="page-ventes" style="display:none;"></div>
     <div id="page-stock" style="display:none;"></div>
     <div id="page-demandes" style="display:none;"></div>
@@ -1443,6 +1444,17 @@ function buildAchatForm(data, onSubmit, submitLabel){
         <div><label class="label" for="af_charrette">Charrette (F)</label><input type="number" id="af_charrette" min="0" step="1" value="${data.charrette||''}" placeholder="0" inputmode="numeric"/></div>
       </div>
     </div>
+    <div class="form-block">
+      <div class="form-block-title">4. 🚚 Transport & Traçabilité</div>
+      <div class="form-grid">
+        <div><label class="label" for="af_origine">Ville d'origine</label><input type="text" id="af_origine" value="${data.lieu_origine||''}" placeholder="Bouaké, Korhogo, Man…"/></div>
+        <div><label class="label" for="af_transporteur">Transporteur</label><input type="text" id="af_transporteur" value="${data.transporteur||''}" placeholder="Koné Moussa"/></div>
+        <div><label class="label" for="af_vehicule">Véhicule / Plaque</label><input type="text" id="af_vehicule" value="${data.vehicule||''}" placeholder="CI-2345-AB"/></div>
+        <div><label class="label" for="af_depart">Départ champ</label><input type="datetime-local" id="af_depart" value="${data.date_depart?data.date_depart.slice(0,16):''}" /></div>
+        <div><label class="label" for="af_eta">Arrivée prévue (Adjamé)</label><input type="date" id="af_eta" value="${data.date_arrivee_prevue||''}" /></div>
+        <div><label class="label" for="af_transit_notes">Observations transit</label><input type="text" id="af_transit_notes" value="${data.notes_transit||''}" placeholder="Chargé à 6h, route dégradée…"/></div>
+      </div>
+    </div>
     <div id="af_calc" class="form-summary" style="display:none;grid-template-columns:1fr 1fr;gap:var(--sp-2);text-align:center;">
       <div><div class="label">Total achat</div><div id="af_calcTotal" style="font-weight:900;color:var(--green-700);font-size:16px;margin-top:4px;"></div></div>
       <div><div class="label">Solde dû</div><div id="af_calcSolde" style="font-weight:900;font-size:16px;margin-top:4px;"></div></div>
@@ -1679,7 +1691,15 @@ async function saveAchatModal(){
     droit_vente:+document.getElementById("af_droit_vente").value||0,
     charrette:+document.getElementById("af_charrette").value||0,
     statut:"en_cours",
-    enregistre_par: currentUser?.nom || chatAuteur || ""
+    enregistre_par: currentUser?.nom || chatAuteur || "",
+    // Traçabilité transport
+    lieu_origine:     document.getElementById("af_origine")?.value||null,
+    transporteur:     document.getElementById("af_transporteur")?.value||null,
+    vehicule:         document.getElementById("af_vehicule")?.value||null,
+    date_depart:      document.getElementById("af_depart")?.value||null,
+    date_arrivee_prevue: document.getElementById("af_eta")?.value||null,
+    notes_transit:    document.getElementById("af_transit_notes")?.value||null,
+    statut_livraison: "en_transit"
   };
   try{
     await sbInsert("achats",payload);
@@ -1726,7 +1746,11 @@ async function marquerRecu(id){
   if(!currentUser){ showToast("Connectez-vous d'abord","error"); return; }
   logAdminAction("MARQUER_RECU", "Achat ID:"+id+" par "+currentUser.nom);
   const a = achats.find(x=>x.id===id);
-  const updatePayload = {statut:"recu"};
+  const updatePayload = {
+    statut:"recu",
+    statut_livraison:"arrive",
+    date_arrivee_reelle: new Date().toISOString()
+  };
   // Numérotation séquentielle du bon de réception (BR-AAAA-NNNN)
   const numeroBR = await obtenirNumeroDocument("BR", a?.date_reception || a?.date || new Date().toISOString().slice(0,10));
   if(numeroBR) updatePayload.numero_document = numeroBR;
@@ -1768,6 +1792,7 @@ let financeSubTab = "sig";
 
 const COMMERCIAL_SUBTABS = [
   {id:"achats",   label:"Achats",    icon:"⬡", role:"all"},
+  {id:"colis",    label:"Suivi colis",icon:"🚚", role:"all"},
   {id:"ventes",   label:"Ventes",    icon:"$", role:"admin"},
   {id:"stock",    label:"Stock",     icon:"◈", role:"admin"},
   {id:"demandes", label:"Demandes",  icon:"📋", role:"admin", badge:"demandes"},
@@ -1803,11 +1828,12 @@ function renderCommercialSubnav(){
 function switchCommercialSub(sub){
   commercialSubTab = sub;
   renderCommercialSubnav();
-  ["achats","ventes","stock","demandes","catalogue"].forEach(t=>{
+  ["achats","colis","ventes","stock","demandes","catalogue"].forEach(t=>{
     const page=document.getElementById("page-"+t);
     if(page) page.style.display = t===sub ? "block":"none";
   });
   if(sub==="achats") renderAchats();
+  else if(sub==="colis") renderSuiviColis();
   else if(sub==="ventes") renderVentes();
   else if(sub==="stock") renderStock();
   else if(sub==="demandes") renderDemandes();
@@ -1928,6 +1954,7 @@ function render(){
   if(currentTab==="dashboard") renderDashboard();
   else if(currentTab==="commercial"){
     if(commercialSubTab==="achats") renderAchats();
+    else if(commercialSubTab==="colis") renderSuiviColis();
     else if(commercialSubTab==="ventes") renderVentes();
     else if(commercialSubTab==="stock") renderStock();
     else if(commercialSubTab==="demandes") renderDemandes();
@@ -8001,6 +8028,224 @@ setInterval(()=>{
 
 // ════════════════════════════════════════════════════════════════
 // PÔLE FINANCIER — COCKPIT IA (injecté automatiquement)
+// ════════════════════════════════════════════════════════════════
+
+
+// ════════════════════════════════════════════════════════════════
+// SUIVI DES COLIS — Champ → Transit → Adjamé → Vendu
+// ════════════════════════════════════════════════════════════════
+
+const LIVRAISON_STEPS = [
+  {id:"en_transit", label:"En transit", icon:"🚚", color:"var(--orange)"},
+  {id:"arrive",     label:"Arrivé",     icon:"📦", color:"var(--green-700)"},
+  {id:"vendu",      label:"Vendu",      icon:"✓",  color:"var(--green-800)"},
+];
+
+function renderSuiviColis(){
+  const el = document.getElementById("page-colis");
+  if(!el) return;
+
+  const maintenant = new Date();
+  const fmt = v => Math.round(Number(v)||0).toLocaleString("fr-FR");
+  const fmtDate = s => s ? new Date(s).toLocaleDateString("fr-FR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}) : "—";
+
+  // Compter par statut
+  const nbTransit = achats.filter(a=>a.statut_livraison==="en_transit").length;
+  const nbArrive  = achats.filter(a=>a.statut_livraison==="arrive").length;
+  const nbVendu   = achats.filter(a=>a.statut_livraison==="vendu").length;
+
+  // Colis en retard : ETA dépassée et pas encore arrivé
+  const retards = achats.filter(a =>
+    a.statut_livraison==="en_transit" &&
+    a.date_arrivee_prevue &&
+    new Date(a.date_arrivee_prevue) < maintenant
+  );
+
+  let html = `
+    <!-- RÉSUMÉ KPI -->
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--sp-2);margin-bottom:12px;">
+      <div class="kpi-light accent-orange" style="text-align:center;">
+        <div class="kl-label">En transit</div>
+        <div class="kl-value" style="font-size:24px;">${nbTransit}</div>
+        <div class="kl-sub">colis sur route</div>
+      </div>
+      <div class="kpi-light accent-green" style="text-align:center;">
+        <div class="kl-label">Arrivés</div>
+        <div class="kl-value" style="font-size:24px;">${nbArrive}</div>
+        <div class="kl-sub">à Adjamé</div>
+      </div>
+      <div class="kpi-light" style="text-align:center;">
+        <div class="kl-label">Vendus</div>
+        <div class="kl-value" style="font-size:24px;">${nbVendu}</div>
+        <div class="kl-sub">liquidés</div>
+      </div>
+    </div>`;
+
+  // Alerte retards
+  if(retards.length > 0){
+    html += `<div style="background:#fff3ea;border:1px solid var(--orange-100);border-radius:var(--r);padding:10px 14px;margin-bottom:12px;">
+      <div style="font-weight:700;color:var(--orange-dark);font-size:13px;">⚠️ ${retards.length} colis en retard</div>
+      ${retards.map(a=>`<div style="font-size:11px;color:var(--gray-420);margin-top:3px;">
+        ${a.produit||"Produit"} — ${a.transporteur||"Transporteur inconnu"} — ETA : ${a.date_arrivee_prevue}
+      </div>`).join("")}
+    </div>`;
+  }
+
+  // Bouton nouveau colis
+  if(isAdminLevel()){
+    html += `<button class="btn btn-green" style="margin-bottom:14px;" onclick="switchCommercialSub('achats');setTimeout(showAchatForm,100)">
+      + Nouveau colis / lot terrain
+    </button>`;
+  }
+
+  // Filtres
+  html += `<div style="display:flex;gap:var(--sp-2);margin-bottom:12px;flex-wrap:wrap;">
+    ${["tous","en_transit","arrive","vendu"].map(f=>
+      `<button id="cf_${f}" class="filter-btn" onclick="filtreColisChanged('${f}')">${
+        f==="tous"?"Tous":f==="en_transit"?"🚚 En transit":f==="arrive"?"📦 Arrivés":"✓ Vendus"
+      }</button>`
+    ).join("")}
+  </div>
+  <div id="colis-list"></div>`;
+
+  el.innerHTML = html;
+  filtreColisChanged("tous");
+}
+
+let filtreColisActif = "tous";
+function filtreColisChanged(f){
+  filtreColisActif = f;
+  ["tous","en_transit","arrive","vendu"].forEach(v=>{
+    const btn=document.getElementById("cf_"+v);
+    if(btn) btn.className="filter-btn "+(v===f?"f-active":"f-inactive");
+  });
+  renderListeColis(f);
+}
+
+function renderListeColis(filtre){
+  const el = document.getElementById("colis-list");
+  if(!el) return;
+  const fmt = v => Math.round(Number(v)||0).toLocaleString("fr-FR");
+  const fmtDt = s => s ? new Date(s).toLocaleDateString("fr-FR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}) : null;
+
+  let lots = [...achats].sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  if(filtre !== "tous") lots = lots.filter(a=>a.statut_livraison===filtre);
+
+  if(!lots.length){
+    el.innerHTML=`<div style="text-align:center;padding:40px 0;color:var(--gray-420);">Aucun colis dans cette catégorie</div>`;
+    return;
+  }
+
+  el.innerHTML = lots.map(a=>{
+    const sl = a.statut_livraison || (a.statut==="recu"?"arrive":"en_transit");
+    const isTransit = sl==="en_transit";
+    const isArrive  = sl==="arrive";
+    const isVendu   = sl==="vendu";
+    const estRetard = isTransit && a.date_arrivee_prevue && new Date(a.date_arrivee_prevue) < new Date();
+
+    const stepColor = isVendu?"var(--green-800)":isArrive?"var(--green-700)":"var(--orange)";
+    const stepIcon  = isVendu?"✓":isArrive?"📦":"🚚";
+    const stepLabel = isVendu?"Vendu":isArrive?"Arrivé à Adjamé":"En transit";
+
+    // Barre de progression
+    const stepIdx = isVendu?2:isArrive?1:0;
+    const pct = [33,66,100][stepIdx];
+
+    const perte = a.quantite_arrivee ? (a.quantite - a.quantite_arrivee) : null;
+
+    return `<div class="card" style="margin-bottom:10px;">
+      <!-- Entête colis -->
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;">
+        <div>
+          <div style="font-weight:800;font-size:14px;color:var(--text);">${a.produit||"—"} — ${fmt(a.quantite)} ${a.unite||""}</div>
+          <div style="font-size:11px;color:var(--gray-420);margin-top:2px;">
+            ${a.fournisseur||"Fournisseur inconnu"} · ${a.date||""}
+          </div>
+        </div>
+        <span style="background:${stepColor};color:#fff;border-radius:var(--r-pill);padding:3px 10px;font-size:11px;font-weight:700;flex-shrink:0;">${stepIcon} ${stepLabel}</span>
+      </div>
+
+      <!-- Barre de progression -->
+      <div style="margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--gray-420);margin-bottom:4px;">
+          <span>🌱 Champ</span><span>🚚 Transit</span><span>📦 Adjamé</span><span>✓ Vendu</span>
+        </div>
+        <div style="background:var(--gray-150);border-radius:var(--r-pill);height:6px;">
+          <div style="background:${stepColor};width:${pct}%;height:6px;border-radius:var(--r-pill);transition:width .4s;"></div>
+        </div>
+        ${estRetard?`<div style="font-size:10px;color:var(--red);margin-top:3px;font-weight:700;">⚠️ Retard — ETA ${a.date_arrivee_prevue} dépassée</div>`:""}
+      </div>
+
+      <!-- Détails transport -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2);font-size:11px;color:var(--gray-420);margin-bottom:10px;">
+        ${a.lieu_origine?`<div>🌱 <b>Origine</b> : ${a.lieu_origine}</div>`:""}
+        ${a.transporteur?`<div>👤 <b>Transporteur</b> : ${a.transporteur}</div>`:""}
+        ${a.vehicule?`<div>🚚 <b>Véhicule</b> : ${a.vehicule}</div>`:""}
+        ${a.date_depart?`<div>⏱ <b>Départ</b> : ${fmtDt(a.date_depart)||"—"}</div>`:""}
+        ${a.date_arrivee_prevue?`<div>📅 <b>ETA</b> : ${a.date_arrivee_prevue}</div>`:""}
+        ${a.date_arrivee_reelle?`<div>✅ <b>Arrivée</b> : ${fmtDt(a.date_arrivee_reelle)||"—"}</div>`:""}
+        ${a.quantite_arrivee!=null?`<div>📦 <b>Reçu</b> : ${fmt(a.quantite_arrivee)} ${a.unite||""}</div>`:""}
+        ${perte!=null && perte>0?`<div style="color:var(--red);">📉 <b>Perte transit</b> : ${fmt(perte)} ${a.unite||""}</div>`:""}
+      </div>
+      ${a.notes_transit?`<div style="font-size:11px;color:var(--gray-500);background:var(--gray-50);border-radius:var(--r-sm);padding:6px 10px;margin-bottom:8px;">📝 ${a.notes_transit}</div>`:""}
+
+      <!-- Actions -->
+      ${isAdminLevel() && isTransit ? `
+        <div style="display:flex;gap:var(--sp-2);">
+          <button onclick="marquerArriveColis('${a.id}')" class="btn btn-green" style="font-size:12px;padding:8px 12px;">
+            📦 Confirmer arrivée Adjamé
+          </button>
+        </div>` : ""}
+      ${isAdminLevel() && isArrive ? `
+        <div style="display:flex;gap:var(--sp-2);">
+          <button onclick="marquerVenduColis('${a.id}')" style="font-size:11px;padding:6px 12px;background:var(--gray-100);color:var(--gray-500);border:1px solid var(--gray-200);border-radius:var(--r-sm);cursor:pointer;font-family:inherit;font-weight:700;">
+            ✓ Marquer vendu
+          </button>
+        </div>` : ""}
+    </div>`;
+  }).join("");
+}
+
+async function marquerArriveColis(id){
+  const a = achats.find(x=>x.id===id);
+  if(!a) return;
+  // Demander la quantité arrivée
+  const qteArriv = prompt(`Quantité reçue à Adjamé (sur ${a.quantite} ${a.unite||""} envoyés) :`, a.quantite);
+  if(qteArriv === null) return; // annulé
+  const qte = +qteArriv || a.quantite;
+  const payload = {
+    statut:"recu",
+    statut_livraison:"arrive",
+    date_arrivee_reelle: new Date().toISOString(),
+    quantite_arrivee: qte,
+  };
+  // Numéro bon de réception
+  const numeroBR = await obtenirNumeroDocument("BR", a.date || new Date().toISOString().slice(0,10));
+  if(numeroBR) payload.numero_document = numeroBR;
+  try{
+    await sbUpdate("achats", id, payload);
+    achats = achats.map(x=>x.id===id?{...x,...payload}:x);
+    saveLocal(); render();
+    const perte = a.quantite - qte;
+    const msg = numeroBR
+      ? `✓ Arrivée confirmée — ${numeroBR}${perte>0?" — ⚠️ "+perte+" unités manquantes":""}`
+      : `✓ Arrivée confirmée${perte>0?" — ⚠️ "+perte+" unités manquantes":""}`;
+    showToast(msg, perte>0?"warning":"success");
+    renderSuiviColis();
+  }catch(e){ showToast("Erreur : "+e.message,"error"); }
+}
+
+async function marquerVenduColis(id){
+  if(!confirm("Marquer ce colis comme entièrement vendu ?")) return;
+  try{
+    await sbUpdate("achats", id, {statut_livraison:"vendu"});
+    achats = achats.map(x=>x.id===id?{...x,statut_livraison:"vendu"}:x);
+    saveLocal();
+    showToast("✓ Colis marqué vendu");
+    renderSuiviColis();
+  }catch(e){ showToast("Erreur : "+e.message,"error"); }
+}
+
 // ════════════════════════════════════════════════════════════════
 
 async function renderCockpitFinancier(){

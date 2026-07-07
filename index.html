@@ -1811,6 +1811,9 @@ const FINANCE_SUBTABS = [
   {id:"commissions", label:"Commissions",          icon:"％"},
   {id:"journal",     label:"Journal comptable",    icon:"≣"},
   {id:"pertes",      label:"Pertes",               icon:"▽"},
+  {id:"direction",   label:"Direction",             icon:"👑"},
+  {id:"agents",      label:"Agents terrain",        icon:"👤"},
+  {id:"previsions",  label:"Prévisions",            icon:"📈"},
 ];
 
 function renderCommercialSubnav(){
@@ -1844,11 +1847,11 @@ let financeNavOuvert = false;
 
 function renderFinanceSubnav(){
   const grp = [
-    {label:"Analyse",    ids:["cockpit","sig","budget"]},
+    {label:"Analyse",    ids:["cockpit","sig","budget","direction"]},
     {label:"Flux",       ids:["tresorerie","couts"]},
-    {label:"Partenaires",ids:["tiers","commissions"]},
+    {label:"Partenaires",ids:["tiers","commissions","previsions"]},
     {label:"Capital",    ids:["investissements","emprunts"]},
-    {label:"Compta",     ids:["journal","pertes"]}
+    {label:"Compta",     ids:["journal","pertes","agents"]}
   ];
   const pill = (t, actif) =>
     '<button onclick="switchFinanceSub(\''+t.id+'\')" style="'
@@ -1895,12 +1898,24 @@ function renderFinanceContent(){
   const el = document.getElementById("page-financeContent");
   if(!el) return;
   if(financeSubTab==="cockpit"){ el.innerHTML = '<div id="cockpitInline" style="padding:4px 0"></div>'; renderCockpitFinancier(); }
+  else if(financeSubTab==="direction"){ el.innerHTML = '<div id="directionInline"></div>'; renderDashboardDirection(); }
+  else if(financeSubTab==="agents"){ el.innerHTML = '<div id="agentsInline"></div>'; renderPerformanceAgents(); }
+  else if(financeSubTab==="previsions"){ el.innerHTML = '<div id="previsionsInline"></div>'; renderPrevisions(); }
   else if(financeSubTab==="sig"){ bilanOnglet="sig"; el.innerHTML = renderBilanInline(); }
   else if(financeSubTab==="budget"){ bilanOnglet="budget"; el.innerHTML = renderBilanInline(); }
   else if(financeSubTab==="pertes"){ bilanOnglet="pertes"; el.innerHTML = renderBilanInline(); }
   else if(financeSubTab==="tresorerie"){ el.innerHTML = '<div id="tresorerieInline"></div>'; renderTresorerie(); }
   else if(financeSubTab==="couts"){ el.innerHTML = '<div id="coutsInline"></div>'; renderCouts(); }
-  else if(financeSubTab==="tiers"){ el.innerHTML = '<div id="tiersInline"></div>'; renderTiers(); }
+  else if(financeSubTab==="tiers"){
+    el.innerHTML = '<div id="tiersInline"></div><div id="tiersClientsInline" style="margin-top:14px;"></div><div id="tiersWave"></div>';
+    renderTiers();
+    setTimeout(()=>{
+      const tc=document.getElementById("tiersClientsInline");
+      if(tc) tc.innerHTML=renderTopClients();
+      const tw=document.getElementById("tiersWave");
+      if(tw) tw.innerHTML=renderWaveCadre();
+    }, 200);
+  }
   else if(financeSubTab==="investissements"){ el.innerHTML = '<div id="investInline"></div>'; renderInvestissements(); }
   else if(financeSubTab==="emprunts"){ el.innerHTML = '<div id="empruntsInline"></div>'; renderEmprunts(); }
   else if(financeSubTab==="commissions"){ el.innerHTML = '<div id="commissionsInline"></div>'; renderCommissionsInline(); }
@@ -8023,6 +8038,16 @@ async function supprimerUtilisateur(id, nom) {
 try{ adminLog.push(...JSON.parse(localStorage.getItem("va_admin_log")||"[]")); }catch(e){}
 // Démarrer (l'app se rend après connexion + sync)
 demarrerApp();
+
+// ── Helpers config ─────────────────────────────────────────────
+async function sbSelect(table, filters){
+  let url = `${SB_URL}/rest/v1/${table}?select=*`;
+  if(filters) Object.entries(filters).forEach(([k,v])=>{ url+=`&${k}=eq.${v}`; });
+  const r = await fetch(url, {headers:{apikey:SB_KEY, Authorization:`Bearer ${SB_KEY}`}});
+  return r.json();
+}
+// ──────────────────────────────────────────────────────────────
+
 // ── Polling unifié : un seul setInterval au lieu de 4 ──
 // Remplace les setInterval dispersés dans le code
 setInterval(()=>{
@@ -8251,6 +8276,429 @@ async function marquerVenduColis(id){
 }
 
 // ════════════════════════════════════════════════════════════════
+
+
+// ════════════════════════════════════════════════════════════════
+// 1. DASHBOARD DIRECTION (super_admin uniquement)
+// ════════════════════════════════════════════════════════════════
+async function renderDashboardDirection(){
+  const el = document.getElementById("directionInline");
+  if(!el) return;
+
+  const fmt = v => Math.round(Number(v)||0).toLocaleString("fr-FR");
+  const tousFlux = tousMouvementsCaisse();
+  const ca = totalVentes(), mb = margebrute(), mn = margenette();
+  const treso = soldeCaisse(tousFlux);
+  const pertes = (pertesLots||[]).reduce((s,p)=>s+(p.valeur_perte||0),0);
+  const nbTransit = achats.filter(a=>a.statut_livraison==="en_transit").length;
+  const nbArrive  = achats.filter(a=>a.statut_livraison==="arrive").length;
+  const taux_mb = ca ? Math.round(mb/ca*100) : 0;
+  const taux_mn = ca ? Math.round(mn/ca*100) : 0;
+
+  // Top 3 clients
+  const topClients = [...ventes].reduce((acc,v)=>{
+    const k=v.client; if(!k) return acc;
+    acc[k]=(acc[k]||0)+(v.quantite||0)*(v.prix_vente||0); return acc;
+  },{});
+  const top3 = Object.entries(topClients).sort((a,b)=>b[1]-a[1]).slice(0,3);
+
+  // Top 3 produits
+  const topProd = [...ventes].reduce((acc,v)=>{
+    const k=v.produit; if(!k) return acc;
+    acc[k]=(acc[k]||0)+(v.quantite||0)*(v.prix_vente||0); return acc;
+  },{});
+  const top3p = Object.entries(topProd).sort((a,b)=>b[1]-a[1]).slice(0,3);
+
+  el.innerHTML = `
+    <div style="font-size:11px;color:var(--gray-420);margin-bottom:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;">
+      👑 Vue Direction — Tableau de bord exécutif
+    </div>
+
+    <!-- KPI héros -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2);margin-bottom:12px;">
+      <div style="background:var(--green-800);color:#fff;border-radius:var(--r-lg);padding:14px;">
+        <div style="font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.06em;">CA Total</div>
+        <div style="font-size:22px;font-weight:900;margin-top:4px;">${fmt(ca)} F</div>
+        <div style="font-size:11px;opacity:.7;">Marge brute ${taux_mb}%</div>
+      </div>
+      <div style="background:var(--orange);color:#fff;border-radius:var(--r-lg);padding:14px;">
+        <div style="font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.06em;">Résultat Net</div>
+        <div style="font-size:22px;font-weight:900;margin-top:4px;">${fmt(mn)} F</div>
+        <div style="font-size:11px;opacity:.7;">Marge nette ${taux_mn}%</div>
+      </div>
+      <div class="kpi-light" style="text-align:center;">
+        <div class="kl-label">Trésorerie</div>
+        <div class="kl-value">${fmt(treso)} F</div>
+        <div class="kl-sub">${treso>0?"✅ Positif":"⚠️ Négatif"}</div>
+      </div>
+      <div class="kpi-light" style="text-align:center;">
+        <div class="kl-label">Colis</div>
+        <div class="kl-value">${nbTransit} / ${nbArrive}</div>
+        <div class="kl-sub">Transit / Arrivés</div>
+      </div>
+    </div>
+
+    ${pertes>0?`<div style="background:var(--red-50);border:1px solid var(--red-200);border-radius:var(--r);padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--red);font-weight:700;">
+      ⚠️ Pertes valorisées : ${fmt(pertes)} F — à réduire en priorité
+    </div>`:""}
+
+    <!-- Top clients -->
+    <div class="card" style="margin-bottom:10px;">
+      <div style="font-weight:800;font-size:13px;margin-bottom:10px;">🏆 Top 3 Clients</div>
+      ${top3.map(([nom,ca],i)=>`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;${i<2?'border-bottom:1px solid var(--gray-200)':''}">
+          <div style="font-weight:700;font-size:13px;">${["🥇","🥈","🥉"][i]} ${nom}</div>
+          <div style="font-weight:800;color:var(--green-700);font-size:13px;">${fmt(ca)} F</div>
+        </div>`).join("")}
+    </div>
+
+    <!-- Top produits -->
+    <div class="card" style="margin-bottom:12px;">
+      <div style="font-weight:800;font-size:13px;margin-bottom:10px;">🌿 Top 3 Produits</div>
+      ${top3p.map(([nom,ca],i)=>`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;${i<2?'border-bottom:1px solid var(--gray-200)':''}">
+          <div style="font-weight:700;font-size:13px;">${["🥇","🥈","🥉"][i]} ${nom}</div>
+          <div style="font-weight:800;color:var(--green-700);font-size:13px;">${fmt(ca)} F</div>
+        </div>`).join("")}
+    </div>
+
+    <!-- Rapport hebdo -->
+    <button onclick="envoyerRapportDirection()" style="${S.btnOrange}">
+      📊 Envoyer rapport WhatsApp direction
+    </button>
+    <div id="rapport-status" style="font-size:11px;color:var(--gray-420);margin-top:8px;text-align:center;"></div>
+
+    <!-- Config alertes -->
+    ${isAdminLevel()?`<div class="card" style="margin-top:12px;">
+      <div style="font-weight:800;font-size:13px;margin-bottom:10px;">⚙️ Configuration alertes</div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-2);">
+        <div>
+          <label class="label">📱 N° WhatsApp direction</label>
+          <input type="tel" id="cfg_wa_dir" placeholder="225XXXXXXXXXX" style="width:100%;padding:9px 12px;border:1.5px solid var(--gray-200);border-radius:var(--r-sm);font-family:inherit;font-size:13px;" />
+        </div>
+        <div>
+          <label class="label">📱 N° WhatsApp alertes stock</label>
+          <input type="tel" id="cfg_wa_alert" placeholder="225XXXXXXXXXX" style="width:100%;padding:9px 12px;border:1.5px solid var(--gray-200);border-radius:var(--r-sm);font-family:inherit;font-size:13px;" />
+        </div>
+        <button onclick="sauvegarderConfigAlertes()" style="${S.btnPrimary}">💾 Sauvegarder</button>
+      </div>
+    </div>`:""}
+  `;
+
+  // Charger la config WhatsApp existante
+  try {
+    const rows = await sbSelect("config");
+    const cfg = {};
+    (rows||[]).forEach(r => { cfg[r.cle] = r.valeur; });
+    const d = document.getElementById("cfg_wa_dir");
+    const a = document.getElementById("cfg_wa_alert");
+    if(d) d.value = cfg["whatsapp_direction"]||"";
+    if(a) a.value = cfg["whatsapp_alerte"]||"";
+  } catch(e) {}
+}
+
+async function envoyerRapportDirection(){
+  const btn = document.getElementById("rapport-status");
+  if(btn) btn.textContent = "⏳ Génération en cours…";
+  try {
+    const res = await fetch(`${SB_URL}/functions/v1/rapport-direction`,{
+      method:"POST", headers:{apikey:SB_KEY, Authorization:`Bearer ${SB_KEY}`, "content-type":"application/json"}
+    });
+    const d = await res.json();
+    if(btn) btn.textContent = d.envoye ? "✅ Rapport envoyé sur WhatsApp" : "📋 Rapport généré (WhatsApp non configuré)";
+    if(!d.envoye && d.rapport) {
+      showToast("Rapport généré — configurez le numéro WhatsApp direction", "warning");
+    }
+  } catch(e) {
+    if(btn) btn.textContent = "❌ Erreur : "+e.message;
+  }
+}
+
+async function sauvegarderConfigAlertes(){
+  const dir   = document.getElementById("cfg_wa_dir")?.value?.trim();
+  const alert = document.getElementById("cfg_wa_alert")?.value?.trim();
+  try {
+    if(dir)   await sbUpdate("config", null, {valeur:dir},   {match:{cle:"whatsapp_direction"}});
+    if(alert) await sbUpdate("config", null, {valeur:alert}, {match:{cle:"whatsapp_alerte"}});
+    showToast("✅ Configuration sauvegardée");
+  } catch(e) { showToast("Erreur : "+e.message,"error"); }
+}
+
+// ════════════════════════════════════════════════════════════════
+// 2. PERFORMANCE AGENTS TERRAIN
+// ════════════════════════════════════════════════════════════════
+async function renderPerformanceAgents(){
+  const el = document.getElementById("agentsInline");
+  if(!el) return;
+  el.innerHTML = `<div style="padding:8px 0 4px;text-align:center;color:var(--gray-420);font-size:.85rem">⏳ Chargement…</div>`;
+
+  const fmt = v => Math.round(Number(v)||0).toLocaleString("fr-FR");
+
+  // Calculer depuis les données locales
+  const agentStats = {};
+  achats.filter(a=>a.enregistre_par && a.statut==="recu").forEach(a=>{
+    const ag = a.enregistre_par;
+    if(!agentStats[ag]) agentStats[ag] = {nb:0, qte:0, montant:0, pertes:0, retards:0};
+    agentStats[ag].nb++;
+    agentStats[ag].qte += a.quantite||0;
+    agentStats[ag].montant += (a.quantite||0)*(a.prix_unitaire||0);
+    agentStats[ag].pertes += a.perte_transit||0;
+    if(a.date_arrivee_prevue && a.date_arrivee_reelle &&
+       new Date(a.date_arrivee_reelle) > new Date(a.date_arrivee_prevue)) {
+      agentStats[ag].retards++;
+    }
+  });
+
+  const agents = Object.entries(agentStats).sort((a,b)=>b[1].montant-a[1].montant);
+
+  if(!agents.length){
+    el.innerHTML = `<div style="text-align:center;padding:40px 0;color:var(--gray-420);">Aucun agent avec des achats reçus</div>`;
+    return;
+  }
+
+  el.innerHTML = `
+    <div style="font-size:11px;color:var(--gray-420);margin-bottom:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;">
+      👤 Performance Agents Terrain
+    </div>
+    ${agents.map(([nom, s])=>{
+      const tauxPerte = s.qte ? (s.pertes/s.qte*100).toFixed(1) : 0;
+      const score = Math.max(0, 100 - (+tauxPerte*5) - (s.retards*10));
+      const couleur = score>=80?"var(--green-700)":score>=60?"var(--orange)":"var(--red)";
+      return `<div class="card" style="margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div>
+            <div style="font-weight:800;font-size:14px;">${nom}</div>
+            <div style="font-size:11px;color:var(--gray-420);">${s.nb} lot${s.nb>1?"s":""} · ${fmt(s.montant)} F achats</div>
+          </div>
+          <div style="text-align:center;">
+            <div style="font-size:20px;font-weight:900;color:${couleur};">${Math.round(score)}</div>
+            <div style="font-size:9px;color:var(--gray-420);">SCORE /100</div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:var(--sp-2);font-size:11px;text-align:center;">
+          <div style="background:var(--gray-50);border-radius:var(--r-sm);padding:6px;">
+            <div style="font-weight:700;">${fmt(s.qte)}</div>
+            <div style="color:var(--gray-420);">Unités achetées</div>
+          </div>
+          <div style="background:${+tauxPerte>5?"var(--red-50)":"var(--gray-50)"};border-radius:var(--r-sm);padding:6px;">
+            <div style="font-weight:700;color:${+tauxPerte>5?"var(--red)":"var(--text)"};">${tauxPerte}%</div>
+            <div style="color:var(--gray-420);">Taux perte</div>
+          </div>
+          <div style="background:${s.retards>0?"var(--orange-50)":"var(--gray-50)"};border-radius:var(--r-sm);padding:6px;">
+            <div style="font-weight:700;color:${s.retards>0?"var(--orange-dark)":"var(--text)"};">${s.retards}</div>
+            <div style="color:var(--gray-420);">Retards</div>
+          </div>
+        </div>
+      </div>`;
+    }).join("")}
+
+    <!-- Seuils de stock -->
+    ${isAdminLevel()?`
+    <div class="card" style="margin-top:4px;">
+      <div style="font-weight:800;font-size:13px;margin-bottom:10px;">📦 Seuils de stock par produit</div>
+      ${getProduitNoms().map(p=>{
+        const stock = stockDisponibleProduit(p);
+        return `<div style="display:flex;align-items:center;gap:var(--sp-2);padding:7px 0;border-bottom:1px solid var(--gray-200);">
+          <div style="flex:1;font-size:13px;font-weight:600;">${p}</div>
+          <div style="font-size:12px;color:var(--gray-420);">Stock : ${stock}</div>
+          <input type="number" min="1" step="1" placeholder="Seuil"
+            style="width:70px;padding:5px 8px;border:1.5px solid var(--gray-200);border-radius:var(--r-sm);font-size:12px;"
+            id="seuil_${p.replace(/\s/g,'_')}"
+            onchange="sauvegarderSeuilStock('${p}',this.value)" />
+        </div>`;
+      }).join("")}
+      <div style="font-size:11px;color:var(--gray-420);margin-top:8px;">Saisir le seuil minimum pour recevoir une alerte WhatsApp</div>
+      <button onclick="testerAlerteStock()" style="${S.btnGhost};margin-top:10px;width:100%">🔔 Tester les alertes maintenant</button>
+    </div>`:""}
+  `;
+
+  // Charger les seuils existants
+  try {
+    const rows = await sbSelect("seuils_stock");
+    (rows||[]).forEach(r=>{
+      const el2 = document.getElementById("seuil_"+r.produit.replace(/\s/g,'_'));
+      if(el2) el2.value = r.seuil_min;
+    });
+  } catch(e) {}
+}
+
+async function sauvegarderSeuilStock(produit, valeur){
+  if(!valeur || +valeur <= 0) return;
+  try {
+    // Upsert : créer ou mettre à jour
+    const existing = await sbSelect("seuils_stock", {produit});
+    if(existing && existing.length>0){
+      await sbUpdate("seuils_stock", existing[0].id, {seuil_min:+valeur, updated_at:new Date().toISOString()});
+    } else {
+      await sbInsert("seuils_stock", {id:genId(), produit, seuil_min:+valeur, actif:true});
+    }
+    showToast(`✅ Seuil ${produit} : ${valeur} unités`);
+  } catch(e){ showToast("Erreur : "+e.message,"error"); }
+}
+
+async function testerAlerteStock(){
+  try {
+    const res = await fetch(`${SB_URL}/functions/v1/alertes-stock`,{
+      method:"POST", headers:{apikey:SB_KEY, Authorization:`Bearer ${SB_KEY}`, "content-type":"application/json"}
+    });
+    const d = await res.json();
+    showToast(`🔔 ${d.alertes_stock} alerte(s) stock · ${d.retards} retard(s) · ${d.messages_envoyes} WA envoyé(s)`);
+  } catch(e){ showToast("Erreur : "+e.message,"error"); }
+}
+
+// ════════════════════════════════════════════════════════════════
+// 3. PRÉVISIONS SAISONNIÈRES
+// ════════════════════════════════════════════════════════════════
+function renderPrevisions(){
+  const el = document.getElementById("previsionsInline");
+  if(!el) return;
+  const fmt = v => Math.round(Number(v)||0).toLocaleString("fr-FR");
+
+  // Regrouper prix par produit et mois
+  const histo = {};
+  achats.filter(a=>a.statut==="recu" && a.date && a.prix_unitaire).forEach(a=>{
+    const mois = a.date.slice(0,7);
+    const k = a.produit;
+    if(!histo[k]) histo[k] = {};
+    if(!histo[k][mois]) histo[k][mois] = {total:0, nb:0};
+    histo[k][mois].total += a.prix_unitaire;
+    histo[k][mois].nb++;
+  });
+
+  const produits = Object.keys(histo);
+  if(!produits.length){
+    el.innerHTML = `<div style="text-align:center;padding:40px 0;color:var(--gray-420);">Données historiques insuffisantes</div>`;
+    return;
+  }
+
+  el.innerHTML = `
+    <div style="font-size:11px;color:var(--gray-420);margin-bottom:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;">
+      📈 Historique & Prévisions Prix Achat
+    </div>
+    ${produits.map(prod=>{
+      const moisData = Object.entries(histo[prod]).sort((a,b)=>a[0].localeCompare(b[0]));
+      const prix = moisData.map(([,v])=>Math.round(v.total/v.nb));
+      const maxP = Math.max(...prix)*1.1||1;
+      const minP = Math.min(...prix);
+      const moyP = Math.round(prix.reduce((s,v)=>s+v,0)/prix.length);
+      const tendance = prix.length >= 2 ? prix[prix.length-1] - prix[prix.length-2] : 0;
+
+      return `<div class="card" style="margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
+          <div style="font-weight:800;font-size:14px;">${prod}</div>
+          <span style="font-size:11px;font-weight:700;color:${tendance>0?"var(--red)":tendance<0?"var(--green-700)":"var(--gray-420)"};">
+            ${tendance>0?"↑ Prix en hausse":tendance<0?"↓ Prix en baisse":"→ Stable"}
+          </span>
+        </div>
+        <!-- Graphique barres -->
+        <div style="display:flex;align-items:flex-end;gap:3px;height:60px;margin-bottom:6px;">
+          ${moisData.map(([mois,v],i)=>{
+            const p = Math.round(v.total/v.nb);
+            const h = Math.round(p/maxP*100);
+            const isLast = i===moisData.length-1;
+            return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;">
+              <div style="font-size:8px;color:var(--gray-420);">${fmt(p)}</div>
+              <div style="width:100%;background:${isLast?"var(--green-800)":"var(--green-bright3)"};height:${h}%;border-radius:3px 3px 0 0;min-height:4px;"></div>
+              <div style="font-size:8px;color:var(--gray-420);">${mois.slice(5)}</div>
+            </div>`;
+          }).join("")}
+        </div>
+        <div style="display:flex;gap:var(--sp-2);font-size:11px;">
+          <span style="color:var(--gray-420);">Min: <b>${fmt(minP)} F</b></span>
+          <span style="color:var(--gray-420);">Moy: <b>${fmt(moyP)} F</b></span>
+          <span style="color:var(--gray-420);">Max: <b>${fmt(Math.max(...prix))} F</b></span>
+        </div>
+        ${tendance > moyP*0.1 ? `<div style="background:var(--red-50);border-radius:var(--r-sm);padding:6px 10px;margin-top:8px;font-size:11px;color:var(--red);font-weight:600;">
+          💡 Prix en forte hausse — envisager un stock anticipé
+        </div>` : tendance < -moyP*0.1 ? `<div style="background:var(--green-50);border-radius:var(--r-sm);padding:6px 10px;margin-top:8px;font-size:11px;color:var(--green-700);font-weight:600;">
+          💡 Prix en baisse — bon moment pour acheter en gros
+        </div>` : ""}
+      </div>`;
+    }).join("")}
+
+    <div style="font-size:11px;color:var(--gray-420);text-align:center;margin-top:4px;">
+      Basé sur ${achats.filter(a=>a.statut==="recu").length} achats historiques
+    </div>
+  `;
+}
+
+// ════════════════════════════════════════════════════════════════
+// 4. FIDÉLISATION CLIENTS (extension de renderTiers)
+// ════════════════════════════════════════════════════════════════
+function renderTopClients(){
+  const fmt = v => Math.round(Number(v)||0).toLocaleString("fr-FR");
+  const clientStats = {};
+  ventes.forEach(v=>{
+    if(!v.client) return;
+    if(!clientStats[v.client]) clientStats[v.client] = {ca:0, nb:0, qte:0, derniere:v.date};
+    clientStats[v.client].ca += (v.quantite||0)*(v.prix_vente||0);
+    clientStats[v.client].nb++;
+    clientStats[v.client].qte += v.quantite||0;
+    if(v.date > clientStats[v.client].derniere) clientStats[v.client].derniere = v.date;
+  });
+
+  const caTotal = Object.values(clientStats).reduce((s,c)=>s+c.ca,0);
+  const sorted = Object.entries(clientStats).sort((a,b)=>b[1].ca-a[1].ca);
+
+  if(!sorted.length) return `<div style="text-align:center;padding:20px;color:var(--gray-420);">Aucune vente enregistrée</div>`;
+
+  // Trouver le seuil VIP (top 20% CA)
+  let cumul=0;
+  const seuilVip = caTotal*0.8;
+
+  return `
+    <div style="font-weight:800;font-size:13px;margin-bottom:10px;">🏆 Fidélisation Clients</div>
+    <div style="font-size:11px;color:var(--gray-420);margin-bottom:10px;">Les clients VIP (top 20%) génèrent 80% du CA</div>
+    ${sorted.map(([nom,s],i)=>{
+      cumul += s.ca;
+      const isVip = cumul-s.ca < seuilVip;
+      const pctCA = caTotal ? (s.ca/caTotal*100).toFixed(1) : 0;
+      return `<div style="display:flex;align-items:center;gap:var(--sp-2);padding:9px 0;border-bottom:1px solid var(--gray-200);">
+        <div style="width:26px;height:26px;border-radius:50%;background:${isVip?"var(--orange)":"var(--gray-150)"};color:${isVip?"#fff":"var(--gray-500)"};display:flex;align-items:center;justify-content:center;font-weight:800;font-size:11px;flex-shrink:0;">${i+1}</div>
+        <div style="flex:1;">
+          <div style="font-weight:700;font-size:13px;">${nom} ${isVip?'<span style="background:var(--orange);color:#fff;font-size:9px;border-radius:999px;padding:1px 6px;font-weight:700;">VIP</span>':""}</div>
+          <div style="font-size:11px;color:var(--gray-420);">${s.nb} achat${s.nb>1?"s":""} · ${fmt(s.qte)} unités · dernière visite ${s.derniere}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-weight:800;font-size:13px;color:var(--green-700);">${fmt(s.ca)} F</div>
+          <div style="font-size:10px;color:var(--gray-420);">${pctCA}% du CA</div>
+        </div>
+      </div>`;
+    }).join("")}
+  `;
+}
+
+// ════════════════════════════════════════════════════════════════
+// 5. WAVE CI — FRAMEWORK (clé API à configurer)
+// ════════════════════════════════════════════════════════════════
+function renderWaveCadre(){
+  return `
+    <div class="card" style="margin-top:12px;">
+      <div style="font-weight:800;font-size:13px;margin-bottom:6px;">💳 Intégration Wave CI</div>
+      <div style="font-size:12px;color:var(--gray-420);margin-bottom:10px;">
+        Connectez Wave Business pour confirmer automatiquement les paiements reçus.
+      </div>
+      <div style="background:var(--orange-50);border:1px solid var(--orange-100);border-radius:var(--r-sm);padding:10px;margin-bottom:10px;font-size:11px;color:var(--orange-dark);">
+        ⚠️ Nécessite un compte Wave Business CI et une clé API Wave.
+        Contactez Wave Business au <b>+225 XX XX XX XX</b> pour activer.
+      </div>
+      <div>
+        <label class="label">Clé API Wave Business</label>
+        <input type="password" id="wave_api_key" placeholder="wave_sk_prod_..." style="width:100%;padding:9px 12px;border:1.5px solid var(--gray-200);border-radius:var(--r-sm);font-family:monospace;font-size:12px;" />
+      </div>
+      <button onclick="sauvegarderWaveKey()" style="${S.btnPrimary};margin-top:10px;">💾 Sauvegarder la clé Wave</button>
+    </div>
+  `;
+}
+
+async function sauvegarderWaveKey(){
+  const key = document.getElementById("wave_api_key")?.value?.trim();
+  if(!key) return showToast("Entrez la clé API Wave","error");
+  try {
+    await sbUpdate("config", null, {valeur:key}, {match:{cle:"wave_api_key"}});
+    showToast("✅ Clé Wave sauvegardée — intégration activée");
+  } catch(e){ showToast("Erreur : "+e.message,"error"); }
+}
 
 async function renderCockpitFinancier(){
   const el = document.getElementById("cockpitInline");

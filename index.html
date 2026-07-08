@@ -3540,86 +3540,249 @@ function genererRapportFinancierPDF(){
   if(typeof window.jspdf==="undefined"){ showToast("Génération PDF indisponible (hors-ligne)","error"); return; }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({unit:"mm", format:"a4"});
-  const W=210, M=14;
+  const W=210, M=16;
   let y=0;
 
-  // Données
-  const ca = totalVentes();
-  const margeBrute = margebrute(ventes);
-  const margeNetteCom = margenette(ventes);
-  const cmv = ca - margeBrute;
-  const frais = margeBrute - margeNetteCom;
-  const totalCommiss = totalCommissionsDues();
-  const totalPertesV = totalPertesValeur();
-  const resultatExpl = margeNetteCom - totalCommiss - totalPertesV;
-  const totalDus = totalAchats() - totalAvances();
-  const tauxB = ca?Math.round(margeBrute/ca*100):0;
-  const tauxN = ca?Math.round(margeNetteCom/ca*100):0;
-  const tauxRE = ca?Math.round(resultatExpl/ca*100):0;
-  const soldeTreso = soldeCaisse(tousMouvementsCaisse());
+  // ── Formatage des montants : espace standard (pas unicode) pour jsPDF ──
+  const fmtPDF = v => {
+    const n = Math.round(Number(v)||0);
+    return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g," ") + " F";
+  };
+  const fmtPct = v => v + "%";
 
-  // En-tête
-  doc.setFillColor(13,61,26); doc.rect(0,0,W,26,"F");
-  doc.setTextColor(255,255,255); doc.setFontSize(17); doc.setFont(undefined,"bold");
-  doc.text("VerdApp CI", M, 12);
-  doc.setFontSize(9); doc.setFont(undefined,"normal");
-  doc.text("Rapport financier", M, 19);
+  // ── Données financières ──
+  const ca          = totalVentes();
+  const margeBrute  = margebrute();
+  const margeNette  = margenette();
+  const cmv         = ca - margeBrute;
+  const frais       = margeBrute - margeNette;
+  const commissions = totalCommissionsDues();
+  const pertesV     = totalPertesValeur();
+  const resultat    = margeNette - commissions - pertesV;
+  const totalDus    = totalAchats() - totalAvances();
+  const soldeTreso  = soldeCaisse(tousMouvementsCaisse());
+  const tauxB  = ca ? Math.round(margeBrute/ca*100) : 0;
+  const tauxN  = ca ? Math.round(margeNette/ca*100) : 0;
+  const tauxRE = ca ? Math.round(resultat/ca*100) : 0;
   const moisLabel = new Date().toLocaleDateString("fr-CI",{month:"long",year:"numeric"});
-  doc.setFontSize(11); doc.setFont(undefined,"bold");
-  doc.text(moisLabel, W-M, 12, {align:"right"});
-  doc.setFontSize(8); doc.setFont(undefined,"normal");
-  doc.text("Édité le "+new Date().toLocaleDateString("fr-CI"), W-M, 19, {align:"right"});
+  const dateEdit  = "Édité le " + new Date().toLocaleDateString("fr-CI");
 
-  y=36;
+  // ══════════════════════════════════════════════════
+  // EN-TÊTE : bandeau vert dégradé
+  // ══════════════════════════════════════════════════
+  // Fond vert foncé
+  doc.setFillColor(13,61,26);
+  doc.rect(0,0,W,38,"F");
+  // Bande orange décorative en bas du header
+  doc.setFillColor(244,120,32);
+  doc.rect(0,36,W,2,"F");
+
+  // Logo VerdApp CI (texte stylisé)
+  doc.setTextColor(255,255,255);
+  doc.setFontSize(22); doc.setFont(undefined,"bold");
+  doc.text("VerdApp", M, 16);
+  doc.setTextColor(244,120,32);
+  doc.text(" CI", M+38, 16);
+
+  doc.setTextColor(255,255,255);
+  doc.setFontSize(9); doc.setFont(undefined,"normal");
+  doc.text("Gestion Grossiste Legumes", M, 23);
+
+  // Titre rapport + date (droite)
+  doc.setFontSize(13); doc.setFont(undefined,"bold");
+  doc.text("Rapport Financier", W-M, 14, {align:"right"});
+  doc.setFontSize(10); doc.setFont(undefined,"normal");
+  doc.text(moisLabel.charAt(0).toUpperCase()+moisLabel.slice(1), W-M, 22, {align:"right"});
+  doc.setFontSize(8);
+  doc.text(dateEdit, W-M, 29, {align:"right"});
+
+  y = 50;
   doc.setTextColor(20,20,20);
 
-  // Section : Compte de résultat (SIG)
-  function titreSection(t){
-    doc.setFillColor(240,244,240); doc.rect(M,y-5,W-2*M,8,"F");
-    doc.setFontSize(10); doc.setFont(undefined,"bold"); doc.setTextColor(13,61,26);
-    doc.text(t, M+2, y); y+=9; doc.setTextColor(20,20,20);
+  // ══════════════════════════════════════════════════
+  // KPI CARDS : 4 indicateurs clés en grille 2×2
+  // ══════════════════════════════════════════════════
+  const cardW = (W - 2*M - 8) / 2;
+  const cardH = 22;
+  const cards = [
+    {label:"Chiffre d'Affaires", val:fmtPDF(ca), color:[13,61,26], light:[232,244,232]},
+    {label:"Marge Brute ("+tauxB+"%)", val:fmtPDF(margeBrute), color:[13,61,26], light:[232,244,232]},
+    {label:"Résultat d'Exploitation ("+tauxRE+"%)", val:fmtPDF(resultat), color:resultat>=0?[13,61,26]:[180,20,20], light:resultat>=0?[232,244,232]:[255,235,235]},
+    {label:"Trésorerie", val:fmtPDF(soldeTreso), color:[244,120,32], light:[255,244,232]},
+  ];
+
+  cards.forEach((card,i)=>{
+    const cx = M + (i%2)*(cardW+8);
+    const cy = y + Math.floor(i/2)*(cardH+6);
+    // Fond coloré léger
+    doc.setFillColor(...card.light);
+    doc.roundedRect(cx, cy, cardW, cardH, 3, 3, "F");
+    // Bordure gauche colorée
+    doc.setFillColor(...card.color);
+    doc.rect(cx, cy, 3, cardH, "F");
+    // Texte label
+    doc.setFontSize(7); doc.setFont(undefined,"normal");
+    doc.setTextColor(80,80,80);
+    doc.text(card.label, cx+6, cy+8);
+    // Valeur principale
+    doc.setFontSize(13); doc.setFont(undefined,"bold");
+    doc.setTextColor(...card.color);
+    doc.text(card.val, cx+6, cy+17);
+  });
+
+  y += 2*(cardH+6) + 10;
+
+  // ══════════════════════════════════════════════════
+  // COMPTE DE RÉSULTAT (SIG)
+  // ══════════════════════════════════════════════════
+  // Titre section
+  const sectionTitle = (titre) => {
+    doc.setFillColor(13,61,26);
+    doc.rect(M, y-5, W-2*M, 8, "F");
+    doc.setTextColor(255,255,255);
+    doc.setFontSize(9.5); doc.setFont(undefined,"bold");
+    doc.text(titre, M+3, y);
+    y += 9;
+    doc.setTextColor(20,20,20);
+  };
+
+  // Ligne normale
+  const ligne = (label, valeur, opts={}) => {
+    const isTotal  = opts.total;
+    const isNeg    = opts.neg;
+    const isResult = opts.resultat;
+    const indent   = opts.indent || 0;
+
+    if(isTotal){
+      doc.setFillColor(isResult ? (resultat>=0?13:180) : 13,
+                       isResult ? (resultat>=0?61:20) : 61,
+                       isResult ? (resultat>=0?26:20) : 26);
+      doc.setFillColor(isResult?(resultat>=0?232:255):(isTotal?240:255),
+                       isResult?(resultat>=0?244:235):(isTotal?244:255),
+                       isResult?(resultat>=0?232:235):(isTotal?240:255));
+      doc.rect(M, y-4.5, W-2*M, 7, "F");
+    }
+
+    doc.setFontSize(isTotal?9.5:9);
+    doc.setFont(undefined, isTotal?"bold":"normal");
+    doc.setTextColor(isTotal?(isResult?(resultat>=0?13:160):13):40,
+                     isTotal?(isResult?(resultat>=0?61:20):61):40,
+                     isTotal?(isResult?(resultat>=0?26:20):26):40);
+    doc.text(label, M+3+indent, y);
+
+    doc.setFont(undefined, isTotal?"bold":"normal");
+    doc.setTextColor(isNeg?180:isTotal?(isResult?(resultat>=0?13:160):13):20,
+                     isNeg?20:isTotal?(isResult?(resultat>=0?61:20):61):20,
+                     isNeg?20:isTotal?(isResult?(resultat>=0?26:20):26):20);
+    doc.text(valeur, W-M-3, y, {align:"right"});
+    y += isTotal?8:6.5;
+
+    // Ligne séparatrice légère sous les sous-totaux
+    if(isTotal){
+      doc.setDrawColor(200,200,200);
+      doc.line(M, y-1, W-M, y-1);
+    }
+    doc.setTextColor(20,20,20);
+  };
+
+  sectionTitle("COMPTE DE RÉSULTAT — Soldes Intermédiaires de Gestion (SIG)");
+
+  ligne("Chiffre d'affaires (CA)", fmtPDF(ca), {total:true});
+  ligne("  − Coût d'achat des marchandises vendues (FIFO)", "− "+fmtPDF(cmv), {indent:2, neg:true});
+  ligne("= MARGE BRUTE  ("+tauxB+"%)", fmtPDF(margeBrute), {total:true});
+  doc.setDrawColor(13,61,26); doc.line(M, y-1, W-M, y-1);
+  ligne("  − Frais accessoires d'achat (transport, droits...)", "− "+fmtPDF(frais), {indent:2, neg:true});
+  ligne("= MARGE NETTE COMMERCIALE  ("+tauxN+"%)", fmtPDF(margeNette), {total:true});
+  doc.setDrawColor(13,61,26); doc.line(M, y-1, W-M, y-1);
+  ligne("  − Commissions terrain", "− "+fmtPDF(commissions), {indent:2, neg:true});
+  ligne("  − Pertes sur stocks", "− "+fmtPDF(pertesV), {indent:2, neg:true});
+  ligne("= RÉSULTAT D'EXPLOITATION  ("+tauxRE+"%)", fmtPDF(resultat), {total:true, resultat:true});
+
+  y += 6;
+
+  // ══════════════════════════════════════════════════
+  // INDICATEURS COMPLÉMENTAIRES
+  // ══════════════════════════════════════════════════
+  sectionTitle("INDICATEURS COMPLÉMENTAIRES");
+
+  const indW = (W-2*M-8)/3;
+  const indH = 16;
+  const inds = [
+    {label:"Trésorerie", val:fmtPDF(soldeTreso), sub:"Solde caisse"},
+    {label:"Dû fournisseurs", val:fmtPDF(totalDus), sub:totalDus===0?"Tout soldé":"À régler"},
+    {label:"Taux de marge", val:tauxB+"%", sub:"Brute / "+tauxN+"% nette"},
+    {label:"Commissions", val:fmtPDF(commissions), sub:"Terrain"},
+    {label:"Pertes stocks", val:fmtPDF(pertesV), sub:"Valorisées"},
+    {label:"Résultat", val:fmtPDF(resultat), sub:resultat>=0?"Bénéfice":"Déficit"},
+  ];
+
+  for(let i=0;i<6;i++){
+    const ind = inds[i];
+    const ix = M + (i%3)*(indW+4);
+    const iy = y + Math.floor(i/3)*(indH+4);
+    doc.setFillColor(248,250,248);
+    doc.setDrawColor(220,230,220);
+    doc.roundedRect(ix, iy, indW, indH, 2, 2, "FD");
+    doc.setFontSize(6.5); doc.setFont(undefined,"normal"); doc.setTextColor(100,100,100);
+    doc.text(ind.label.toUpperCase(), ix+3, iy+5);
+    doc.setFontSize(9.5); doc.setFont(undefined,"bold");
+    doc.setTextColor(i===1&&totalDus>0?180:i===4&&pertesV>0?180:i===5&&resultat<0?180:13,
+                     i===1&&totalDus>0?20:i===4&&pertesV>0?20:i===5&&resultat<0?20:61,
+                     i===1&&totalDus>0?20:i===4&&pertesV>0?20:i===5&&resultat<0?20:26);
+    doc.text(ind.val, ix+3, iy+11);
+    doc.setFontSize(6); doc.setFont(undefined,"normal"); doc.setTextColor(120,120,120);
+    doc.text(ind.sub, ix+3, iy+15);
   }
-  function ligne(label, valeur, opts){
-    opts=opts||{};
-    doc.setFontSize(opts.gras?10:9); doc.setFont(undefined,opts.gras?"bold":"normal");
-    doc.text(label, M+2, y);
-    doc.text(valeur, W-M-2, y, {align:"right"});
-    y+=opts.gras?7:6;
-  }
 
-  titreSection("COMPTE DE RÉSULTAT (SIG)");
-  ligne("Chiffre d'affaires (CA)", fmt(ca));
-  ligne("− Coût d'achat des marchandises vendues (FIFO)", "−"+fmt(cmv));
-  ligne("= MARGE BRUTE  ("+tauxB+"%)", fmt(margeBrute), {gras:true});
-  ligne("− Frais accessoires d'achat", "−"+fmt(frais));
-  ligne("= MARGE NETTE COMMERCIALE  ("+tauxN+"%)", fmt(margeNetteCom), {gras:true});
-  ligne("− Commissions terrain", "−"+fmt(totalCommiss));
-  ligne("− Pertes sur stocks", "−"+fmt(totalPertesV));
-  ligne("= RÉSULTAT D'EXPLOITATION  ("+tauxRE+"%)", fmt(resultatExpl), {gras:true});
-  y+=4;
+  y += 2*(indH+4) + 8;
 
-  // Section : Indicateurs clés
-  titreSection("INDICATEURS CLÉS");
-  ligne("Trésorerie (solde de caisse)", fmt(soldeTreso));
-  ligne("Dû fournisseurs", fmt(totalDus));
-  ligne("Taux de marge brute", tauxB+"%");
-  ligne("Taux de marge nette", tauxN+"%");
-  y+=4;
+  // ══════════════════════════════════════════════════
+  // DIAGNOSTIC AUTOMATIQUE
+  // ══════════════════════════════════════════════════
+  sectionTitle("DIAGNOSTIC AUTOMATIQUE");
 
-  // Section : Diagnostic
-  titreSection("DIAGNOSTIC");
-  const diag = [];
-  if(tauxB>=20) diag.push("+ Marge brute solide"); else diag.push("- Marge brute faible");
-  if(tauxN>=15) diag.push("+ Marge nette saine"); else diag.push("- Marge nette sous le seuil de 15%");
-  if(resultatExpl>=0) diag.push("+ Activité bénéficiaire"); else diag.push("- Résultat d'exploitation négatif");
-  if(totalDus>0) diag.push("- Dettes fournisseurs à régler : "+fmt(totalDus));
-  doc.setFontSize(9); doc.setFont(undefined,"normal");
-  diag.forEach(d=>{ doc.text(d, M+2, y); y+=6; });
+  const diags = [];
+  if(tauxB>=30) diags.push({ico:"✓", txt:"Marge brute excellente ("+tauxB+"% ≥ 30%)", ok:true});
+  else if(tauxB>=20) diags.push({ico:"✓", txt:"Marge brute correcte ("+tauxB+"%)", ok:true});
+  else diags.push({ico:"!", txt:"Marge brute faible ("+tauxB+"% < 20%)", ok:false});
 
-  // Pied de page
-  doc.setFontSize(7); doc.setTextColor(120,120,120);
-  doc.text("Document généré par VerdApp CI — conforme au cadre SYSCOHADA. Les charges fixes générales (loyer, salaires administratifs, amortissements,", M, 285);
-  doc.text("impôts) ne sont pas incluses dans le résultat d'exploitation ci-dessus et doivent être intégrées par le comptable pour le résultat net.", M, 289);
+  if(tauxN>=20) diags.push({ico:"✓", txt:"Marge nette excellente ("+tauxN+"% ≥ 20%)", ok:true});
+  else if(tauxN>=10) diags.push({ico:"✓", txt:"Marge nette saine ("+tauxN+"%)", ok:true});
+  else diags.push({ico:"!", txt:"Marge nette insuffisante ("+tauxN+"% < 10%)", ok:false});
+
+  if(resultat>0) diags.push({ico:"✓", txt:"Activité bénéficiaire — Résultat : "+fmtPDF(resultat), ok:true});
+  else diags.push({ico:"!", txt:"Résultat négatif — Revoir les charges", ok:false});
+
+  if(soldeTreso>0) diags.push({ico:"✓", txt:"Trésorerie positive : "+fmtPDF(soldeTreso), ok:true});
+  else diags.push({ico:"!", txt:"Trésorerie négative — Risque de cessation", ok:false});
+
+  if(pertesV>0) diags.push({ico:"!", txt:"Pertes sur stocks à réduire : "+fmtPDF(pertesV), ok:false});
+  if(totalDus>0) diags.push({ico:"!", txt:"Dettes fournisseurs en cours : "+fmtPDF(totalDus), ok:false});
+
+  diags.forEach(d=>{
+    doc.setFillColor(d.ok?238:255, d.ok?248:240, d.ok?238:240);
+    doc.rect(M, y-4, W-2*M, 6.5, "F");
+    doc.setFontSize(8.5); doc.setFont(undefined,"bold");
+    doc.setTextColor(d.ok?13:160, d.ok?100:20, d.ok?13:20);
+    doc.text(d.ico, M+3, y);
+    doc.setFont(undefined,"normal"); doc.setTextColor(40,40,40);
+    doc.text(d.txt, M+10, y);
+    y += 8;
+  });
+
+  // ══════════════════════════════════════════════════
+  // PIED DE PAGE
+  // ══════════════════════════════════════════════════
+  doc.setFillColor(13,61,26);
+  doc.rect(0,285,W,12,"F");
+  doc.setFillColor(244,120,32);
+  doc.rect(0,285,W,1.5,"F");
+  doc.setTextColor(255,255,255);
+  doc.setFontSize(6.5); doc.setFont(undefined,"normal");
+  doc.text("VerdApp CI — Rapport conforme au cadre SYSCOHADA", M, 291);
+  doc.text("Résultat d'exploitation avant charges fixes (loyer, salaires, amortissements, impôts)", M, 295);
+  doc.setFontSize(7); doc.setFont(undefined,"bold");
+  doc.text(dateEdit, W-M, 291, {align:"right"});
 
   doc.save("rapport_financier_verdapp_"+new Date().toISOString().slice(0,7)+".pdf");
 }

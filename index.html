@@ -3700,10 +3700,8 @@ function genererRapportFinancierPDF(){
   ligne("Chiffre d'affaires (CA)", fmtPDF(ca), {total:true});
   ligne("  - Coût d'achat des marchandises vendues (FIFO)", "- "+fmtPDF(cmv), {indent:2, neg:true});
   ligne("= MARGE BRUTE  ("+tauxB+"%)", fmtPDF(margeBrute), {total:true});
-  doc.setDrawColor(13,61,26); doc.line(M, y-1, W-M, y-1);
   ligne("  - Frais accessoires d'achat (transport, droits...)", "- "+fmtPDF(frais), {indent:2, neg:true});
   ligne("= MARGE NETTE COMMERCIALE  ("+tauxN+"%)", fmtPDF(margeNette), {total:true});
-  doc.setDrawColor(13,61,26); doc.line(M, y-1, W-M, y-1);
   ligne("  - Commissions terrain", "- "+fmtPDF(commissions), {indent:2, neg:true});
   ligne("  - Pertes sur stocks", "- "+fmtPDF(pertesV), {indent:2, neg:true});
   ligne("= RÉSULTAT D'EXPLOITATION  ("+tauxRE+"%)", fmtPDF(resultat), {total:true, resultat:true});

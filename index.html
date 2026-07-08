@@ -8360,8 +8360,8 @@ function renderSuiviColis(){
   const fmtDate = s => s ? new Date(s).toLocaleDateString("fr-FR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}) : "—";
 
   // Compter par statut
-  const nbTransit = achats.filter(a=>a.statut_livraison==="en_transit").length;
-  const nbArrive  = achats.filter(a=>a.statut_livraison==="arrive").length;
+  const nbTransit = achats.filter(a=>(a.statut_livraison==="en_transit")||(a.statut==="en_cours"&&!a.statut_livraison)).length;
+  const nbArrive  = achats.filter(a=>(a.statut_livraison==="arrive")||(a.statut==="recu"&&!a.statut_livraison)).length;
   const nbVendu   = achats.filter(a=>a.statut_livraison==="vendu").length;
 
   // Colis en retard : ETA dépassée et pas encore arrivé
@@ -8572,8 +8572,8 @@ async function renderDashboardDirection(){
   const treso = soldeCaisse(tousFlux);
   const pertesArr = typeof pertesLots !== "undefined" ? pertesLots : (typeof pertes_lots !== "undefined" ? pertes_lots : []);
   const pertesVal = (pertesArr||[]).reduce((s,p)=>s+(p.valeur_perte||0),0);
-  const nbTransit = achats.filter(a=>a.statut_livraison==="en_transit").length;
-  const nbArrive  = achats.filter(a=>a.statut_livraison==="arrive").length;
+  const nbTransit = achats.filter(a=>(a.statut_livraison==="en_transit")||(a.statut==="en_cours"&&!a.statut_livraison)).length;
+  const nbArrive  = achats.filter(a=>(a.statut_livraison==="arrive")||(a.statut==="recu"&&!a.statut_livraison)).length;
   const taux_mb = ca ? Math.round(mb/ca*100) : 0;
   const taux_mn = ca ? Math.round(mn/ca*100) : 0;
 
@@ -8699,8 +8699,8 @@ async function envoyerRapportDirection(){
   const tauxMB   = ca ? Math.round(mb/ca*100) : 0;
   const tauxMN   = ca ? Math.round(mn/ca*100) : 0;
   const tauxRE   = ca ? Math.round(resultat/ca*100) : 0;
-  const nbTransit = achats.filter(a=>a.statut_livraison==="en_transit").length;
-  const nbArrive  = achats.filter(a=>a.statut_livraison==="arrive").length;
+  const nbTransit = achats.filter(a=>(a.statut_livraison==="en_transit")||(a.statut==="en_cours"&&!a.statut_livraison)).length;
+  const nbArrive  = achats.filter(a=>(a.statut_livraison==="arrive")||(a.statut==="recu"&&!a.statut_livraison)).length;
   const date = new Date().toLocaleDateString("fr-CI",{day:"2-digit",month:"long",year:"numeric"});
 
   const rapport = [
@@ -8778,11 +8778,11 @@ async function renderPerformanceAgents(){
   const agentStats = {};
   achats.filter(a=>a.enregistre_par && a.statut==="recu").forEach(a=>{
     const ag = a.enregistre_par;
-    if(!agentStats[ag]) agentStats[ag] = {nb:0, qte:0, montant:0, pertes:0, retards:0};
+    if(!agentStats[ag]) agentStats[ag] = {nb:0, qte:0, montant:0, pertes:0, pertes_transit:0, retards:0};
     agentStats[ag].nb++;
     agentStats[ag].qte += a.quantite||0;
     agentStats[ag].montant += (a.quantite||0)*(a.prix_unitaire||0);
-    agentStats[ag].pertes += a.perte_transit||0;
+    agentStats[ag].pertes_transit += a.perte_transit||0;
     if(a.date_arrivee_prevue && a.date_arrivee_reelle &&
        new Date(a.date_arrivee_reelle) > new Date(a.date_arrivee_prevue)) {
       agentStats[ag].retards++;
@@ -8801,8 +8801,12 @@ async function renderPerformanceAgents(){
       👤 Performance Agents Terrain
     </div>
     ${agents.map(([nom, s])=>{
-      const tauxPerte = s.qte ? (s.pertes/s.qte*100).toFixed(1) : 0;
-      const score = Math.max(0, 100 - (+tauxPerte*5) - (s.retards*10));
+      // Pertes sur stocks attribuables à cet agent
+      const pertesAgent = (pertesLots||[])
+        .filter(p=>p.enregistre_par===nom||p.constate_par===nom)
+        .reduce((sum,p)=>sum+(p.valeur_perte||0),0);
+      const tauxPerte = s.qte ? (s.pertes_transit/s.qte*100).toFixed(1) : 0;
+      const score = Math.max(0, 100 - (pertesAgent>5000?10:pertesAgent>0?5:0) - (s.retards*10));
       const couleur = score>=80?"var(--green-700)":score>=60?"var(--orange)":"var(--red)";
       return `<div class="card" style="margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
@@ -8820,9 +8824,9 @@ async function renderPerformanceAgents(){
             <div style="font-weight:700;">${fmt(s.qte)}</div>
             <div style="color:var(--gray-420);">Unités achetées</div>
           </div>
-          <div style="background:${+tauxPerte>5?"var(--red-50)":"var(--gray-50)"};border-radius:var(--r-sm);padding:6px;">
-            <div style="font-weight:700;color:${+tauxPerte>5?"var(--red)":"var(--text)"};">${tauxPerte}%</div>
-            <div style="color:var(--gray-420);">Taux perte</div>
+          <div style="background:${pertesAgent>0?"var(--red-50)":"var(--gray-50)"};border-radius:var(--r-sm);padding:6px;">
+            <div style="font-weight:700;color:${pertesAgent>0?"var(--red)":"var(--text)"};">${fmt(pertesAgent)} F</div>
+            <div style="color:var(--gray-420);">Pertes stocks</div>
           </div>
           <div style="background:${s.retards>0?"var(--orange-50)":"var(--gray-50)"};border-radius:var(--r-sm);padding:6px;">
             <div style="font-weight:700;color:${s.retards>0?"var(--orange-dark)":"var(--text)"};">${s.retards}</div>

@@ -8680,20 +8680,71 @@ async function renderDashboardDirection(){
 }
 
 async function envoyerRapportDirection(){
-  const btn = document.getElementById("rapport-status");
-  if(btn) btn.textContent = "⏳ Génération en cours…";
-  try {
-    const res = await fetch(`${SB_URL}/functions/v1/rapport-direction`,{
-      method:"POST", headers:{apikey:SB_KEY, Authorization:`Bearer ${SB_KEY}`, "content-type":"application/json"}
-    });
-    const d = await res.json();
-    if(btn) btn.textContent = d.envoye ? "✅ Rapport envoyé sur WhatsApp" : "📋 Rapport généré (WhatsApp non configuré)";
-    if(!d.envoye && d.rapport) {
-      showToast("Rapport généré — configurez le numéro WhatsApp direction", "warning");
+  const statusEl = document.getElementById("rapport-status");
+  if(statusEl) statusEl.textContent = "⏳ Génération du rapport…";
+
+  // Lire le numéro configuré
+  const numInput = document.getElementById("cfg_wa_dir");
+  let numero = numInput ? numInput.value.trim() : "";
+
+  // Construire le rapport en local (pas d'API nécessaire)
+  const fmt = v => Math.round(Number(v)||0).toLocaleString("fr-FR");
+  const ca       = totalVentes();
+  const mb       = margebrute();
+  const mn       = margenette();
+  const treso    = soldeCaisse(tousMouvementsCaisse());
+  const pertes   = (typeof totalPertesValeur==="function") ? totalPertesValeur() : 0;
+  const commiss  = (typeof totalCommissionsDues==="function") ? totalCommissionsDues() : 0;
+  const resultat = mn - pertes - commiss;
+  const tauxMB   = ca ? Math.round(mb/ca*100) : 0;
+  const tauxMN   = ca ? Math.round(mn/ca*100) : 0;
+  const tauxRE   = ca ? Math.round(resultat/ca*100) : 0;
+  const nbTransit = achats.filter(a=>a.statut_livraison==="en_transit").length;
+  const nbArrive  = achats.filter(a=>a.statut_livraison==="arrive").length;
+  const date = new Date().toLocaleDateString("fr-CI",{day:"2-digit",month:"long",year:"numeric"});
+
+  const rapport = [
+    "📊 *VerdApp CI — Rapport Financier*",
+    "_"+date+"_",
+    "",
+    "💰 *Chiffre d'Affaires* : "+fmt(ca)+" F",
+    "📈 *Marge brute* : "+fmt(mb)+" F ("+tauxMB+"%)",
+    "📉 *Marge nette* : "+fmt(mn)+" F ("+tauxMN+"%)",
+    "🏆 *Résultat exploitation* : "+fmt(resultat)+" F ("+tauxRE+"%)",
+    "💵 *Trésorerie* : "+fmt(treso)+" F",
+    "",
+    "📦 *Colis* : "+nbTransit+" en transit · "+nbArrive+" arrivés",
+    pertes>0 ? "⚠️ *Pertes* : "+fmt(pertes)+" F" : "✅ Aucune perte",
+    commiss>0 ? "👤 *Commissions* : "+fmt(commiss)+" F" : "",
+    "",
+    "_Rapport généré par VerdApp CI — SYSCOHADA_"
+  ].filter(Boolean).join("\n");
+
+  if(!numero){
+    // Pas de numéro configuré : copier le rapport dans le presse-papier
+    try {
+      await navigator.clipboard.writeText(rapport);
+      if(statusEl) statusEl.textContent = "📋 Rapport copié — colle-le dans WhatsApp";
+      showToast("Rapport copié dans le presse-papier");
+    } catch(e) {
+      if(statusEl) statusEl.innerHTML = '<textarea style="width:100%;height:120px;font-size:11px;border:1px solid var(--gray-200);border-radius:8px;padding:8px;">'+rapport+'</textarea>';
     }
-  } catch(e) {
-    if(btn) btn.textContent = "❌ Erreur : "+e.message;
+    return;
   }
+
+  // Formater le numéro pour wa.me
+  // 0747781453 → 225747781453 (CI)
+  let waNum = numero.replace(/[^0-9]/g,"");
+  if(waNum.startsWith("00")) waNum = waNum.slice(2);
+  if(waNum.startsWith("0") && waNum.length <= 10) waNum = "225" + waNum.slice(1);
+  if(!waNum.startsWith("225") && waNum.length <= 9) waNum = "225" + waNum;
+
+  // Ouvrir WhatsApp avec le rapport pré-rempli
+  const waUrl = "https://wa.me/"+waNum+"?text="+encodeURIComponent(rapport);
+  window.open(waUrl, "_blank");
+
+  if(statusEl) statusEl.textContent = "✅ WhatsApp ouvert avec le rapport";
+  showToast("WhatsApp ouvert — appuie sur Envoyer");
 }
 
 async function sauvegarderConfigAlertes(){
@@ -8826,12 +8877,48 @@ async function sauvegarderSeuilStock(produit, valeur){
 }
 
 async function testerAlerteStock(){
+  // Vérifier les seuils localement et ouvrir WhatsApp si alerte
   try {
-    const res = await fetch(`${SB_URL}/functions/v1/alertes-stock`,{
-      method:"POST", headers:{apikey:SB_KEY, Authorization:`Bearer ${SB_KEY}`, "content-type":"application/json"}
+    const seuilsRows = await sbSelect("seuils_stock");
+    const alertes = [];
+    (seuilsRows||[]).filter(s=>s.actif).forEach(s=>{
+      const stockActuel = stockDisponibleProduit(s.produit);
+      if(stockActuel <= s.seuil_min){
+        alertes.push("⚠️ *"+s.produit+"* : "+stockActuel+" unités restantes (seuil : "+s.seuil_min+")");
+      }
     });
-    const d = await res.json();
-    showToast(`🔔 ${d.alertes_stock} alerte(s) stock · ${d.retards} retard(s) · ${d.messages_envoyes} WA envoyé(s)`);
+
+    // Colis en retard
+    const maintenant = new Date().toISOString().slice(0,10);
+    const retards = achats.filter(a=>
+      a.statut_livraison==="en_transit" &&
+      a.date_arrivee_prevue &&
+      a.date_arrivee_prevue < maintenant
+    );
+    retards.forEach(a=>{
+      alertes.push("🚚 *"+a.produit+"* en retard — ETA "+a.date_arrivee_prevue+" dépassée");
+    });
+
+    if(!alertes.length){
+      showToast("✅ Aucune alerte — stock et colis OK");
+      return;
+    }
+
+    const numInput = document.getElementById("cfg_wa_alert") || document.getElementById("cfg_wa_dir");
+    let numero = numInput ? numInput.value.trim() : "";
+    const msg = "🔔 *VerdApp CI — Alertes*\n\n"+alertes.join("\n")+"\n\n_"+new Date().toLocaleDateString("fr-CI")+"_";
+
+    if(numero){
+      let waNum = numero.replace(/[^0-9]/g,"");
+      if(waNum.startsWith("00")) waNum = waNum.slice(2);
+      if(waNum.startsWith("0") && waNum.length<=10) waNum = "225"+waNum.slice(1);
+      if(!waNum.startsWith("225") && waNum.length<=9) waNum = "225"+waNum;
+      window.open("https://wa.me/"+waNum+"?text="+encodeURIComponent(msg),"_blank");
+      showToast(`🔔 ${alertes.length} alerte(s) — WhatsApp ouvert`);
+    } else {
+      await navigator.clipboard.writeText(msg).catch(()=>{});
+      showToast(`🔔 ${alertes.length} alerte(s) copiées — colle dans WhatsApp`);
+    }
   } catch(e){ showToast("Erreur : "+e.message,"error"); }
 }
 

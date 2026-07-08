@@ -3646,41 +3646,51 @@ function genererRapportFinancierPDF(){
     doc.setTextColor(20,20,20);
   };
 
-  // Ligne normale
+  // Ligne normale — caracteres ASCII uniquement pour compatibilite jsPDF
   const ligne = (label, valeur, opts={}) => {
     const isTotal  = opts.total;
-    const isNeg    = opts.neg;
     const isResult = opts.resultat;
-    const indent   = opts.indent || 0;
 
+    // Fond de la ligne totale
     if(isTotal){
-      doc.setFillColor(isResult ? (resultat>=0?13:180) : 13,
-                       isResult ? (resultat>=0?61:20) : 61,
-                       isResult ? (resultat>=0?26:20) : 26);
-      doc.setFillColor(isResult?(resultat>=0?232:255):(isTotal?240:255),
-                       isResult?(resultat>=0?244:235):(isTotal?244:255),
-                       isResult?(resultat>=0?232:235):(isTotal?240:255));
-      doc.rect(M, y-4.5, W-2*M, 7, "F");
+      const bgR = isResult?(resultat>=0?232:255):240;
+      const bgG = isResult?(resultat>=0?244:235):244;
+      const bgB = isResult?(resultat>=0?232:235):240;
+      doc.setFillColor(bgR, bgG, bgB);
+      doc.rect(M, y-5, W-2*M, 7.5, "F");
     }
 
+    // Texte label
     doc.setFontSize(isTotal?9.5:9);
     doc.setFont(undefined, isTotal?"bold":"normal");
-    doc.setTextColor(isTotal?(isResult?(resultat>=0?13:160):13):40,
-                     isTotal?(isResult?(resultat>=0?61:20):61):40,
-                     isTotal?(isResult?(resultat>=0?26:20):26):40);
-    doc.text(label, M+3+indent, y);
+    if(isTotal){
+      const r = isResult?(resultat>=0?13:160):13;
+      const g = isResult?(resultat>=0?61:20):61;
+      const b = isResult?(resultat>=0?26:20):26;
+      doc.setTextColor(r,g,b);
+    } else {
+      doc.setTextColor(60,60,60);
+    }
+    doc.text(label, M+3, y);
 
+    // Valeur (droite)
     doc.setFont(undefined, isTotal?"bold":"normal");
-    doc.setTextColor(isNeg?180:isTotal?(isResult?(resultat>=0?13:160):13):20,
-                     isNeg?20:isTotal?(isResult?(resultat>=0?61:20):61):20,
-                     isNeg?20:isTotal?(isResult?(resultat>=0?26:20):26):20);
+    if(isTotal){
+      const r = isResult?(resultat>=0?13:160):13;
+      const g = isResult?(resultat>=0?61:20):61;
+      const b = isResult?(resultat>=0?26:20):26;
+      doc.setTextColor(r,g,b);
+    } else {
+      // valeur negative en rouge discret
+      doc.setTextColor(valeur.startsWith("-")?150:40, valeur.startsWith("-")?20:40, valeur.startsWith("-")?20:40);
+    }
     doc.text(valeur, W-M-3, y, {align:"right"});
     y += isTotal?8:6.5;
 
-    // Ligne séparatrice légère sous les sous-totaux
+    // Separateur sous totaux
     if(isTotal){
-      doc.setDrawColor(200,200,200);
-      doc.line(M, y-1, W-M, y-1);
+      doc.setDrawColor(180,210,180);
+      doc.line(M, y-1.5, W-M, y-1.5);
     }
     doc.setTextColor(20,20,20);
   };
@@ -3688,14 +3698,14 @@ function genererRapportFinancierPDF(){
   sectionTitle("COMPTE DE RÉSULTAT — Soldes Intermédiaires de Gestion (SIG)");
 
   ligne("Chiffre d'affaires (CA)", fmtPDF(ca), {total:true});
-  ligne("  − Coût d'achat des marchandises vendues (FIFO)", "− "+fmtPDF(cmv), {indent:2, neg:true});
+  ligne("  - Coût d'achat des marchandises vendues (FIFO)", "- "+fmtPDF(cmv), {indent:2, neg:true});
   ligne("= MARGE BRUTE  ("+tauxB+"%)", fmtPDF(margeBrute), {total:true});
   doc.setDrawColor(13,61,26); doc.line(M, y-1, W-M, y-1);
-  ligne("  − Frais accessoires d'achat (transport, droits...)", "− "+fmtPDF(frais), {indent:2, neg:true});
+  ligne("  - Frais accessoires d'achat (transport, droits...)", "- "+fmtPDF(frais), {indent:2, neg:true});
   ligne("= MARGE NETTE COMMERCIALE  ("+tauxN+"%)", fmtPDF(margeNette), {total:true});
   doc.setDrawColor(13,61,26); doc.line(M, y-1, W-M, y-1);
-  ligne("  − Commissions terrain", "− "+fmtPDF(commissions), {indent:2, neg:true});
-  ligne("  − Pertes sur stocks", "− "+fmtPDF(pertesV), {indent:2, neg:true});
+  ligne("  - Commissions terrain", "- "+fmtPDF(commissions), {indent:2, neg:true});
+  ligne("  - Pertes sur stocks", "- "+fmtPDF(pertesV), {indent:2, neg:true});
   ligne("= RÉSULTAT D'EXPLOITATION  ("+tauxRE+"%)", fmtPDF(resultat), {total:true, resultat:true});
 
   y += 6;
@@ -3742,22 +3752,22 @@ function genererRapportFinancierPDF(){
   sectionTitle("DIAGNOSTIC AUTOMATIQUE");
 
   const diags = [];
-  if(tauxB>=30) diags.push({ico:"✓", txt:"Marge brute excellente ("+tauxB+"% ≥ 30%)", ok:true});
-  else if(tauxB>=20) diags.push({ico:"✓", txt:"Marge brute correcte ("+tauxB+"%)", ok:true});
-  else diags.push({ico:"!", txt:"Marge brute faible ("+tauxB+"% < 20%)", ok:false});
+  if(tauxB>=30) diags.push({ico:"[+]", txt:"Marge brute excellente ("+tauxB+"% >= 30%)", ok:true});
+  else if(tauxB>=20) diags.push({ico:"[+]", txt:"Marge brute correcte ("+tauxB+"%)", ok:true});
+  else diags.push({ico:"[!]", txt:"Marge brute faible ("+tauxB+"% < 20%)", ok:false});
 
-  if(tauxN>=20) diags.push({ico:"✓", txt:"Marge nette excellente ("+tauxN+"% ≥ 20%)", ok:true});
-  else if(tauxN>=10) diags.push({ico:"✓", txt:"Marge nette saine ("+tauxN+"%)", ok:true});
-  else diags.push({ico:"!", txt:"Marge nette insuffisante ("+tauxN+"% < 10%)", ok:false});
+  if(tauxN>=20) diags.push({ico:"[+]", txt:"Marge nette excellente ("+tauxN+"% >= 20%)", ok:true});
+  else if(tauxN>=10) diags.push({ico:"[+]", txt:"Marge nette saine ("+tauxN+"%)", ok:true});
+  else diags.push({ico:"[!]", txt:"Marge nette insuffisante ("+tauxN+"% < 10%)", ok:false});
 
-  if(resultat>0) diags.push({ico:"✓", txt:"Activité bénéficiaire — Résultat : "+fmtPDF(resultat), ok:true});
-  else diags.push({ico:"!", txt:"Résultat négatif — Revoir les charges", ok:false});
+  if(resultat>0) diags.push({ico:"[+]", txt:"Activité bénéficiaire — Résultat : "+fmtPDF(resultat), ok:true});
+  else diags.push({ico:"[!]", txt:"Résultat négatif — Revoir les charges", ok:false});
 
-  if(soldeTreso>0) diags.push({ico:"✓", txt:"Trésorerie positive : "+fmtPDF(soldeTreso), ok:true});
-  else diags.push({ico:"!", txt:"Trésorerie négative — Risque de cessation", ok:false});
+  if(soldeTreso>0) diags.push({ico:"[+]", txt:"Trésorerie positive : "+fmtPDF(soldeTreso), ok:true});
+  else diags.push({ico:"[!]", txt:"Trésorerie négative — Risque de cessation", ok:false});
 
-  if(pertesV>0) diags.push({ico:"!", txt:"Pertes sur stocks à réduire : "+fmtPDF(pertesV), ok:false});
-  if(totalDus>0) diags.push({ico:"!", txt:"Dettes fournisseurs en cours : "+fmtPDF(totalDus), ok:false});
+  if(pertesV>0) diags.push({ico:"[!]", txt:"Pertes sur stocks à réduire : "+fmtPDF(pertesV), ok:false});
+  if(totalDus>0) diags.push({ico:"[!]", txt:"Dettes fournisseurs en cours : "+fmtPDF(totalDus), ok:false});
 
   diags.forEach(d=>{
     doc.setFillColor(d.ok?238:255, d.ok?248:240, d.ok?238:240);
@@ -3797,9 +3807,9 @@ function genererRapportFinancierPDF(){
 // PRÉVISIONS saisies par l'utilisateur — l'app ne peut pas les deviner.
 //
 // Méthodes :
-//   ROI = (flux cumulés + valeur résiduelle − coût) / coût
+//   ROI = (flux cumulés + valeur résiduelle - coût) / coût
 //   Payback = coût / flux annuel (en années, si flux>0)
-//   VAN (NPV) = −coût + Σ flux_t/(1+i)^t + résiduelle/(1+i)^n
+//   VAN (NPV) = -coût + Σ flux_t/(1+i)^t + résiduelle/(1+i)^n
 //   TRI (IRR) = taux i tel que VAN = 0 (résolu par bissection)
 
 function vanInvest(inv){
@@ -3868,7 +3878,7 @@ function genererEcheancier(emp){
   const lignes = [];
   let capitalRestant = principal;
 
-  // Mensualité constante (annuités) : M = P·i / (1 − (1+i)^−n)
+  // Mensualité constante (annuités) : M = P·i / (1 - (1+i)^-n)
   let mensualiteConst = 0;
   if(methode==="annuites"){
     mensualiteConst = tauxMensuel>0
@@ -3911,14 +3921,14 @@ function totalRembourse(empruntId){
     .reduce((s,r)=>s+(+r.montant||0), 0);
 }
 
-/** Capital restant dû théorique (principal + intérêts − remboursé), version simple. */
+/** Capital restant dû théorique (principal + intérêts - remboursé), version simple. */
 function resteAPayerEmprunt(emp){
   const ech = genererEcheancier(emp);
   if(ech.length){
     const totalDu = ech.reduce((s,l)=>s+l.mensualite, 0);
     return Math.max(0, totalDu - totalRembourse(emp.id));
   }
-  // Emprunt libre : reste = principal − remboursé
+  // Emprunt libre : reste = principal - remboursé
   return Math.max(0, (+emp.montant_principal||0) - totalRembourse(emp.id));
 }
 
@@ -4004,7 +4014,7 @@ function renderInvestissements(){
         +kpi("TRI", tri!==null?tri.toFixed(1)+"%":"—", (tri!==null&&tri>=(+inv.taux_actualisation||0))?"var(--green-600)":"var(--red)")
       +'</div>'
       +'<div style="font-size:9px;color:var(--gray-420);margin-top:8px;">Flux annuel attendu : '+fmt(flux)+' · Valeur résiduelle : '+fmt(residuelle)+' · Taux d\'actualisation : '+(+inv.taux_actualisation||0)+'%'
-        +(tri!==null?' · TRI '+(tri>=(+inv.taux_actualisation||0)?'≥':'<')+' taux exigé → '+(tri>=(+inv.taux_actualisation||0)?'projet acceptable':'projet à rejeter'):'')+'</div>'
+        +(tri!==null?' · TRI '+(tri>=(+inv.taux_actualisation||0)?'>=':'<')+' taux exigé → '+(tri>=(+inv.taux_actualisation||0)?'projet acceptable':'projet à rejeter'):'')+'</div>'
     +'</div>';
   }).join('');
 
@@ -4013,7 +4023,7 @@ function renderInvestissements(){
       +'<div style="font-size:11px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.06em;">🏗 Investissements</div>'
       +'<button onclick="modalInvestissement()" style="background:var(--blue-700);color:#fff;border:none;border-radius:10px;padding:8px 14px;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;">+ Ajouter</button>'
     +'</div>'
-    +'<div style="font-size:10px;color:var(--gray-420);margin-bottom:12px;">VAN = valeur actuelle nette (positive = crée de la valeur). TRI = taux de rentabilité interne (acceptable si ≥ taux d\'actualisation exigé). Les flux sont des prévisions que vous saisissez.</div>'
+    +'<div style="font-size:10px;color:var(--gray-420);margin-bottom:12px;">VAN = valeur actuelle nette (positive = crée de la valeur). TRI = taux de rentabilité interne (acceptable si >= taux d\'actualisation exigé). Les flux sont des prévisions que vous saisissez.</div>'
     +(investissements.length ? cartes
       : '<div style="text-align:center;padding:20px;color:var(--gray-420);font-size:12px;background:var(--gray-50);border-radius:10px;">Aucun investissement enregistré.</div>');
 }
@@ -4075,7 +4085,7 @@ async function enregistrerInvestissement(){
     investissements.unshift(payload);
     saveInvestissements();
     logAdminAction("INVESTISSEMENT", libelle+" "+fmt(payload.cout_initial));
-    showToast("✓ Investissement enregistré");
+    showToast("[+] Investissement enregistré");
     closeModal();
     renderInvestissements();
   } catch(e) {
@@ -4091,7 +4101,7 @@ async function supprimerInvestissement(id){
     await sbDelete("investissements", id);
     investissements = investissements.filter(x=>x.id!==id);
     saveInvestissements();
-    showToast("✓ Supprimé");
+    showToast("[+] Supprimé");
     renderInvestissements();
   } catch(e) { showToast("Erreur : "+e.message,"error"); }
 }
@@ -4265,7 +4275,7 @@ async function enregistrerEmprunt(){
     emprunts.unshift(payload);
     saveEmprunts();
     logAdminAction("EMPRUNT", libelle+" "+fmt(montant));
-    showToast("✓ Emprunt enregistré");
+    showToast("[+] Emprunt enregistré");
     closeModal();
     renderEmprunts();
   } catch(e) {
@@ -4282,7 +4292,7 @@ async function supprimerEmprunt(id){
     emprunts = emprunts.filter(x=>x.id!==id);
     empruntsRemboursements = empruntsRemboursements.filter(r=>r.emprunt_id!==id);
     saveEmprunts(); saveEmpruntsRemboursements();
-    showToast("✓ Supprimé");
+    showToast("[+] Supprimé");
     renderEmprunts();
   } catch(e) { showToast("Erreur : "+e.message,"error"); }
 }
@@ -4303,7 +4313,7 @@ function voirEcheancier(id){
     const partielle = !couverte && cumulCouvert>0;
     const restPartiel = partielle ? cumulCouvert : 0;
     if(partielle) cumulCouvert = 0;
-    const statutTxt = couverte ? '<span style="color:var(--green-600);font-weight:700;">✓ payée</span>'
+    const statutTxt = couverte ? '<span style="color:var(--green-600);font-weight:700;">[+] payée</span>'
       : partielle ? '<span style="color:var(--orange-dark);font-weight:700;">partielle</span>'
       : '<span style="color:var(--gray-420);">à venir</span>';
     return '<tr style="border-bottom:1px solid var(--gray-150);font-size:10px;">'
@@ -4419,7 +4429,7 @@ async function enregistrerRemboursement(id){
       emp.statut = "solde"; saveEmprunts();
     }
     logAdminAction("REMBOURSEMENT", emp.libelle+" "+fmt(montant));
-    showToast("✓ Remboursement enregistré");
+    showToast("[+] Remboursement enregistré");
     closeModal();
     renderEmprunts();
   } catch(e) {
@@ -4463,7 +4473,7 @@ async function supprimerRemboursement(rid, empruntId){
     await sbDelete("emprunts_remboursements", rid);
     empruntsRemboursements = empruntsRemboursements.filter(r=>r.id!==rid);
     saveEmpruntsRemboursements();
-    showToast("✓ Supprimé");
+    showToast("[+] Supprimé");
     voirRemboursements(empruntId);
     renderEmprunts();
   } catch(e) { showToast("Erreur : "+e.message,"error"); }
@@ -4560,7 +4570,7 @@ async function lancerRegenerationJournal(){
   try {
     const n = await regenererJournalComptable(capital);
     logAdminAction("REGEN_JOURNAL", n+" écritures générées");
-    showToast("✓ Journal régénéré : "+n+" écritures");
+    showToast("[+] Journal régénéré : "+n+" écritures");
     voirJournalComptable();
   } catch(e) {
     msg.style.cssText="display:block;color:var(--red);"; msg.textContent="Erreur : "+e.message;
@@ -4658,8 +4668,8 @@ function renderDashboard(){
   const totalAv  = totalAvances();
   const totalV   = totalVentes();
   const totalDus = totalA - totalAv;
-  const marge       = margebrute();          // CA − coût marchandise pur
-  const margeNette  = margenette();          // CA − (marchandise + frais)
+  const marge       = margebrute();          // CA - coût marchandise pur
+  const margeNette  = margenette();          // CA - (marchandise + frais)
   const fraisTerrain = marge - margeNette;   // frais terrain imputés
   const totalPertes = totalPertesValeur();
   const totalCommiss = totalCommissionsDues();
@@ -4766,7 +4776,7 @@ function renderDashboard(){
     <div class="kpi-card" style="border-left:3px solid ${totalDus>0?'var(--red)':'var(--green-600)'};">
       <div class="kpi-card-label">Dû fournisseurs</div>
       <div class="kpi-card-value" style="color:${totalDus>0?'var(--red)':'var(--text)'};">${fmt(totalDus)}</div>
-      <div class="kpi-card-sub" style="color:${totalDus>0?'var(--red)':'var(--green-600)'};font-weight:700;">${totalDus>0?"⚠ À régler":"✓ Tout soldé"}</div>
+      <div class="kpi-card-sub" style="color:${totalDus>0?'var(--red)':'var(--green-600)'};font-weight:700;">${totalDus>0?"⚠ À régler":"[+] Tout soldé"}</div>
     </div>
     <div class="kpi-card" style="border-left:3px solid var(--orange);">
       <div class="kpi-card-label">Stocks en transit</div>
@@ -4823,7 +4833,7 @@ function renderDashboard(){
       <div style="background:${soldeTreso>=seuil?'var(--green-50)':'var(--red-50)'};border:1px solid ${soldeTreso>=seuil?'var(--green-bright3)':'var(--red-200)'};border-radius:var(--r);padding:14px;text-align:center;margin-bottom:10px;">
         <div style="font-size:var(--text-xs);color:var(--gray-500);font-weight:700;text-transform:uppercase;letter-spacing:.06em;">Solde de caisse</div>
         <div style="font-size:26px;font-weight:800;color:${soldeTreso>=0?'var(--green-700)':'var(--red)'};margin-top:4px;letter-spacing:-.02em;">${fmt(soldeTreso)}</div>
-        <div style="font-size:11px;color:var(--gray-500);margin-top:4px;">Encaissé ${fmt(encTotal)} − Décaissé ${fmt(decTotal)}</div>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:4px;">Encaissé ${fmt(encTotal)} - Décaissé ${fmt(decTotal)}</div>
       </div>
 
       <!-- Flux du mois courant, clairement étiquetés -->
@@ -4834,7 +4844,7 @@ function renderDashboard(){
           <div style="font-size:var(--text-xs);color:var(--gray-500);font-weight:600;margin-top:2px;">Encaissé</div>
         </div>
         <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r);padding:10px;text-align:center;">
-          <div style="font-size:15px;font-weight:800;color:var(--red);">−${fmt(decMois)}</div>
+          <div style="font-size:15px;font-weight:800;color:var(--red);">-${fmt(decMois)}</div>
           <div style="font-size:var(--text-xs);color:var(--gray-500);font-weight:600;margin-top:2px;">Décaissé</div>
         </div>
       </div>
@@ -4871,7 +4881,7 @@ function renderDashboard(){
       <div style="height:6px;background:var(--gray-150);border-radius:var(--r-pill);overflow:hidden;">
         <div style="height:100%;background:${gaugeColor};border-radius:var(--r-pill);width:${Math.min(taux,100)}%;transition:width .5s;"></div>
       </div>
-      <div style="font-size:9px;color:var(--gray-420);text-align:center;margin-top:6px;">Frais terrain : −${fmt(fraisTerrain)} · Pertes : −${fmt(totalPertes)} · Commissions : −${fmt(totalCommiss)}</div>
+      <div style="font-size:9px;color:var(--gray-420);text-align:center;margin-top:6px;">Frais terrain : -${fmt(fraisTerrain)} · Pertes : -${fmt(totalPertes)} · Commissions : -${fmt(totalCommiss)}</div>
     </div>
     <div class="card" style="margin-bottom:0;">
       <div class="label" style="margin-bottom:10px;">Santé de l'activité</div>
@@ -5011,7 +5021,7 @@ function renderDashboard(){
             ${regEffectue>0?`<div style="font-size:10px;color:var(--green-600);">Payé : ${fmt(regEffectue)}</div>`:""}
           </div>
         </div>
-        ${soldeNet>0&&isAdmin?`<button onclick="payerFournisseur('${f}',${soldeNet})" style="font-size:10px;font-weight:700;color:var(--green-600);background:var(--green-50);border:1px solid var(--green-bright3);border-radius:var(--r-sm);padding:3px 10px;cursor:pointer;font-family:inherit;width:100%;">✓ Marquer un paiement</button>`:""}
+        ${soldeNet>0&&isAdmin?`<button onclick="payerFournisseur('${f}',${soldeNet})" style="font-size:10px;font-weight:700;color:var(--green-600);background:var(--green-50);border:1px solid var(--green-bright3);border-radius:var(--r-sm);padding:3px 10px;cursor:pointer;font-family:inherit;width:100%;">[+] Marquer un paiement</button>`:""}
       </div>`;
     });
     html+=`</div>`;
@@ -5072,7 +5082,7 @@ function renderAchats(){
           <div style="display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2);margin-bottom:5px;">
             <span style="font-size:18px;">${getProduitIcon(a.produit)||"🌿"}</span>
             <span style="font-weight:800;color:var(--text);font-size:14px;">${a.produit}</span>
-            <span class="badge ${a.statut==="recu"?"b-lime":"b-amber"}">${a.statut==="recu"?"✓ Reçu":"⏳ Transit"}</span>
+            <span class="badge ${a.statut==="recu"?"b-lime":"b-amber"}">${a.statut==="recu"?"[+] Reçu":"⏳ Transit"}</span>
             <span class="badge b-stone">${a.unite}</span>
             ${a.numero_document?`<span class="badge b-stone" style="font-family:monospace;cursor:pointer;" onclick='genererDocumentPDF("achat",${JSON.stringify(a).replace(/'/g,"&#39;")})' title="Imprimer le bon de réception">🖨 ${a.numero_document}</span>`:""}
             ${hasPending?`<span class="badge b-orange">⏳ En révision</span>`:""}
@@ -5081,12 +5091,12 @@ function renderAchats(){
           <div style="display:flex;flex-wrap:wrap;gap:var(--sp-3);font-size:11px;">
             <span style="color:var(--green-mid);">${a.quantite} × ${fmt(a.prix_unitaire)}</span>
             <span style="color:var(--text);font-weight:600;">${fmt(total)}</span>
-            ${solde>0?`<span style="color:var(--red);font-weight:700;">Dû : ${fmt(solde)}</span>`:solde===0?`<span style="color:var(--green-600);font-weight:700;">✓ Soldé</span>`:""}
+            ${solde>0?`<span style="color:var(--red);font-weight:700;">Dû : ${fmt(solde)}</span>`:solde===0?`<span style="color:var(--green-600);font-weight:700;">[+] Soldé</span>`:""}
           </div>
           ${a.notes?`<div style="font-size:11px;color:var(--gray-500);font-style:italic;margin-top:4px;">${a.notes}</div>`:""}
         </div>
         <div style="display:flex;flex-direction:column;gap:var(--sp-2);">
-          ${a.statut==="en_cours" && currentUser?`<button onclick="marquerRecu('${a.id}')" class="icon-btn-green" title="Accuser réception">✓ Reçu</button>`:""}
+          ${a.statut==="en_cours" && currentUser?`<button onclick="marquerRecu('${a.id}')" class="icon-btn-green" title="Accuser réception">[+] Reçu</button>`:""}
           ${isAdmin&&!hasPending?`<button onclick="demandeModifAchat('${a.id}')" class="icon-btn-orange" title="Modifier">✏️</button>`:""}
           ${isAdmin&&!hasPending?`<button onclick="demandeSupprAchat('${a.id}')" class="icon-btn" title="Supprimer">🗑</button>`:""}
         </div>
@@ -5387,8 +5397,8 @@ function updatePerteCalc(coutRevient, prixAchat) {
   calcDiv.style.display="block";
   const elAchat = document.getElementById("cp_valAchat");
   const elRevient = document.getElementById("cp_valRevient");
-  if(elAchat) elAchat.textContent = "−"+fmt(qte*prixAchat);
-  if(elRevient) elRevient.textContent = "−"+fmt(qte*coutRevient);
+  if(elAchat) elAchat.textContent = "-"+fmt(qte*prixAchat);
+  if(elRevient) elRevient.textContent = "-"+fmt(qte*coutRevient);
 }
 
 async function enregistrerPerteLot(lotId, produit, fournisseur, qteRestante, coutRevient, prixAchat) {
@@ -5440,7 +5450,7 @@ async function enregistrerPerteLot(lotId, produit, fournisseur, qteRestante, cou
 
     logAdminAction("PERTE_LOT", produit+" · "+qte+"u · "+fmt(valeurPerte)+"F (lot:"+lotId+")");
 
-    showToast("✓ Perte enregistrée : "+qte+" u. · "+fmt(valeurPerte));
+    showToast("[+] Perte enregistrée : "+qte+" u. · "+fmt(valeurPerte));
     closeModal();
     renderStock();
 
@@ -5470,8 +5480,8 @@ function voirPertesLots() {
         +(p.modifie_par?'<div style="font-size:9px;color:var(--orange-dark);font-style:italic;">Modifié par '+p.modifie_par+' le '+p.modifie_le+'</div>':'')
       +'</div>'
       +'<div style="text-align:right;flex-shrink:0;">'
-        +'<div style="font-size:13px;font-weight:900;color:var(--red);">−'+p.qte_perte+' u.</div>'
-        +'<div style="font-size:11px;font-weight:700;color:var(--orange-dark);">−'+fmt(p.valeur_perte)+' F</div>'
+        +'<div style="font-size:13px;font-weight:900;color:var(--red);">-'+p.qte_perte+' u.</div>'
+        +'<div style="font-size:11px;font-weight:700;color:var(--orange-dark);">-'+fmt(p.valeur_perte)+' F</div>'
         +'<div style="font-size:9px;color:var(--gray-420);">Au '+( p.mode_valorisation==="revient"?"coût revient":"prix achat")+' : '+fmt(p.cout_unitaire)+'/u</div>'
         +'<button onclick="modalModifierPerte(\''+p.id+'\')" style="margin-top:4px;background:var(--gray-150);border:none;border-radius:var(--r-sm);padding:3px 9px;font-size:10px;font-weight:700;color:var(--green-mid);cursor:pointer;font-family:inherit;">✏ Modifier</button>'
       +'</div>'
@@ -5494,7 +5504,7 @@ function voirPertesLots() {
       +'</div>'
       +'<div style="background:var(--red-50);border:1.5px solid var(--red-200);border-radius:var(--r);padding:12px;text-align:center;">'
         +'<div style="font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.06em;">Valeur perdue</div>'
-        +'<div style="font-size:20px;font-weight:900;color:var(--red);margin-top:4px;">−'+fmt(totalVal)+' F</div>'
+        +'<div style="font-size:20px;font-weight:900;color:var(--red);margin-top:4px;">-'+fmt(totalVal)+' F</div>'
       +'</div>'
     +'</div>'
     +(all.length
@@ -5607,7 +5617,7 @@ async function enregistrerModifPerte(perteId) {
 
     logAdminAction("MODIF_PERTE", p.produit+" · "+ancienneQte+"→"+nouvelleQte+"u · "+fmt(nouvelleValeur)+"F (lot:"+p.lot_id+")");
 
-    showToast("✓ Perte corrigée : "+nouvelleQte+" u. · "+fmt(nouvelleValeur));
+    showToast("[+] Perte corrigée : "+nouvelleQte+" u. · "+fmt(nouvelleValeur));
     closeModal();
     // Recalcul en cascade : stock FIFO, marges, dashboard, commissions —
     // toutes ces vues relisent pertesLots/pertes dynamiquement au render().
@@ -5694,7 +5704,7 @@ function renderReconciliation(produit, produitsMvt){
   const ecartFinal = totalAchat - totalVente - totalPerte;
 
   const couleurType = {achat:"var(--green-700)", vente:"var(--blue-700)", perte:"var(--red)"};
-  const signeType = {achat:"+", vente:"−", perte:"−"};
+  const signeType = {achat:"+", vente:"-", perte:"-"};
 
   const lignesHtml = lignesData.map((m,i)=>{
     const estNegatif = m.soldeApres<0;
@@ -5731,8 +5741,8 @@ function renderReconciliation(produit, produitsMvt){
     // Synthèse
     +'<div style="display:flex;gap:var(--sp-2);margin-bottom:12px;">'
       +'<div style="flex:1;background:var(--green-50);border-radius:var(--r-sm);padding:8px;text-align:center;"><div style="font-weight:900;color:var(--green-700);font-size:14px;">+'+totalAchat+'</div><div style="font-size:9px;color:var(--gray-420);">Achats</div></div>'
-      +'<div style="flex:1;background:var(--blue-50);border-radius:var(--r-sm);padding:8px;text-align:center;"><div style="font-weight:900;color:var(--blue-700);font-size:14px;">−'+totalVente+'</div><div style="font-size:9px;color:var(--gray-420);">Ventes</div></div>'
-      +'<div style="flex:1;background:var(--red-50);border-radius:var(--r-sm);padding:8px;text-align:center;"><div style="font-weight:900;color:var(--red);font-size:14px;">−'+totalPerte+'</div><div style="font-size:9px;color:var(--gray-420);">Pertes</div></div>'
+      +'<div style="flex:1;background:var(--blue-50);border-radius:var(--r-sm);padding:8px;text-align:center;"><div style="font-weight:900;color:var(--blue-700);font-size:14px;">-'+totalVente+'</div><div style="font-size:9px;color:var(--gray-420);">Ventes</div></div>'
+      +'<div style="flex:1;background:var(--red-50);border-radius:var(--r-sm);padding:8px;text-align:center;"><div style="font-weight:900;color:var(--red);font-size:14px;">-'+totalPerte+'</div><div style="font-size:9px;color:var(--gray-420);">Pertes</div></div>'
       +'<div style="flex:1;background:'+(ecartFinal<0?'var(--red-50)':'var(--green-50)')+';border-radius:var(--r-sm);padding:8px;text-align:center;"><div style="font-weight:900;color:'+(ecartFinal<0?'var(--red)':'var(--green-700)')+';font-size:14px;">'+ecartFinal+'</div><div style="font-size:9px;color:var(--gray-420);">Stock</div></div>'
     +'</div>'
 
@@ -5744,7 +5754,7 @@ function renderReconciliation(produit, produitsMvt){
         +'Cela signifie qu\'une sortie (vente/perte) a été enregistrée sans entrée (achat) correspondante avant cette date. '
         +'Vérifiez : un achat reçu oublié avant cette date, ou une vente/perte saisie en trop ou en double.'
       +'</div>'
-      : '<div style="background:var(--green-50);border:1.5px solid var(--green-bright3);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:11px;color:var(--green-700);font-weight:700;">✓ Aucune incohérence : le stock reste positif sur toute la période.</div>')
+      : '<div style="background:var(--green-50);border:1.5px solid var(--green-bright3);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:11px;color:var(--green-700);font-weight:700;">[+] Aucune incohérence : le stock reste positif sur toute la période.</div>')
 
     // Tableau chronologique
     +'<div style="overflow-y:auto;max-height:45vh;">'
@@ -5878,7 +5888,7 @@ function renderStock(){
             const statutColor={epuise:"var(--gray-420)",partiel:"var(--orange-dark)",intact:"var(--green-700)"}[lot.statut]||"var(--text)";
             const statutBg={epuise:"var(--gray-150)",partiel:"var(--orange-50)",intact:"var(--green-50)"}[lot.statut]||"var(--gray-50)";
             const statutBorder={epuise:"var(--gray-150)",partiel:"var(--orange-100)",intact:"var(--green-bright3)"}[lot.statut]||"var(--gray-150)";
-            const statutLabel={epuise:"✓ Épuisé",partiel:"⟳ En cours",intact:"● En attente"}[lot.statut];
+            const statutLabel={epuise:"[+] Épuisé",partiel:"⟳ En cours",intact:"● En attente"}[lot.statut];
             const isCurrent = lot.statut==="partiel" || (lot.statut==="intact" && idx===fifo.lots.findIndex(l=>l.statut!=="epuise"));
             return '<div style="background:'+statutBg+';border:1.5px solid '+statutBorder+';border-radius:10px;padding:10px;margin-bottom:6px;'+(isCurrent?"box-shadow:0 0 0 2px var(--orange);":"")+'">'
               +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:var(--sp-2);">'
@@ -5950,7 +5960,7 @@ function renderDemandes(){
         <div>
           <div style="display:flex;flex-wrap:wrap;gap:var(--sp-2);align-items:center;margin-bottom:4px;">
             <span style="font-weight:700;color:var(--text);">${typeLabel} · ${tableLabel}</span>
-            <span class="badge ${d.statut==="en_attente"?"b-orange":d.statut==="accepte"?"b-lime":"b-red"}">${d.statut==="en_attente"?"En attente":d.statut==="accepte"?"✓ Accepté":"✗ Rejeté"}</span>
+            <span class="badge ${d.statut==="en_attente"?"b-orange":d.statut==="accepte"?"b-lime":"b-red"}">${d.statut==="en_attente"?"En attente":d.statut==="accepte"?"[+] Accepté":"✗ Rejeté"}</span>
           </div>
           <div style="font-size:11px;color:var(--green-mid);">${d.created_at?new Date(d.created_at).toLocaleDateString("fr-CI"):""}</div>
         </div>
@@ -5965,7 +5975,7 @@ function renderDemandes(){
       </div>`:""}
       ${d.message_rejet?`<div style="font-size:11px;color:var(--red);margin-bottom:8px;">Motif rejet : ${d.message_rejet}</div>`:""}
       ${isAdmin&&d.statut==="en_attente"?`<div style="display:flex;gap:var(--sp-2);">
-        <button class="btn btn-green" style="flex:1;" onclick="accepterDemande('${d.id}')">✓ Accepter</button>
+        <button class="btn btn-green" style="flex:1;" onclick="accepterDemande('${d.id}')">[+] Accepter</button>
         <button class="btn btn-red" style="flex:1;" onclick="rejeterDemande('${d.id}')">✗ Rejeter</button>
       </div>`:""}
     </div>`;
@@ -6061,7 +6071,7 @@ async function saveProduit(){
     await sbInsert("produits",payload);
     produits.push(payload); saveLocal();
     closeModal(); renderListeProduits();
-    showToast("✓ Produit ajouté");
+    showToast("[+] Produit ajouté");
   }catch(e){showToast("Erreur : "+e.message,"error");}
 }
 
@@ -6663,7 +6673,7 @@ function autoResize(el) {
 function saveWaLink() {
   const val = document.getElementById("waLinkInput")?.value.trim();
   localStorage.setItem("va_wa_link", val);
-  showToast("✓ Lien WhatsApp sauvegardé");
+  showToast("[+] Lien WhatsApp sauvegardé");
 }
 function openWhatsApp() {
   const link = localStorage.getItem("va_wa_link");
@@ -6708,7 +6718,7 @@ function exportAchatsCSV(){
   ]);
   const date = filtreAchatDate || new Date().toISOString().slice(0,7);
   downloadCSV(`VerdApp_Achats_${date}.csv`, rows, headers);
-  showToast(`✓ ${liste.length} achats exportés`);
+  showToast(`[+] ${liste.length} achats exportés`);
 }
 
 function exportVentesCSV(){
@@ -6725,7 +6735,7 @@ function exportVentesCSV(){
   });
   const date = filtreVenteDate || new Date().toISOString().slice(0,7);
   downloadCSV(`VerdApp_Ventes_${date}.csv`, rows, headers);
-  showToast(`✓ ${liste.length} ventes exportées`);
+  showToast(`[+] ${liste.length} ventes exportées`);
 }
 
 function exportDashboardCSV(){
@@ -6750,7 +6760,7 @@ function exportDashboardCSV(){
     ["Taux de marge", totalA>0?Math.round(((totalV-totalA)/totalA)*100)+"%" : "N/A"],
   ];
   downloadCSV(`VerdApp_Bilan_${mois}.csv`, rows, ["Indicateur","Valeur"]);
-  showToast("✓ Bilan exporté");
+  showToast("[+] Bilan exporté");
 }
 
 // ─── BILAN DU JOUR ────────────────────────────────────────────────────────────
@@ -6888,7 +6898,7 @@ async function enregistrerBudget(annee, mois){
     }
     saveBudgetsMensuels();
     logAdminAction("BUDGET_MENSUEL", annee+"-"+mois+" mis à jour");
-    showToast("✓ Budget enregistré");
+    showToast("[+] Budget enregistré");
     bilanFinancier("budget");
   } catch(e) {
     msg.style.cssText="display:block;color:var(--red);"; msg.textContent="Erreur : "+e.message;
@@ -6956,7 +6966,7 @@ function bilanFinancier(onglet, inline) {
     +'<div style="background:'+(solde>=0?'linear-gradient(135deg,var(--green-900d),var(--green-700))':'linear-gradient(135deg,#7f1d1d,#991b1b)')+';border-radius:var(--r);padding:12px;text-align:center;">'
       +'<div style="font-size:9px;font-weight:700;color:'+(solde>=0?'var(--green-bright2)':'var(--red-300)')+';text-transform:uppercase;letter-spacing:.1em;">Solde global</div>'
       +'<div style="font-size:15px;font-weight:900;color:#fff;margin-top:3px;">'+(solde>=0?'+':'')+fmt(solde)+'</div>'
-      +'<div style="font-size:9px;color:rgba(255,255,255,.6);margin-top:2px;">Ventes − Achats</div>'
+      +'<div style="font-size:9px;color:rgba(255,255,255,.6);margin-top:2px;">Ventes - Achats</div>'
     +'</div>'
     +'<div style="background:'+(margeN>=0?'linear-gradient(135deg,var(--green-900d),var(--green-700))':'linear-gradient(135deg,#7f1d1d,#991b1b)')+';border-radius:var(--r);padding:12px;text-align:center;">'
       +'<div style="font-size:9px;font-weight:700;color:'+(margeN>=0?'var(--green-bright2)':'var(--red-300)')+';text-transform:uppercase;letter-spacing:.1em;">Marge nette</div>'
@@ -7075,10 +7085,10 @@ function bilanFinancier(onglet, inline) {
   // ── COMPTE DE RÉSULTAT (SIG — Soldes Intermédiaires de Gestion) ──
   else if(bilanOnglet==="sig") {
     const ca          = totalV;
-    const coutMarchandiseVendu = ca - margeB;     // CA − marge brute = coût d'achat des marchandises vendues (FIFO)
-    const margeBrute  = margeB;                   // CA − CMV
+    const coutMarchandiseVendu = ca - margeB;     // CA - marge brute = coût d'achat des marchandises vendues (FIFO)
+    const margeBrute  = margeB;                   // CA - CMV
     const fraisAcc    = frais;                    // frais accessoires (transport, droit de terre, charrette)
-    const margeNetteCommerciale = margeN;         // CA − (CMV + frais)
+    const margeNetteCommerciale = margeN;         // CA - (CMV + frais)
     const totalPertesV = totalPertesValeur();
     const totalCommiss = totalCommissionsDues();
     const resultatExploitation = margeNetteCommerciale - totalPertesV - totalCommiss;
@@ -7119,7 +7129,7 @@ function bilanFinancier(onglet, inline) {
       return '<div style="display:flex;justify-content:space-between;align-items:center;padding:'+(isTotal?'10px 12px':'7px 12px')+';'
         +(isTotal?'background:var(--green-50);border:1.5px solid var(--green-bright3);border-radius:10px;margin:6px 0;':'border-bottom:1px solid var(--gray-150);')+'">'
         +'<span style="font-size:'+(isTotal?'12px':'11px')+';font-weight:'+(isTotal?'800':'600')+';color:'+(isTotal?'var(--text)':'var(--green-mid)')+';">'+label+'</span>'
-        +'<span style="font-size:'+(isTotal?'14px':'12px')+';font-weight:900;color:'+color+';">'+(isNeg?'− ':(isTotal&&montant>=0?'':''))+fmt(Math.abs(montant))+(opts.taux!==undefined?' <span style="font-size:var(--text-xs);font-weight:700;color:var(--gray-420);">('+opts.taux+'%)</span>':'')+'</span>'
+        +'<span style="font-size:'+(isTotal?'14px':'12px')+';font-weight:900;color:'+color+';">'+(isNeg?'- ':(isTotal&&montant>=0?'':''))+fmt(Math.abs(montant))+(opts.taux!==undefined?' <span style="font-size:var(--text-xs);font-weight:700;color:var(--gray-420);">('+opts.taux+'%)</span>':'')+'</span>'
       +'</div>';
     }
 
@@ -7132,7 +7142,7 @@ function bilanFinancier(onglet, inline) {
           +stockNegatifs.map(x=>
             '<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:5px 0;border-top:1px solid var(--red-200);">'
             +'<span style="font-weight:700;color:var(--text);">'+(getProduitIcon(x.produit)||"🌿")+' '+x.produit+'</span>'
-            +'<span style="color:var(--green-mid);">Achats '+x.qteAchat+' u. − Ventes '+x.qteVente+' u. − Pertes '+x.qtePerte+' u. = <span style="font-weight:900;color:var(--red);">'+x.ecart+' u.</span></span>'
+            +'<span style="color:var(--green-mid);">Achats '+x.qteAchat+' u. - Ventes '+x.qteVente+' u. - Pertes '+x.qtePerte+' u. = <span style="font-weight:900;color:var(--red);">'+x.ecart+' u.</span></span>'
             +'</div>'
           ).join('')
           +'<button onclick="ouvrirReconciliation(\''+stockNegatifs[0].produit+'\')" style="margin-top:10px;width:100%;background:var(--red);color:#fff;border:none;border-radius:10px;padding:9px;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;">🔍 Ouvrir l\'outil de réconciliation</button>'
@@ -7140,12 +7150,12 @@ function bilanFinancier(onglet, inline) {
         : '')
       +'<div style="background:#fff;border:1.5px solid var(--gray-150);border-radius:var(--r);padding:6px 4px;margin-bottom:16px;">'
         +ligneSIG("Chiffre d'affaires (CA)", ca)
-        +ligneSIG("− Coût d'achat des marchandises vendues (CMV, FIFO)", coutMarchandiseVendu, {neg:true})
+        +ligneSIG("- Coût d'achat des marchandises vendues (CMV, FIFO)", coutMarchandiseVendu, {neg:true})
         +ligneSIG("= MARGE BRUTE", margeBrute, {total:true, taux:tauxB})
-        +ligneSIG("− Frais accessoires d'achat (transport, droit de terre, charrette)", fraisAcc, {neg:true})
+        +ligneSIG("- Frais accessoires d'achat (transport, droit de terre, charrette)", fraisAcc, {neg:true})
         +ligneSIG("= MARGE NETTE COMMERCIALE", margeNetteCommerciale, {total:true, taux:tauxN})
-        +ligneSIG("− Commissions versées au personnel terrain", totalCommiss, {neg:true})
-        +ligneSIG("− Pertes sur stocks", totalPertesV, {neg:true})
+        +ligneSIG("- Commissions versées au personnel terrain", totalCommiss, {neg:true})
+        +ligneSIG("- Pertes sur stocks", totalPertesV, {neg:true})
         +ligneSIG("= RÉSULTAT D'EXPLOITATION", resultatExploitation, {total:true, taux:tauxRE})
       +'</div>'
       +'<div style="font-size:10px;color:var(--gray-420);margin-bottom:16px;">Le résultat d\'exploitation ne tient pas compte des charges fiscales (patente, impôts) ni des charges fixes générales (loyer, personnel administratif, amortissements), à intégrer par le comptable en charge de la comptabilité légale.</div>'
@@ -7214,7 +7224,7 @@ function bilanFinancier(onglet, inline) {
         +'<div style="font-size:11px;color:var(--green-mid);margin-bottom:8px;">Charges fixes estimées (commissions + pertes) : <b>'+fmt(chargesFixesProxy)+' F</b> · Taux de marge brute / CA : <b>'+Math.round(tauxMargeSurCA*100)+'%</b></div>'
         +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2);">'
           +ratioCard("CA minimum requis", fmt(seuilRentabilite), ca>=seuilRentabilite, "Pour couvrir les charges fixes")
-          +ratioCard("Marge de sécurité", (margeSecurite>=0?'+':'')+fmt(margeSecurite), margeSecurite>=0, "CA actuel − Seuil ("+tauxMargeSecurite+"%)")
+          +ratioCard("Marge de sécurité", (margeSecurite>=0?'+':'')+fmt(margeSecurite), margeSecurite>=0, "CA actuel - Seuil ("+tauxMargeSecurite+"%)")
         +'</div>'
         +'<div style="font-size:10px;color:var(--gray-420);margin-top:8px;">Cette estimation utilise commissions + pertes comme proxy des charges fixes. Pour un calcul précis, saisissez vos charges fixes réelles (loyer, salaires administratifs, etc.) dans l\'onglet Budget.</div>'
       +'</div>';
@@ -7319,8 +7329,8 @@ function bilanFinancier(onglet, inline) {
                   +'<div style="font-size:10px;color:var(--gray-420);">Qté perdue : '+o.qte+' unités · Valeur : '+fmt(o.val)+'</div>'
                 +'</div>'
                 +'<div style="text-align:right;">'
-                  +'<div style="font-size:14px;font-weight:900;color:var(--red);">−'+o.qte+'</div>'
-                  +'<div style="font-size:10px;color:var(--gray-420);">−'+fmt(o.val)+'</div>'
+                  +'<div style="font-size:14px;font-weight:900;color:var(--red);">-'+o.qte+'</div>'
+                  +'<div style="font-size:10px;color:var(--gray-420);">-'+fmt(o.val)+'</div>'
                 +'</div>'
               +'</div>';
             }).join("")
@@ -7342,8 +7352,8 @@ function bilanFinancier(onglet, inline) {
                     +'<div style="font-size:10px;color:var(--gray-420);">Perte le '+(l.date||"")+(l.date_reception?' · reçu le '+l.date_reception:'')+'</div>'
                   +'</div>'
                   +'<div style="text-align:right;flex-shrink:0;margin-left:8px;">'
-                    +'<div style="font-size:13px;font-weight:900;color:var(--orange-dark);">−'+(l.qte_perte||0)+' u.</div>'
-                    +'<div style="font-size:10px;color:var(--gray-420);">−'+fmt(l.valeur_perte||0)+'</div>'
+                    +'<div style="font-size:13px;font-weight:900;color:var(--orange-dark);">-'+(l.qte_perte||0)+' u.</div>'
+                    +'<div style="font-size:10px;color:var(--gray-420);">-'+fmt(l.valeur_perte||0)+'</div>'
                   +'</div>'
                 +'</div>'
               +'</div>';
@@ -7428,7 +7438,7 @@ function exportBilanCSV(){
     }),
   ];
   downloadCSV("VerdApp_BilanFinancier_"+new Date().toISOString().slice(0,10)+".csv", rows, []);
-  showToast("✓ Bilan exporté");
+  showToast("[+] Bilan exporté");
 }
 
 function partagerBilanWA(j,totalA,totalV,margeB,nbA,nbV){
@@ -7448,7 +7458,7 @@ function partagerBilanWA(j,totalA,totalV,margeB,nbA,nbV){
 
 function payerFournisseur(fournisseur, soldeNet){
   showModal(`
-    <div style="font-size:17px;font-weight:800;color:var(--text);margin-bottom:4px;">✓ Marquer un paiement</div>
+    <div style="font-size:17px;font-weight:800;color:var(--text);margin-bottom:4px;">[+] Marquer un paiement</div>
     <div style="font-size:12px;color:var(--green-mid);margin-bottom:20px;">Fournisseur : <strong>${fournisseur}</strong> · Solde : <strong>${fmt(soldeNet)}</strong></div>
     <div style="margin-bottom:14px;">
       <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:5px;">Montant payé (F) *</label>
@@ -7463,7 +7473,7 @@ function payerFournisseur(fournisseur, soldeNet){
       <input type="text" id="reg-note" placeholder="Ex: Virement MTN, espèces..." style="width:100%;padding:11px 14px;border:1.5px solid var(--gray-200);border-radius:var(--r);font-size:14px;font-family:inherit;"/>
     </div>
     <div style="display:flex;gap:var(--sp-3);">
-      <button onclick="confirmerReglement('${fournisseur}')" style="flex:1;padding:13px;background:linear-gradient(135deg,var(--green-700),var(--green-mid2));color:#fff;border:none;border-radius:var(--r);font-weight:700;font-size:14px;cursor:pointer;font-family:inherit;">✓ Confirmer le paiement</button>
+      <button onclick="confirmerReglement('${fournisseur}')" style="flex:1;padding:13px;background:linear-gradient(135deg,var(--green-700),var(--green-mid2));color:#fff;border:none;border-radius:var(--r);font-weight:700;font-size:14px;cursor:pointer;font-family:inherit;">[+] Confirmer le paiement</button>
       <button onclick="closeModal()" style="padding:13px 18px;background:var(--gray-150);border:none;border-radius:var(--r);cursor:pointer;font-family:inherit;color:var(--green-mid);font-weight:600;">Annuler</button>
     </div>
   `);
@@ -7485,7 +7495,7 @@ async function confirmerReglement(fournisseur){
   } catch(e){ /* pas bloquant */ }
 
   closeModal();
-  showToast(`✓ Paiement de ${fmt(montant)} enregistré pour ${fournisseur}`);
+  showToast(`[+] Paiement de ${fmt(montant)} enregistré pour ${fournisseur}`);
   render();
 }
 
@@ -7711,7 +7721,7 @@ function detailMarge(onglet) {
       +jaugeMarge(global.tauxN)
       +'<div style="font-size:11px;font-weight:700;color:var(--text);margin-top:2px;">Marge nette globale</div>'
       +'<div style="font-size:14px;font-weight:900;color:'+couleurMarge(global.tauxN)+';margin-top:2px;">'+fmt(global.margeN)+'</div>'
-      +'<div style="font-size:9px;color:var(--gray-420);">Frais : −'+fmt(global.frais)+'</div>'
+      +'<div style="font-size:9px;color:var(--gray-420);">Frais : -'+fmt(global.frais)+'</div>'
     +'</div>'
     +'</div>';
 
@@ -7720,9 +7730,9 @@ function detailMarge(onglet) {
     '<div style="background:var(--gray-50);border-radius:14px;padding:14px;margin-bottom:18px;">'
     +'<div style="font-size:11px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Décomposition</div>'
     +ligneDecomp("Chiffre d'affaires (CA)",global.ca,"var(--blue-700)","",false)
-    +ligneDecomp("Coût d'achat marchandise (FIFO)",global.coutAch,"var(--red)","−",false)
+    +ligneDecomp("Coût d'achat marchandise (FIFO)",global.coutAch,"var(--red)","-",false)
     +ligneDecomp("Marge brute  ("+global.tauxB+"%)",global.margeB,couleurMarge(global.tauxB),global.margeB>=0?"+":"",false)
-    +ligneDecomp("Frais terrain (transport, droits…)",global.frais,"var(--orange-dark)","−",false)
+    +ligneDecomp("Frais terrain (transport, droits…)",global.frais,"var(--orange-dark)","-",false)
     +ligneDecomp("Marge nette  ("+global.tauxN+"%)",global.margeN,couleurMarge(global.tauxN),global.margeN>=0?"+":"",true)
     +'</div>';
 
@@ -7881,7 +7891,7 @@ function detailMarge(onglet) {
                   +'<div style="font-size:10px;color:var(--gray-420);">Marge brute ('+m.tauxB+'%)</div>'
                 +'</div>'
                 +'<div style="background:var(--orange-50);border-radius:10px;padding:10px;text-align:center;">'
-                  +'<div style="font-size:14px;font-weight:900;color:var(--orange-dark);">−'+fmt(m.frais)+'</div>'
+                  +'<div style="font-size:14px;font-weight:900;color:var(--orange-dark);">-'+fmt(m.frais)+'</div>'
                   +'<div style="font-size:10px;color:var(--gray-420);">Frais terrain</div>'
                 +'</div>'
                 +'<div style="background:'+bgMarge(m.tauxN)+';border-radius:10px;padding:10px;text-align:center;">'
@@ -7950,7 +7960,7 @@ function exportMargeCSV(){
 
   const d = new Date().toISOString().slice(0,10);
   downloadCSV("VerdApp_AnalyseMarge_"+d+".csv", rows, []);
-  showToast("✓ Analyse marge exportée");
+  showToast("[+] Analyse marge exportée");
 }
 
 
@@ -8110,7 +8120,7 @@ function afficherApp() {
   document.getElementById("loginScreen").style.display = "none";
   document.getElementById("main").style.display = "";
   document.getElementById("topbar") && (document.getElementById("topbar").style.display = "");
-  // Respecter le responsive : sidebar desktop (≥768px) uniquement, bottomnav mobile uniquement
+  // Respecter le responsive : sidebar desktop (>=768px) uniquement, bottomnav mobile uniquement
   const isDesktop = window.innerWidth >= 768;
   const sidebar   = document.getElementById("sidebar");
   const bottomnav = document.getElementById("bottomnav");
@@ -8194,7 +8204,7 @@ function ouvrirCreerUtilisateur() {
     +'<div style="margin-bottom:20px;"><label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:5px;">Code PIN * (4 à 8 chiffres)</label>'
     +'<input type="password" id="edit-upin" inputmode="numeric" maxlength="8" placeholder="••••" style="width:100%;padding:12px;border:1.5px solid var(--green-pale);border-radius:var(--r);font-family:inherit;font-size:18px;text-align:center;letter-spacing:.4em;"/></div>'
     +'<div style="display:flex;gap:var(--sp-3);">'
-    +'<button onclick="sauvegarderUtilisateur()" style="flex:1;padding:13px;background:var(--green-800);color:#fff;border:none;border-radius:var(--r);font-weight:700;font-size:14px;cursor:pointer;font-family:inherit;">✓ Créer l\'utilisateur</button>'
+    +'<button onclick="sauvegarderUtilisateur()" style="flex:1;padding:13px;background:var(--green-800);color:#fff;border:none;border-radius:var(--r);font-weight:700;font-size:14px;cursor:pointer;font-family:inherit;">[+] Créer l\'utilisateur</button>'
     +'<button onclick="closeModal()" style="padding:13px 18px;background:var(--gray-150);border:none;border-radius:var(--r);cursor:pointer;font-family:inherit;font-weight:600;color:var(--green-mid);">Annuler</button>'
     +'</div>'
     +'<div id="user-form-msg" style="display:none;margin-top:10px;font-size:12px;font-weight:700;text-align:center;"></div>'
@@ -8222,7 +8232,7 @@ async function ouvrirModifierUtilisateur(id) {
       +'<div style="margin-bottom:20px;"><label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:5px;">Nouveau PIN (laisser vide pour garder l\'actuel)</label>'
       +'<input type="password" id="edit-upin" inputmode="numeric" maxlength="8" placeholder="Nouveau PIN..." style="width:100%;padding:12px;border:1.5px solid var(--green-pale);border-radius:var(--r);font-family:inherit;font-size:18px;text-align:center;letter-spacing:.4em;"/></div>'
       +'<div style="display:flex;gap:var(--sp-3);">'
-      +'<button onclick="sauvegarderUtilisateur()" style="flex:1;padding:13px;background:var(--green-800);color:#fff;border:none;border-radius:var(--r);font-weight:700;font-size:14px;cursor:pointer;font-family:inherit;">✓ Enregistrer</button>'
+      +'<button onclick="sauvegarderUtilisateur()" style="flex:1;padding:13px;background:var(--green-800);color:#fff;border:none;border-radius:var(--r);font-weight:700;font-size:14px;cursor:pointer;font-family:inherit;">[+] Enregistrer</button>'
       +'<button onclick="closeModal()" style="padding:13px 18px;background:var(--gray-150);border:none;border-radius:var(--r);cursor:pointer;font-family:inherit;font-weight:600;color:var(--green-mid);">Annuler</button>'
       +'</div>'
       +'<div id="user-form-msg" style="display:none;margin-top:10px;font-size:12px;font-weight:700;text-align:center;"></div>'
@@ -8249,12 +8259,12 @@ async function sauvegarderUtilisateur() {
       if(pin) data.pin_hash = await hashPin(pin);
       await sbUpdateUser(id, data);
       logAdminAction("USER_EDIT","Modification : "+nom);
-      showToast("✓ Utilisateur modifié");
+      showToast("[+] Utilisateur modifié");
     } else {
       const pin_hash = await hashPin(pin);
       await sbCreateUser({id:genUUID(), nom, role, pin_hash, actif:true});
       logAdminAction("USER_CREATE","Création : "+nom+" ("+role+")");
-      showToast("✓ Utilisateur créé");
+      showToast("[+] Utilisateur créé");
     }
     await renderGestionUtilisateurs();
   } catch(e) {
@@ -8315,7 +8325,7 @@ setInterval(()=>{
 const LIVRAISON_STEPS = [
   {id:"en_transit", label:"En transit", icon:"🚚", color:"var(--orange)"},
   {id:"arrive",     label:"Arrivé",     icon:"📦", color:"var(--green-700)"},
-  {id:"vendu",      label:"Vendu",      icon:"✓",  color:"var(--green-800)"},
+  {id:"vendu",      label:"Vendu",      icon:"[+]",  color:"var(--green-800)"},
 ];
 
 function renderSuiviColis(){
@@ -8379,7 +8389,7 @@ function renderSuiviColis(){
   html += `<div style="display:flex;gap:var(--sp-2);margin-bottom:12px;flex-wrap:wrap;">
     ${["tous","en_transit","arrive","vendu"].map(f=>
       `<button id="cf_${f}" class="filter-btn" onclick="filtreColisChanged('${f}')">${
-        f==="tous"?"Tous":f==="en_transit"?"🚚 En transit":f==="arrive"?"📦 Arrivés":"✓ Vendus"
+        f==="tous"?"Tous":f==="en_transit"?"🚚 En transit":f==="arrive"?"📦 Arrivés":"[+] Vendus"
       }</button>`
     ).join("")}
   </div>
@@ -8421,7 +8431,7 @@ function renderListeColis(filtre){
     const estRetard = isTransit && a.date_arrivee_prevue && new Date(a.date_arrivee_prevue) < new Date();
 
     const stepColor = isVendu?"var(--green-800)":isArrive?"var(--green-700)":"var(--orange)";
-    const stepIcon  = isVendu?"✓":isArrive?"📦":"🚚";
+    const stepIcon  = isVendu?"[+]":isArrive?"📦":"🚚";
     const stepLabel = isVendu?"Vendu":isArrive?"Arrivé à Adjamé":"En transit";
 
     // Barre de progression
@@ -8445,7 +8455,7 @@ function renderListeColis(filtre){
       <!-- Barre de progression -->
       <div style="margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--gray-420);margin-bottom:4px;">
-          <span>🌱 Champ</span><span>🚚 Transit</span><span>📦 Adjamé</span><span>✓ Vendu</span>
+          <span>🌱 Champ</span><span>🚚 Transit</span><span>📦 Adjamé</span><span>[+] Vendu</span>
         </div>
         <div style="background:var(--gray-150);border-radius:var(--r-pill);height:6px;">
           <div style="background:${stepColor};width:${pct}%;height:6px;border-radius:var(--r-pill);transition:width .4s;"></div>
@@ -8476,7 +8486,7 @@ function renderListeColis(filtre){
       ${isAdminLevel() && isArrive ? `
         <div style="display:flex;gap:var(--sp-2);">
           <button onclick="marquerVenduColis('${a.id}')" style="font-size:11px;padding:6px 12px;background:var(--gray-100);color:var(--gray-500);border:1px solid var(--gray-200);border-radius:var(--r-sm);cursor:pointer;font-family:inherit;font-weight:700;">
-            ✓ Marquer vendu
+            [+] Marquer vendu
           </button>
         </div>` : ""}
     </div>`;
@@ -8505,8 +8515,8 @@ async function marquerArriveColis(id){
     saveLocal(); render();
     const perte = a.quantite - qte;
     const msg = numeroBR
-      ? `✓ Arrivée confirmée — ${numeroBR}${perte>0?" — ⚠️ "+perte+" unités manquantes":""}`
-      : `✓ Arrivée confirmée${perte>0?" — ⚠️ "+perte+" unités manquantes":""}`;
+      ? `[+] Arrivée confirmée — ${numeroBR}${perte>0?" — ⚠️ "+perte+" unités manquantes":""}`
+      : `[+] Arrivée confirmée${perte>0?" — ⚠️ "+perte+" unités manquantes":""}`;
     showToast(msg, perte>0?"warning":"success");
     renderSuiviColis();
   }catch(e){ showToast("Erreur : "+e.message,"error"); }
@@ -8518,7 +8528,7 @@ async function marquerVenduColis(id){
     await sbUpdate("achats", id, {statut_livraison:"vendu"});
     achats = achats.map(x=>x.id===id?{...x,statut_livraison:"vendu"}:x);
     saveLocal();
-    showToast("✓ Colis marqué vendu");
+    showToast("[+] Colis marqué vendu");
     renderSuiviColis();
   }catch(e){ showToast("Erreur : "+e.message,"error"); }
 }
@@ -9014,7 +9024,7 @@ async function renderCockpitFinancier(){
     <div style="background:#fff;border:1px solid var(--gray-200);border-radius:var(--r);padding:13px 14px;margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;margin-bottom:8px">
         <span style="font-size:.68rem;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-mid);font-weight:600">Seuil de rentabilité</span>
-        <span style="font-weight:700;font-size:.82rem;color:${marge_sec>=0?'var(--green-700b)':'var(--red-600)'}">${marge_sec>=0?"✓ Rentable":"✗ Sous le point mort"}</span>
+        <span style="font-weight:700;font-size:.82rem;color:${marge_sec>=0?'var(--green-700b)':'var(--red-600)'}">${marge_sec>=0?"[+] Rentable":"✗ Sous le point mort"}</span>
       </div>
       <div style="position:relative;height:12px;background:var(--green-50);border-radius:var(--r-sm);overflow:hidden">
         <div style="height:100%;width:${Math.min(100,ca/maxBar*100)}%;background:linear-gradient(90deg,var(--green-800),var(--green-700));border-radius:var(--r-sm)"></div>

@@ -3513,9 +3513,7 @@ function renderTiers(){
     const total=(a.quantite||0)*(a.prix_unitaire||0)+frais;
     fournMap[nom].montant += total;
     fournMap[nom].nb += 1;
-    // Règlements séparés par fournisseur
-      const _regFourn = reglements.filter(r=>r.fournisseur===nom).reduce((s,r)=>s+(r.montant||0),0);
-      fournMap[nom].du += Math.max(0, total - (a.avance_paye||0) - _regFourn);
+    fournMap[nom].du += Math.max(0, total - (a.avance_paye||0));
   });
   const fournisseurs = Object.values(fournMap).sort((a,b)=>b.montant-a.montant);
   const achatTotal = fournisseurs.reduce((s,f)=>s+f.montant,0)||1;
@@ -4726,13 +4724,14 @@ function renderDashboard(){
 
   // Fournisseurs dus
   const dusFourn={};
-  // Inclure les règlements séparés (table reglements_fournisseurs)
-  const _regParFourn={};
-  reglements.forEach(r=>{_regParFourn[r.fournisseur]=(_regParFourn[r.fournisseur]||0)+(r.montant||0);});
+  // dusFourn = brut par fournisseur (achats - avances)
+  // Les règlements seront soustraits UNE SEULE FOIS dans l'affichage
   achats.forEach(a=>{
-    const d=Math.max(0, a.quantite*a.prix_unitaire-(a.avance_paye||0)-(_regParFourn[a.fournisseur]||0));
-    if(d>0) dusFourn[a.fournisseur]=(dusFourn[a.fournisseur]||0)+d;
+    const d=a.quantite*a.prix_unitaire-(a.avance_paye||0);
+    dusFourn[a.fournisseur]=(dusFourn[a.fournisseur]||0)+d;
   });
+  // Ne garder que les fournisseurs avec un brut positif
+  Object.keys(dusFourn).forEach(f=>{ if(dusFourn[f]<=0) delete dusFourn[f]; });
 
   // Jauge SVG taux marge
   const GAUGE_R=54, GAUGE_CX=70, GAUGE_CY=70;
@@ -5106,8 +5105,7 @@ function renderAchats(){
   if(!liste.length){html+=`<div style="text-align:center;padding:40px 0;color:var(--green-mid);font-size:13px;">Aucun achat</div>`;}
   else liste.forEach(a=>{
     const total=a.quantite*a.prix_unitaire;
-      const _rFourn=reglements.filter(r=>r.fournisseur===a.fournisseur).reduce((s,r)=>s+(r.montant||0),0);
-      const solde=Math.max(0,total-(a.avance_paye||0)-_rFourn);
+      const solde=Math.max(0,total-(a.avance_paye||0));  // règlements gérés au niveau fournisseur
     const hasPending=demandes.some(d=>d.enregistrement_id===a.id&&d.statut==="en_attente");
     html+=`<div class="card">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:var(--sp-2);">

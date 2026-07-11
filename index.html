@@ -115,7 +115,7 @@ document.addEventListener("DOMContentLoaded",()=>{
 }
 
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0;}
-body{font-family:'Inter',sans-serif;background:var(--gray-100);color:var(--text);overscroll-behavior:none;min-height:100vh;}
+body{font-family:'Inter',sans-serif;background:var(--gray-100);color:var(--text);overscroll-behavior:none;min-height:100vh;padding-bottom:env(safe-area-inset-bottom,0);}
 
 /* ── INPUTS ── */
 input,select,textarea{
@@ -160,7 +160,7 @@ select option{background:var(--white);color:var(--text);}
 .nav-icon{font-size:16px;width:20px;text-align:center;flex-shrink:0;}
 
 /* ── BOTTOM NAV (mobile only) ── */
-#bottomnav{
+#bottomnav{touch-action:manipulation;
   position:fixed;bottom:0;left:0;right:0;z-index:50;
   background:linear-gradient(180deg,var(--green-800),#061a0b);
   border-top:1px solid rgba(255,255,255,.08);
@@ -186,7 +186,7 @@ select option{background:var(--white);color:var(--text);}
 /* ── DESKTOP LAYOUT ── */
 @media(min-width:768px){
   #sidebar{display:block;}
-  #bottomnav{display:none;}
+  #bottomnav{touch-action:manipulation;display:none;}
   #main{
     margin-left:var(--sidebar-w);
     max-width:none;
@@ -1240,6 +1240,18 @@ function showToast(msg,type="ok"){
 }
 
 // ─── SUPABASE ────────────────────────────────────────────────────────────────
+
+// ── Helper universel statut livraison ──────────────────────────────────────
+// Lit statut_livraison si disponible dans le cache, sinon déduit depuis statut.
+// Garantit que le suivi colis fonctionne même sans le nouveau champ en cache.
+function getStatutLivraison(a){
+  if(a.statut_livraison) return a.statut_livraison;
+  if(a.statut === "recu")     return "arrive";
+  if(a.statut === "en_cours") return "en_transit";
+  return "en_transit";
+}
+// ───────────────────────────────────────────────────────────────────────────
+
 async function sbGet(table,params=""){
   const r=await sbFetch(`/rest/v1/${table}?order=created_at.desc${params}`);
   if(!r.ok) throw new Error(await r.text());
@@ -1332,7 +1344,7 @@ function showModal(html){
   const box=getEl("modalBox");
   box.innerHTML=html;
   getEl("modalOverlay").style.display="flex";
-  setTimeout(()=>{ attachCalcEvents(); box.focus(); }, 50);
+  setTimeout(()=>{ attachCalcEvents(); box.focus(); }, 200);
 }
 function closeModal(){getEl("modalOverlay").style.display="none";}
 document.addEventListener("keydown",e=>{ if(e.key==="Escape"&&getEl("modalOverlay")?.style.display==="flex") closeModal(); });
@@ -1429,9 +1441,9 @@ function buildAchatForm(data, onSubmit, submitLabel){
     <div class="form-block">
       <div class="form-block-title">2. Quantité et paiement</div>
       <div class="form-grid">
-        <div><label class="label" for="af_qte">Quantité *</label><input type="number" id="af_qte" min="1" step="1" value="${data.quantite||''}" placeholder="50" inputmode="numeric" required/></div>
-        <div><label class="label" for="af_prix">Prix unitaire (F) *</label><input type="number" id="af_prix" min="1" step="1" value="${data.prix_unitaire||''}" placeholder="2500" inputmode="numeric" required/></div>
-        <div><label class="label" for="af_avance">Avance payée (F)</label><input type="number" id="af_avance" min="0" step="1" value="${data.avance_paye||''}" placeholder="0" inputmode="numeric"/></div>
+        <div><label class="label" for="af_qte">Quantité *</label><input type="number" id="af_qte" min="1" step="1" oninput="calcAchat()" value="${data.quantite||''}" placeholder="50" inputmode="numeric" required/></div>
+        <div><label class="label" for="af_prix">Prix unitaire (F) *</label><input type="number" id="af_prix" min="1" step="1" oninput="calcAchat()" value="${data.prix_unitaire||''}" placeholder="2500" inputmode="numeric" required/></div>
+        <div><label class="label" for="af_avance">Avance payée (F)</label><input type="number" id="af_avance" min="0" step="1" oninput="calcAchat()" value="${data.avance_paye||''}" placeholder="0" inputmode="numeric"/></div>
         <div><label class="label" for="af_mode">Mode paiement</label><select id="af_mode">${PAIEMENTS.map(p=>`<option value="${p}" ${data.mode_paiement===p?"selected":""}>${p}</option>`).join("")}</select></div>
         <div><label class="label" for="af_notes">Notes</label><input type="text" id="af_notes" value="${data.notes||''}" placeholder="Qualité, transport..."/></div>
       </div>
@@ -1439,10 +1451,10 @@ function buildAchatForm(data, onSubmit, submitLabel){
     <div class="form-block">
       <div class="form-block-title">3. Frais terrain</div>
       <div class="form-grid">
-        <div><label class="label" for="af_droit_terre">Droit de terre (F)</label><input type="number" id="af_droit_terre" min="0" step="1" value="${data.droit_terre||''}" placeholder="0" inputmode="numeric"/></div>
-        <div><label class="label" for="af_transport">Transport (F)</label><input type="number" id="af_transport" min="0" step="1" value="${data.transport||''}" placeholder="0" inputmode="numeric"/></div>
-        <div><label class="label" for="af_droit_vente">Droit de vente (F)</label><input type="number" id="af_droit_vente" min="0" step="1" value="${data.droit_vente||''}" placeholder="0" inputmode="numeric"/></div>
-        <div><label class="label" for="af_charrette">Charrette (F)</label><input type="number" id="af_charrette" min="0" step="1" value="${data.charrette||''}" placeholder="0" inputmode="numeric"/></div>
+        <div><label class="label" for="af_droit_terre">Droit de terre (F)</label><input type="number" id="af_droit_terre" min="0" step="1" oninput="calcAchat()" value="${data.droit_terre||''}" placeholder="0" inputmode="numeric"/></div>
+        <div><label class="label" for="af_transport">Transport (F)</label><input type="number" id="af_transport" min="0" step="1" oninput="calcAchat()" value="${data.transport||''}" placeholder="0" inputmode="numeric"/></div>
+        <div><label class="label" for="af_droit_vente">Droit de vente (F)</label><input type="number" id="af_droit_vente" min="0" step="1" oninput="calcAchat()" value="${data.droit_vente||''}" placeholder="0" inputmode="numeric"/></div>
+        <div><label class="label" for="af_charrette">Charrette (F)</label><input type="number" id="af_charrette" min="0" step="1" oninput="calcAchat()" value="${data.charrette||''}" placeholder="0" inputmode="numeric"/></div>
       </div>
     </div>
     <div class="form-block">
@@ -2690,7 +2702,7 @@ function voirHistoriquePaiementsCommission(nom) {
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
     +'<div>'
       +'<div style="font-size:17px;font-weight:800;color:var(--text);">📋 Historique des paiements</div>'
-      +'<div style="font-size:11px;color:var(--green-mid);margin-top:2px;">'+nom+' · '+paiements.length+' paiement'+(paiements.length>1?'s':'')+' · Total : '+fmt(totalPaye)+' F</div>'
+      +'<div style="font-size:11px;color:var(--green-mid);margin-top:2px;">'+nom+' · '+paiements.length+' paiement'+(paiements.length>1?'s':'')+' · Total : '+fmt(totalPaye)+'</div>'
     +'</div>'
     +'<button onclick="closeModal()" style="background:var(--gray-150);border:none;border-radius:var(--r-pill);width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
     +'</div>'
@@ -3501,7 +3513,9 @@ function renderTiers(){
     const total=(a.quantite||0)*(a.prix_unitaire||0)+frais;
     fournMap[nom].montant += total;
     fournMap[nom].nb += 1;
-    fournMap[nom].du += Math.max(0, total - (a.avance_paye||0));
+    // Règlements séparés par fournisseur
+      const _regFourn = reglements.filter(r=>r.fournisseur===nom).reduce((s,r)=>s+(r.montant||0),0);
+      fournMap[nom].du += Math.max(0, total - (a.avance_paye||0) - _regFourn);
   });
   const fournisseurs = Object.values(fournMap).sort((a,b)=>b.montant-a.montant);
   const achatTotal = fournisseurs.reduce((s,f)=>s+f.montant,0)||1;
@@ -3571,7 +3585,7 @@ function genererRapportFinancierPDF(){
   const commissions = totalCommissionsDues();
   const pertesV     = totalPertesValeur();
   const resultat    = margeNette - commissions - pertesV;
-  const totalDus    = totalAchats() - totalAvances();
+  const totalDus    = Math.max(0, totalAchats() - totalAvances() - reglements.reduce((s,r)=>s+(r.montant||0),0));
   const soldeTreso  = soldeCaisse(tousMouvementsCaisse());
   const tauxB  = ca ? Math.round(margeBrute/ca*100) : 0;
   const tauxN  = ca ? Math.round(margeNette/ca*100) : 0;
@@ -4521,7 +4535,7 @@ function voirJournalComptable(){
       +'</div>'
       +'<div style="text-align:right;flex-shrink:0;margin-left:8px;">'
         +'<div style="font-size:10px;"><span style="color:var(--green-700);font-weight:700;">D '+e.compte_debit+'</span> → <span style="color:var(--red);font-weight:700;">C '+e.compte_credit+'</span></div>'
-        +'<div style="font-weight:900;color:var(--text);">'+fmt(e.montant)+' F</div>'
+        +'<div style="font-weight:900;color:var(--text);">'+fmt(e.montant)+'</div>'
       +'</div>'
     +'</div>'
   ).join('');
@@ -4634,7 +4648,7 @@ function renderDashboard(){
         </div>
         <div class="kpi-light">
           <div class="kl-label">Colis en transit</div>
-          <div class="kl-value">${achats.filter(a=>a.statut_livraison==="en_transit").length}</div>
+          <div class="kl-value">${achats.filter(a=>getStatutLivraison(a)==="en_transit").length}</div>
           <div class="kl-sub">En route vers Adjamé</div>
         </div>
       </div>
@@ -4677,7 +4691,8 @@ function renderDashboard(){
   const totalA   = totalAchats();
   const totalAv  = totalAvances();
   const totalV   = totalVentes();
-  const totalDus = totalA - totalAv;
+  const totalReglAll = reglements.reduce((s,r)=>s+(r.montant||0),0);
+  const totalDus = Math.max(0, totalA - totalAv - totalReglAll);
   const marge       = margebrute();          // CA - coût marchandise pur
   const margeNette  = margenette();          // CA - (marchandise + frais)
   const fraisTerrain = marge - margeNette;   // frais terrain imputés
@@ -4711,7 +4726,13 @@ function renderDashboard(){
 
   // Fournisseurs dus
   const dusFourn={};
-  achats.forEach(a=>{const d=a.quantite*a.prix_unitaire-(a.avance_paye||0);if(d>0) dusFourn[a.fournisseur]=(dusFourn[a.fournisseur]||0)+d;});
+  // Inclure les règlements séparés (table reglements_fournisseurs)
+  const _regParFourn={};
+  reglements.forEach(r=>{_regParFourn[r.fournisseur]=(_regParFourn[r.fournisseur]||0)+(r.montant||0);});
+  achats.forEach(a=>{
+    const d=Math.max(0, a.quantite*a.prix_unitaire-(a.avance_paye||0)-(_regParFourn[a.fournisseur]||0));
+    if(d>0) dusFourn[a.fournisseur]=(dusFourn[a.fournisseur]||0)+d;
+  });
 
   // Jauge SVG taux marge
   const GAUGE_R=54, GAUGE_CX=70, GAUGE_CY=70;
@@ -5084,7 +5105,9 @@ function renderAchats(){
 
   if(!liste.length){html+=`<div style="text-align:center;padding:40px 0;color:var(--green-mid);font-size:13px;">Aucun achat</div>`;}
   else liste.forEach(a=>{
-    const total=a.quantite*a.prix_unitaire,solde=total-(a.avance_paye||0);
+    const total=a.quantite*a.prix_unitaire;
+      const _rFourn=reglements.filter(r=>r.fournisseur===a.fournisseur).reduce((s,r)=>s+(r.montant||0),0);
+      const solde=Math.max(0,total-(a.avance_paye||0)-_rFourn);
     const hasPending=demandes.some(d=>d.enregistrement_id===a.id&&d.statut==="en_attente");
     html+=`<div class="card">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:var(--sp-2);">
@@ -5491,7 +5514,7 @@ function voirPertesLots() {
       +'</div>'
       +'<div style="text-align:right;flex-shrink:0;">'
         +'<div style="font-size:13px;font-weight:900;color:var(--red);">-'+p.qte_perte+' u.</div>'
-        +'<div style="font-size:11px;font-weight:700;color:var(--orange-dark);">-'+fmt(p.valeur_perte)+' F</div>'
+        +'<div style="font-size:11px;font-weight:700;color:var(--orange-dark);">-'+fmt(p.valeur_perte)+'</div>'
         +'<div style="font-size:9px;color:var(--gray-420);">Au '+( p.mode_valorisation==="revient"?"coût revient":"prix achat")+' : '+fmt(p.cout_unitaire)+'/u</div>'
         +'<button onclick="modalModifierPerte(\''+p.id+'\')" style="margin-top:4px;background:var(--gray-150);border:none;border-radius:var(--r-sm);padding:3px 9px;font-size:10px;font-weight:700;color:var(--green-mid);cursor:pointer;font-family:inherit;">✏ Modifier</button>'
       +'</div>'
@@ -5503,7 +5526,7 @@ function voirPertesLots() {
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
     +'<div>'
       +'<div style="font-size:17px;font-weight:800;color:var(--text);">📋 Pertes constatées par lot</div>'
-      +'<div style="font-size:11px;color:var(--green-mid);margin-top:2px;">'+all.length+' constatation'+(all.length>1?'s':'')+' · Valeur totale : '+fmt(totalVal)+' F</div>'
+      +'<div style="font-size:11px;color:var(--green-mid);margin-top:2px;">'+all.length+' constatation'+(all.length>1?'s':'')+' · Valeur totale : '+fmt(totalVal)+'</div>'
     +'</div>'
     +'<button onclick="closeModal()" style="background:var(--gray-150);border:none;border-radius:var(--r-pill);width:32px;height:32px;cursor:pointer;font-size:16px;">✕</button>'
     +'</div>'
@@ -5514,7 +5537,7 @@ function voirPertesLots() {
       +'</div>'
       +'<div style="background:var(--red-50);border:1.5px solid var(--red-200);border-radius:var(--r);padding:12px;text-align:center;">'
         +'<div style="font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.06em;">Valeur perdue</div>'
-        +'<div style="font-size:20px;font-weight:900;color:var(--red);margin-top:4px;">-'+fmt(totalVal)+' F</div>'
+        +'<div style="font-size:20px;font-weight:900;color:var(--red);margin-top:4px;">-'+fmt(totalVal)+'</div>'
       +'</div>'
     +'</div>'
     +(all.length
@@ -6955,7 +6978,8 @@ function bilanFinancier(onglet, inline) {
   const totalA   = totalAchats();
   const totalV   = totalVentes();
   const totalAv  = totalAvances();
-  const totalDus = totalA - totalAv;
+  const totalRegl = reglements.reduce((s,r)=>s+(r.montant||0),0);
+  const totalDus = Math.max(0, totalA - totalAv - totalRegl);
   const frais    = totalFrais();
   const margeB   = margebrute();
   const margeN   = margenette();
@@ -7244,7 +7268,7 @@ function bilanFinancier(onglet, inline) {
 
     contenu += '<div style="font-size:11px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px;">🎯 Seuil de rentabilité (point mort)</div>'
       +'<div style="background:#fff;border:1.5px solid var(--gray-150);border-radius:var(--r);padding:12px;">'
-        +'<div style="font-size:11px;color:var(--green-mid);margin-bottom:8px;">Charges fixes estimées (commissions + pertes) : <b>'+fmt(chargesFixesProxy)+' F</b> · Taux de marge brute / CA : <b>'+Math.round(tauxMargeSurCA*100)+'%</b></div>'
+        +'<div style="font-size:11px;color:var(--green-mid);margin-bottom:8px;">Charges fixes estimées (commissions + pertes) : <b>'+fmt(chargesFixesProxy)+'</b> · Taux de marge brute / CA : <b>'+Math.round(tauxMargeSurCA*100)+'%</b></div>'
         +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2);">'
           +ratioCard("CA minimum requis", fmt(seuilRentabilite), ca>=seuilRentabilite, "Pour couvrir les charges fixes")
           +ratioCard("Marge de sécurité", (margeSecurite>=0?'+':'')+fmt(margeSecurite), margeSecurite>=0, "CA actuel - Seuil ("+tauxMargeSecurite+"%)")
@@ -7519,6 +7543,8 @@ async function confirmerReglement(fournisseur){
 
   closeModal();
   showToast(`[+] Paiement de ${fmt(montant)} enregistré pour ${fournisseur}`);
+  // Resync pour mettre à jour les KPI (totalDus, dusFourn)
+  await syncAll(true);
   render();
 }
 
@@ -7678,9 +7704,7 @@ function bgMarge(t)     { return t>=20?"var(--green-50)":t>=10?"var(--orange-50)
 function borderMarge(t) { return t>=20?"var(--green-bright3)":t>=10?"var(--orange-100)":"var(--red-200)"; }
 
 // calculerMarge — utilise le moteur FIFO (même résultat que le tableau de bord)
-function calculerMarge(ventesF, achatsF) {
-  return calculerMargeFIFO(ventesF, achatsF||[]);
-}
+// calculerMarge — alias défini plus haut
 
 // Jauge demi-cercle SVG
 function jaugeMarge(t){
@@ -8360,13 +8384,13 @@ function renderSuiviColis(){
   const fmtDate = s => s ? new Date(s).toLocaleDateString("fr-FR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}) : "—";
 
   // Compter par statut
-  const nbTransit = achats.filter(a=>(a.statut_livraison==="en_transit")||(a.statut==="en_cours"&&!a.statut_livraison)).length;
-  const nbArrive  = achats.filter(a=>(a.statut_livraison==="arrive")||(a.statut==="recu"&&!a.statut_livraison)).length;
-  const nbVendu   = achats.filter(a=>a.statut_livraison==="vendu").length;
+  const nbTransit = achats.filter(a=>(getStatutLivraison(a)==="en_transit")||(a.statut==="en_cours"&&!getStatutLivraison(a))).length;
+  const nbArrive  = achats.filter(a=>(getStatutLivraison(a)==="arrive")||(a.statut==="recu"&&!getStatutLivraison(a))).length;
+  const nbVendu   = achats.filter(a=>getStatutLivraison(a)==="vendu").length;
 
   // Colis en retard : ETA dépassée et pas encore arrivé
   const retards = achats.filter(a =>
-    a.statut_livraison==="en_transit" &&
+    getStatutLivraison(a)==="en_transit" &&
     a.date_arrivee_prevue &&
     new Date(a.date_arrivee_prevue) < maintenant
   );
@@ -8447,7 +8471,7 @@ function renderListeColis(filtre){
   }
 
   el.innerHTML = lots.map(a=>{
-    const sl = a.statut_livraison || (a.statut==="recu"?"arrive":"en_transit");
+    const sl = getStatutLivraison(a) || (a.statut==="recu"?"arrive":"en_transit");
     const isTransit = sl==="en_transit";
     const isArrive  = sl==="arrive";
     const isVendu   = sl==="vendu";
@@ -8572,8 +8596,8 @@ async function renderDashboardDirection(){
   const treso = soldeCaisse(tousFlux);
   const pertesArr = typeof pertesLots !== "undefined" ? pertesLots : (typeof pertes_lots !== "undefined" ? pertes_lots : []);
   const pertesVal = (pertesArr||[]).reduce((s,p)=>s+(p.valeur_perte||0),0);
-  const nbTransit = achats.filter(a=>(a.statut_livraison==="en_transit")||(a.statut==="en_cours"&&!a.statut_livraison)).length;
-  const nbArrive  = achats.filter(a=>(a.statut_livraison==="arrive")||(a.statut==="recu"&&!a.statut_livraison)).length;
+  const nbTransit = achats.filter(a=>(getStatutLivraison(a)==="en_transit")||(a.statut==="en_cours"&&!getStatutLivraison(a))).length;
+  const nbArrive  = achats.filter(a=>(getStatutLivraison(a)==="arrive")||(a.statut==="recu"&&!getStatutLivraison(a))).length;
   const taux_mb = ca ? Math.round(mb/ca*100) : 0;
   const taux_mn = ca ? Math.round(mn/ca*100) : 0;
 
@@ -8699,23 +8723,23 @@ async function envoyerRapportDirection(){
   const tauxMB   = ca ? Math.round(mb/ca*100) : 0;
   const tauxMN   = ca ? Math.round(mn/ca*100) : 0;
   const tauxRE   = ca ? Math.round(resultat/ca*100) : 0;
-  const nbTransit = achats.filter(a=>(a.statut_livraison==="en_transit")||(a.statut==="en_cours"&&!a.statut_livraison)).length;
-  const nbArrive  = achats.filter(a=>(a.statut_livraison==="arrive")||(a.statut==="recu"&&!a.statut_livraison)).length;
+  const nbTransit = achats.filter(a=>(getStatutLivraison(a)==="en_transit")||(a.statut==="en_cours"&&!getStatutLivraison(a))).length;
+  const nbArrive  = achats.filter(a=>(getStatutLivraison(a)==="arrive")||(a.statut==="recu"&&!getStatutLivraison(a))).length;
   const date = new Date().toLocaleDateString("fr-CI",{day:"2-digit",month:"long",year:"numeric"});
 
   const rapport = [
     "📊 *VerdApp CI — Rapport Financier*",
     "_"+date+"_",
     "",
-    "💰 *Chiffre d'Affaires* : "+fmt(ca)+" F",
+    "💰 *Chiffre d'Affaires* : "+fmt(ca),
     "📈 *Marge brute* : "+fmt(mb)+" F ("+tauxMB+"%)",
     "📉 *Marge nette* : "+fmt(mn)+" F ("+tauxMN+"%)",
     "🏆 *Résultat exploitation* : "+fmt(resultat)+" F ("+tauxRE+"%)",
-    "💵 *Trésorerie* : "+fmt(treso)+" F",
+    "💵 *Trésorerie* : "+fmt(treso),
     "",
     "📦 *Colis* : "+nbTransit+" en transit · "+nbArrive+" arrivés",
-    pertes>0 ? "⚠️ *Pertes* : "+fmt(pertes)+" F" : "✅ Aucune perte",
-    commiss>0 ? "👤 *Commissions* : "+fmt(commiss)+" F" : "",
+    pertes>0 ? "⚠️ *Pertes* : "+fmt(pertes) : "✅ Aucune perte",
+    commiss>0 ? "👤 *Commissions* : "+fmt(commiss) : "",
     "",
     "_Rapport généré par VerdApp CI — SYSCOHADA_"
   ].filter(Boolean).join("\n");
@@ -8895,7 +8919,7 @@ async function testerAlerteStock(){
     // Colis en retard
     const maintenant = new Date().toISOString().slice(0,10);
     const retards = achats.filter(a=>
-      a.statut_livraison==="en_transit" &&
+      getStatutLivraison(a)==="en_transit" &&
       a.date_arrivee_prevue &&
       a.date_arrivee_prevue < maintenant
     );

@@ -334,6 +334,50 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 ::-webkit-scrollbar-track{background:transparent;}
 ::-webkit-scrollbar-thumb{background:var(--gray-300);border-radius:4px;}
 </style>
+
+<script>
+// ── Service Worker — Mode offline (#12) ──────────────────────────────────────
+if('serviceWorker' in navigator){
+  // Créer le SW dynamiquement (app monofichier)
+  const swCode = `
+const CACHE_NAME = 'verdapp-ci-v3';
+const ASSETS = [self.location.href];
+
+self.addEventListener('install', e => {
+  e.waitUntil(caches.open(CACHE_NAME).then(c => c.add(self.location.href)));
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', e => {
+  e.waitUntil(caches.keys().then(keys =>
+    Promise.all(keys.filter(k=>k!==CACHE_NAME).map(k=>caches.delete(k)))
+  ));
+  self.clients.claim();
+});
+
+self.addEventListener('fetch', e => {
+  // Réseau en premier, fallback cache
+  if(e.request.url.includes('supabase.co')){
+    // Supabase — toujours réseau
+    e.respondWith(fetch(e.request).catch(()=>new Response('{"error":"offline"}',{headers:{'Content-Type':'application/json'}})));
+    return;
+  }
+  e.respondWith(
+    fetch(e.request).then(r=>{
+      const c2 = r.clone();
+      caches.open(CACHE_NAME).then(c=>c.put(e.request,c2));
+      return r;
+    }).catch(()=>caches.match(e.request))
+  );
+});
+`;
+  const blob = new Blob([swCode], {type:'text/javascript'});
+  const swUrl = URL.createObjectURL(blob);
+  navigator.serviceWorker.register(swUrl, {scope:'./'})
+    .then(()=>console.log('✅ VerdApp CI — Service Worker actif (mode offline)'))
+    .catch(e=>console.warn('SW:', e));
+}
+</script>
 </head>
 <body>
 
@@ -435,6 +479,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
     <div id="page-stock" style="display:none;"></div>
     <div id="page-demandes" style="display:none;"></div>
     <div id="page-catalogue" style="display:none;"></div>
+<div id="page-transporteurs" style="display:none;"></div>
   </div>
 
   <div id="page-chat" style="display:none;"></div>
@@ -1110,9 +1155,19 @@ function totalCommissionsDues(){
   // vues commission utilisateur et admin). Garantit que le dashboard, le SIG
   // et les rapports affichent EXACTEMENT le même total de commissions que
   // l'écran Commissions, sans divergence d'arrondi ou de méthode.
-  const noms = [...new Set(achats.map(a=>a.enregistre_par||a.auteur).filter(Boolean))];
-  // Dédoublonnage insensible à la casse pour ne pas compter deux fois un même
-  // utilisateur écrit différemment (ex: "Salifou" / "SALIFOU").
+  // Récupérer les utilisateurs terrain UNIQUEMENT (pas admin/super_admin)
+  // Exclure admin/super_admin de manière robuste (même si utilisateurs non chargé)
+  const adminNorms = new Set();
+  usersCache.filter(u=>u.role==="admin"||u.role==="super_admin")
+    .forEach(u=>adminNorms.add(normNom(u.nom)));
+  if(currentUser&&(currentUser.role==="admin"||currentUser.role==="super_admin"))
+    adminNorms.add(normNom(currentUser.nom));
+  const utilisateursTerrain = usersCache.filter(u=>
+    u.role !== "admin" && u.role !== "super_admin"
+  ).map(u=>u.nom);
+  const noms = [...new Set(achats.map(a=>a.enregistre_par||a.auteur).filter(Boolean))]
+    .filter(n => !adminNorms.has(normNom(n)));
+  // Dédoublonnage insensible à la casse
   const nomsUniques = [];
   noms.forEach(n=>{ if(!nomsUniques.some(x=>sameName(x,n))) nomsUniques.push(n); });
   return nomsUniques.reduce((s,nom)=>{
@@ -1809,7 +1864,8 @@ const COMMERCIAL_SUBTABS = [
   {id:"ventes",   label:"Ventes",    icon:"$", role:"admin"},
   {id:"stock",    label:"Stock",     icon:"◈", role:"admin"},
   {id:"demandes", label:"Demandes",  icon:"📋", role:"admin", badge:"demandes"},
-  {id:"catalogue",label:"Catalogue", icon:"🥬", role:"admin"},
+  {id:"catalogue",   label:"Catalogue",     icon:"🥬", role:"admin"},
+  {id:"transporteurs",label:"Transporteurs", icon:"🚛", role:"admin", isNew:true},
 ];
 
 const FINANCE_SUBTABS = [
@@ -1827,6 +1883,8 @@ const FINANCE_SUBTABS = [
   {id:"direction",   label:"Direction",   icon:"👑", isNew:true},
   {id:"agents",      label:"Agents",      icon:"👤", isNew:true},
   {id:"previsions",  label:"Prévisions",  icon:"📈", isNew:true},
+  {id:"alertes",    label:"Alertes",     icon:"🔔", isNew:true},
+  {id:"banque",     label:"Banque BOA-CI", icon:"🏦", isNew:true},
 ];
 
 function renderCommercialSubnav(){
@@ -1844,7 +1902,7 @@ function renderCommercialSubnav(){
 function switchCommercialSub(sub){
   commercialSubTab = sub;
   renderCommercialSubnav();
-  ["achats","colis","ventes","stock","demandes","catalogue"].forEach(t=>{
+  ["achats","colis","ventes","stock","demandes","catalogue","transporteurs"].forEach(t=>{
     const page=document.getElementById("page-"+t);
     if(page) page.style.display = t===sub ? "block":"none";
   });
@@ -1854,6 +1912,7 @@ function switchCommercialSub(sub){
   else if(sub==="stock") renderStock();
   else if(sub==="demandes") renderDemandes();
   else if(sub==="catalogue") renderCatalogue();
+  else if(sub==="transporteurs") renderTransporteurs();
 }
 
 let financeNavOuvert = false;
@@ -1929,7 +1988,9 @@ function renderFinanceContent(){
   if(financeSubTab==="cockpit"){ el.innerHTML = '<div id="cockpitInline" style="padding:4px 0"></div>'; renderCockpitFinancier(); }
   else if(financeSubTab==="direction"){ el.innerHTML = '<div id="directionInline"></div>'; renderDashboardDirection(); }
   else if(financeSubTab==="agents"){ el.innerHTML = '<div id="agentsInline"></div>'; renderPerformanceAgents(); }
-  else if(financeSubTab==="previsions"){ el.innerHTML = '<div id="previsionsInline"></div>'; renderPrevisions(); }
+  else if(financeSubTab==="previsions"){ el.innerHTML = '<div id="previsionsInline"></div><div id="alertesInlineDiv" style="padding:16px 0;"></div>'; renderPrevisions(); }
+  else if(financeSubTab==="alertes"){ el.innerHTML = '<div id="alertesPanel" style="padding:4px 0;"></div>'; renderAlertesIntelligentes("alertesPanel"); }
+  else if(financeSubTab==="banque"){ renderRapprochementBancaire(); }
   else if(financeSubTab==="sig"){ bilanOnglet="sig"; el.innerHTML = renderBilanInline(); }
   else if(financeSubTab==="budget"){ bilanOnglet="budget"; el.innerHTML = renderBilanInline(); }
   else if(financeSubTab==="pertes"){ bilanOnglet="pertes"; el.innerHTML = renderBilanInline(); }
@@ -2408,6 +2469,11 @@ function voirCommissionUtilisateur(nom) {
 function renderCommissionsInline(){
   const target = document.getElementById("commissionsInline");
   if(!target) return;
+  // Admin et super_admin n'ont pas de commission terrain
+  if(currentUser && (currentUser.role==="admin"||currentUser.role==="super_admin")){
+    target.innerHTML = '<div style="text-align:center;padding:32px;color:var(--gray-420);font-size:13px;background:var(--gray-50);border-radius:var(--r);">Les administrateurs ne perçoivent pas de commissions terrain.</div>';
+    return;
+  }
   const realShowModal = window.showModal;
   window.showModal = function(html){ target.innerHTML = html; };
   try { voirCommissionAdmin(); } finally { window.showModal = realShowModal; }
@@ -2419,9 +2485,8 @@ function renderCommissionsInline(){
 function renderJournalInline(){
   const target = document.getElementById("journalInline");
   if(!target) return;
-  const realShowModal = window.showModal;
-  window.showModal = function(html){ target.innerHTML = html; };
-  try { voirJournalComptable(); } finally { window.showModal = realShowModal; }
+  // Afficher le Grand Livre complet (avec onglets GL / Balance / Bilan)
+  renderGrandLivre();
 }
 
 /**
@@ -2441,9 +2506,22 @@ function renderCatalogue(){
 
 function voirCommissionAdmin() {
   // Obtenir tous les utilisateurs ayant enregistré des lots
+  // Exclure admin et super_admin — seuls les agents terrain ont des commissions
+  // Exclusion robuste : 3 sources pour identifier les admins
+  const rolesAdmin = new Set();
+  // Source 1 : table utilisateurs (si chargée)
+  usersCache.filter(u=>u.role==="admin"||u.role==="super_admin")
+    .forEach(u=>rolesAdmin.add(normNom(u.nom)));
+  // Source 2 : currentUser (toujours disponible)
+  if(currentUser && (currentUser.role==="admin"||currentUser.role==="super_admin"))
+    rolesAdmin.add(normNom(currentUser.nom));
+  // Source 3 : noms connus des admins depuis les achats (enregistre_par)
+  // Si l'utilisateur est dans la config app comme admin
+  if(currentUser) rolesAdmin.add(normNom(currentUser.nom));
+
   const usersAvecLots = [...new Set(
     achats.filter(a=>a.statut==="recu"&&a.enregistre_par).map(a=>a.enregistre_par)
-  )];
+  )].filter(n=>!rolesAdmin.has(normNom(n)));
 
   if(!usersAvecLots.length) {
     showModal('<div style="text-align:center;padding:32px;color:var(--gray-420);font-size:12px;">Aucun lot n\'a encore été associé à un utilisateur.</div>');
@@ -3187,6 +3265,9 @@ function renderTresorerie(){
   const entreesMois = totalEntreesCaisse(mvtsMois);
   const sortiesMois = totalSortiesCaisse(mvtsMois);
 
+  // Vérifier si un solde initial est défini
+  const soldeInitialExistant = mouvementsCaisse.find(m=>m.categorie==="solde_initial");
+
   // Historique trié par date décroissante
   const historique = tous.slice().sort((a,b)=>(b.date||"").localeCompare(a.date||"")||(b.created_at||"").localeCompare(a.created_at||""));
 
@@ -3213,6 +3294,11 @@ function renderTresorerie(){
 
   target.innerHTML =
     '<div style="font-size:11px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">💵 Trésorerie</div>'
+    +(!soldeInitialExistant ? '<div style="background:var(--orange-50);border:1px solid var(--orange-100);border-radius:var(--r);padding:10px 14px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:10px;">'
+      +'<div><div style="font-size:12px;font-weight:700;color:var(--orange-dark);">💰 Solde de caisse initial non défini</div>'
+      +'<div style="font-size:10px;color:var(--orange-dark);margin-top:2px;">Définissez le montant de départ pour une trésorerie exacte.</div></div>'
+      +'<button onclick="definirSoldeInitial()" style="background:var(--orange);color:#fff;border:none;border-radius:var(--r-sm);padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;flex-shrink:0;">Définir</button>'
+      +'</div>' : '')
     +((solde < seuilTresorerie())
       ? '<div style="background:var(--red-50);border:1.5px solid var(--red-200);border-radius:10px;padding:10px 12px;margin-bottom:10px;color:var(--red);font-weight:700;font-size:12px;">⚠ Risque de tension de trésorerie — solde '+fmt(solde)+' sous le seuil de '+fmt(seuilTresorerie())+'</div>'
       : '')
@@ -3492,30 +3578,40 @@ function renderTiers(){
   const target = document.getElementById("tiersInline");
   if(!target) return;
 
-  // ── Clients (depuis ventes) ──
-  const clientsMap = {};
+  // ── Clients (depuis ventes) — dédoublonnage insensible à la casse/accents ──
+  const clientsMapRaw = {};
   ventes.forEach(v=>{
-    const nom = (v.client||"—").trim() || "—";
-    if(!clientsMap[nom]) clientsMap[nom] = {nom, ca:0, nb:0, dates:[]};
-    clientsMap[nom].ca += (v.quantite||0)*(v.prix_vente||0);
-    clientsMap[nom].nb += 1;
-    if(v.date) clientsMap[nom].dates.push(v.date);
+    const nomBrut = (v.client||"—").trim() || "—";
+    const nomNorm = normNom(nomBrut);
+    if(!clientsMapRaw[nomNorm]) clientsMapRaw[nomNorm] = {nom:nomBrut, ca:0, nb:0, dates:[]};
+    clientsMapRaw[nomNorm].ca += (v.quantite||0)*(v.prix_vente||0);
+    clientsMapRaw[nomNorm].nb += 1;
+    if(v.date) clientsMapRaw[nomNorm].dates.push(v.date);
   });
-  const clients = Object.values(clientsMap).sort((a,b)=>b.ca-a.ca);
+  const clients = Object.values(clientsMapRaw).sort((a,b)=>b.ca-a.ca);
   const caTotal = clients.reduce((s,c)=>s+c.ca,0)||1;
 
-  // ── Fournisseurs (depuis achats) ──
-  const fournMap = {};
+  // ── Fournisseurs (depuis achats) — dédoublonnage insensible à la casse ──
+  const fournMapRaw = {};  // clé = nom normalisé
   achats.forEach(a=>{
-    const nom = (a.fournisseur||"—").trim() || "—";
-    if(!fournMap[nom]) fournMap[nom] = {nom, montant:0, nb:0, du:0};
+    const nomBrut = (a.fournisseur||"—").trim() || "—";
+    const nomNorm = normNom(nomBrut);   // ex: "kouassi amara" pour les deux variantes
+    if(!fournMapRaw[nomNorm]) fournMapRaw[nomNorm] = {nom:nomBrut, montant:0, nb:0, du:0};
+    // Garder la casse de la première occurrence rencontrée
     const frais=(a.droit_terre||0)+(a.transport||0)+(a.droit_vente||0)+(a.charrette||0);
     const total=(a.quantite||0)*(a.prix_unitaire||0)+frais;
-    fournMap[nom].montant += total;
-    fournMap[nom].nb += 1;
-    fournMap[nom].du += Math.max(0, total - (a.avance_paye||0));
+    fournMapRaw[nomNorm].montant += total;
+    fournMapRaw[nomNorm].nb += 1;
+    fournMapRaw[nomNorm].du += Math.max(0, total - (a.avance_paye||0));
   });
-  const fournisseurs = Object.values(fournMap).sort((a,b)=>b.montant-a.montant);
+  // Ajouter les règlements (déduire du solde)
+  reglements.forEach(r=>{
+    const nomNorm = normNom(r.fournisseur||"");
+    if(fournMapRaw[nomNorm]) {
+      fournMapRaw[nomNorm].du = Math.max(0, fournMapRaw[nomNorm].du - (r.montant||0));
+    }
+  });
+  const fournisseurs = Object.values(fournMapRaw).sort((a,b)=>b.montant-a.montant);
   const achatTotal = fournisseurs.reduce((s,f)=>s+f.montant,0)||1;
 
   const ligneTiers = (nom, montant, part, sub, couleur) =>
@@ -3560,6 +3656,187 @@ function renderTiers(){
 // ════════════════════════════════════════════════════════════════════════════
 // MODULE RAPPORT FINANCIER PDF (Pôle Financier — Lot 6)
 // ════════════════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════
+// ÉVOLUTION #6 — FACTURE / REÇU DE VENTE PDF
+// ══════════════════════════════════════════════════════════════
+function genererFactureClient(venteId){
+  const v = ventes.find(x=>x.id===venteId);
+  if(!v){ showToast("Vente introuvable","error"); return; }
+
+  // Aperçu rapide avant impression (modal HTML → print)
+  const fmt = n => Math.round(n||0).toLocaleString('fr-FR');
+  const montant = (v.quantite||0)*(v.prix_vente||0);
+  const lotRef  = v.lot_ref ? achats.find(a=>a.id===v.lot_ref) : null;
+  const fourn   = lotRef?.fournisseur || '';
+  const dateStr = v.date ? new Date(v.date).toLocaleDateString('fr-CI',{day:'2-digit',month:'long',year:'numeric'}) : '';
+  const numDoc  = v.numero_document || ('VT-'+(v.id||'').slice(-6).toUpperCase());
+  const isDemarque = (v.notes||'').includes('[DÉMARQUE]');
+
+  showModal(`
+    <div style="font-family:'Inter',sans-serif;max-width:420px;margin:0 auto;">
+
+      <!-- En-tête -->
+      <div style="background:var(--green-dark2);border-radius:var(--r) var(--r) 0 0;padding:16px 20px;text-align:center;margin:-16px -16px 0;">
+        <div style="font-size:18px;font-weight:900;color:#fff;">VerdApp CI</div>
+        <div style="font-size:11px;color:rgba(255,255,255,.6);margin-top:2px;">Reçu de vente</div>
+      </div>
+
+      <!-- Numéro + Date -->
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 0 10px;border-bottom:1px dashed var(--gray-200);">
+        <div>
+          <div style="font-size:9px;color:var(--gray-420);text-transform:uppercase;letter-spacing:.08em;">N° Reçu</div>
+          <div style="font-size:14px;font-weight:800;color:var(--green-mid);">${numDoc}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:9px;color:var(--gray-420);text-transform:uppercase;letter-spacing:.08em;">Date</div>
+          <div style="font-size:12px;font-weight:700;color:var(--text);">${dateStr}</div>
+        </div>
+      </div>
+
+      <!-- Client -->
+      <div style="padding:12px 0 10px;border-bottom:1px dashed var(--gray-200);">
+        <div style="font-size:9px;color:var(--gray-420);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">Client</div>
+        <div style="font-size:14px;font-weight:800;color:var(--text);">${v.client||'—'}</div>
+      </div>
+
+      <!-- Détail produit -->
+      <div style="padding:12px 0 10px;border-bottom:2px solid var(--gray-200);">
+        <div style="font-size:9px;color:var(--gray-420);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">Détail</div>
+        <div style="display:grid;grid-template-columns:1fr auto auto;gap:6px;font-size:11px;color:var(--gray-420);font-weight:700;margin-bottom:6px;">
+          <span>Produit</span><span>Qté</span><span style="text-align:right;">Montant</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr auto auto;gap:6px;font-size:13px;align-items:center;">
+          <span style="font-weight:700;color:var(--text);">${(getProduitIcon?getProduitIcon(v.produit):'🌿')} ${v.produit||'—'}${isDemarque?' <span style="background:var(--orange);color:#fff;border-radius:4px;padding:1px 5px;font-size:9px;font-weight:700;">DÉMARQUE</span>':''}</span>
+          <span style="color:var(--gray-500);">${v.quantite||0} u.</span>
+          <span style="font-weight:800;color:var(--green-700);text-align:right;">${fmt(montant)} F</span>
+        </div>
+        <div style="font-size:10px;color:var(--gray-420);margin-top:4px;">
+          Prix unitaire : ${fmt(v.prix_vente)} F/u. ${fourn?'· Origine : '+fourn:''}
+        </div>
+      </div>
+
+      <!-- Total + Mode paiement -->
+      <div style="background:var(--green-50);border-radius:var(--r-sm);padding:14px;margin:12px 0;display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-size:10px;color:var(--green-mid);font-weight:700;text-transform:uppercase;">Total encaissé</div>
+          <div style="font-size:10px;color:var(--gray-420);margin-top:2px;">${v.mode_paiement||'Espèces'}</div>
+        </div>
+        <div style="font-size:24px;font-weight:900;color:var(--green-700);">${fmt(montant)} F</div>
+      </div>
+
+      <!-- Notes -->
+      ${v.notes&&!isDemarque?'<div style="font-size:10px;color:var(--gray-420);margin-bottom:10px;">Note : '+v.notes+'</div>':''}
+
+      <!-- Enregistré par -->
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--gray-400);border-top:1px dashed var(--gray-200);padding-top:10px;margin-top:4px;">
+        <span>Enregistré par : <b>${v.enregistre_par||'—'}</b></span>
+        <span>VerdApp CI — Système de gestion</span>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:16px;">
+      <button class="btn btn-green" style="flex:1;" onclick="imprimerFacture('${venteId}')">🖨 Imprimer / PDF</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Fermer</button>
+    </div>
+  `);
+}
+
+function imprimerFacture(venteId){
+  const v = ventes.find(x=>x.id===venteId);
+  if(!v) return;
+
+  // Générer PDF via jsPDF
+  if(typeof jspdf === 'undefined' && typeof window.jspdf === 'undefined'){
+    showToast('⚠ jsPDF non disponible — impression navigateur utilisée','error');
+    window.print();
+    return;
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({unit:'mm', format:'a5', orientation:'portrait'});
+  const fmt  = n => Math.round(n||0).toLocaleString('fr-FR');
+  const montant = (v.quantite||0)*(v.prix_vente||0);
+  const numDoc  = v.numero_document || ('VT-'+(v.id||'').slice(-6).toUpperCase());
+  const dateStr = v.date ? new Date(v.date).toLocaleDateString('fr-CI',{day:'2-digit',month:'long',year:'numeric'}) : '';
+  const W = 148, PAGE_H = 210;
+
+  // ── Header vert ──
+  doc.setFillColor(13, 61, 26);
+  doc.rect(0, 0, W, 28, 'F');
+  doc.setTextColor(255,255,255);
+  doc.setFontSize(18); doc.setFont('helvetica','bold');
+  doc.text('VerdApp CI', W/2, 13, {align:'center'});
+  doc.setFontSize(9); doc.setFont('helvetica','normal');
+  doc.text('Recu de vente', W/2, 20, {align:'center'});
+  doc.setFontSize(8);
+  doc.text('Grossiste en legumes - Marche Adjame, Abidjan', W/2, 25, {align:'center'});
+
+  // ── N° reçu + Date ──
+  doc.setTextColor(30,30,30);
+  doc.setFontSize(9); doc.setFont('helvetica','bold');
+  doc.text('N Recu : '+numDoc, 14, 36);
+  doc.text('Date : '+dateStr, W-14, 36, {align:'right'});
+
+  // ── Séparateur ──
+  doc.setDrawColor(200,200,200);
+  doc.setLineDash([2,2]);
+  doc.line(14, 40, W-14, 40);
+
+  // ── Client ──
+  doc.setLineDash([]);
+  doc.setFontSize(8); doc.setFont('helvetica','normal');
+  doc.setTextColor(120,120,120);
+  doc.text('CLIENT', 14, 48);
+  doc.setFontSize(12); doc.setFont('helvetica','bold');
+  doc.setTextColor(13, 61, 26);
+  doc.text(v.client||'Non specifie', 14, 55);
+
+  // ── Tableau produit ──
+  doc.setFontSize(8); doc.setFont('helvetica','bold');
+  doc.setTextColor(120,120,120);
+  doc.text('PRODUIT', 14, 66);
+  doc.text('QTE', 100, 66, {align:'center'});
+  doc.text('P.U (F)', 125, 66, {align:'center'});
+  doc.text('TOTAL (F)', W-14, 66, {align:'right'});
+
+  doc.setDrawColor(200,200,200);
+  doc.setLineDash([1,1]);
+  doc.line(14, 68, W-14, 68);
+  doc.setLineDash([]);
+
+  doc.setFontSize(11); doc.setFont('helvetica','bold');
+  doc.setTextColor(30,30,30);
+  doc.text(v.produit||'', 14, 76);
+  doc.setFontSize(10);
+  doc.text(String(v.quantite||0), 100, 76, {align:'center'});
+  doc.text(fmt(v.prix_vente), 125, 76, {align:'center'});
+  doc.setTextColor(13, 100, 26);
+  doc.text(fmt(montant), W-14, 76, {align:'right'});
+
+  // ── Total ──
+  doc.setFillColor(232, 244, 232);
+  doc.roundedRect(14, 84, W-28, 20, 3, 3, 'F');
+  doc.setTextColor(13, 61, 26);
+  doc.setFontSize(10); doc.setFont('helvetica','bold');
+  doc.text('TOTAL ENCAISSE', 22, 93);
+  doc.setFontSize(8); doc.setFont('helvetica','normal');
+  doc.text(v.mode_paiement||'Especes', 22, 99);
+  doc.setFontSize(18); doc.setFont('helvetica','bold');
+  doc.text(fmt(montant)+' F', W-18, 97, {align:'right'});
+
+  // ── Enregistré par ──
+  doc.setFontSize(7); doc.setFont('helvetica','normal');
+  doc.setTextColor(150,150,150);
+  doc.line(14, 110, W-14, 110);
+  doc.text('Enregistre par : '+(v.enregistre_par||''), 14, 116);
+  doc.text('VerdApp CI - Systeme de gestion', W-14, 116, {align:'right'});
+
+  doc.save('Recu_'+numDoc+'_'+v.client+'.pdf');
+  showToast('✅ Reçu généré — '+numDoc);
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
 function genererRapportFinancierPDF(){
   if(typeof window.jspdf==="undefined"){ showToast("Génération PDF indisponible (hors-ligne)","error"); return; }
   const { jsPDF } = window.jspdf;
@@ -4723,12 +5000,16 @@ function renderDashboard(){
   const maxEvol=Math.max(...evolVals,1);
 
   // Fournisseurs dus
-  const dusFourn={};
-  // dusFourn = brut par fournisseur (achats - avances)
-  // Les règlements seront soustraits UNE SEULE FOIS dans l'affichage
+  const dusFourn={};  // clé = nom normalisé, valeur = brut
+  // dusFourn = brut par fournisseur normalisé (achats - avances)
+  // dédoublonnage insensible à la casse
+  const _fournNomCanon={};  // normNom → nom original (première occurrence)
   achats.forEach(a=>{
+    const nomBrut=(a.fournisseur||"").trim();
+    const nomNorm=normNom(nomBrut);
+    if(!_fournNomCanon[nomNorm]) _fournNomCanon[nomNorm]=nomBrut;
     const d=a.quantite*a.prix_unitaire-(a.avance_paye||0);
-    dusFourn[a.fournisseur]=(dusFourn[a.fournisseur]||0)+d;
+    dusFourn[nomNorm]=(dusFourn[nomNorm]||0)+d;
   });
   // Ne garder que les fournisseurs avec un brut positif
   Object.keys(dusFourn).forEach(f=>{ if(dusFourn[f]<=0) delete dusFourn[f]; });
@@ -5040,8 +5321,12 @@ function renderDashboard(){
         <div style="font-size:9px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.1em;">⚠ Soldes fournisseurs à payer</div>
         <button onclick="voirReglements()" style="font-size:10px;font-weight:700;color:var(--blue-700);background:var(--blue-50);border:1px solid var(--blue-100);border-radius:var(--r-sm);padding:3px 10px;cursor:pointer;font-family:inherit;">📋 Historique</button>
       </div>`;
-    Object.entries(dusFourn).forEach(([f,m])=>{
-      const regEffectue=regParFourn[f]||0;
+    Object.entries(dusFourn).forEach(([fNorm,m])=>{
+      const f=_fournNomCanon[fNorm]||fNorm;  // nom affiché = première occurrence
+      // Règlements : chercher par nom normalisé
+      const regEffectue=Object.entries(regParFourn)
+        .filter(([k])=>normNom(k)===fNorm)
+        .reduce((s,[,v])=>s+v,0);
       const soldeNet=Math.max(0,m-regEffectue);
       html+=`<div style="padding:8px 0;border-bottom:1px solid var(--red-200);">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
@@ -5177,7 +5462,8 @@ function renderVentes(){
             <span style="font-size:18px;">${getProduitIcon(v.produit)||"🌿"}</span>
             <span style="font-weight:800;color:var(--text);font-size:14px;">${v.produit}</span>
             <span class="badge b-sky">${v.mode_paiement}</span>
-            ${v.numero_document?`<span class="badge b-stone" style="font-family:monospace;cursor:pointer;" onclick='genererDocumentPDF("vente",${JSON.stringify(v).replace(/'/g,"&#39;")})' title="Imprimer la facture">🖨 ${v.numero_document}</span>`:""}
+            ${v.numero_document?`<span class="badge b-stone" style="font-family:monospace;cursor:pointer;" onclick='genererFactureClient("${v.id}")' title="Imprimer la facture">🖨 ${v.numero_document}</span>`:""}
+            <span class="badge b-stone" style="cursor:pointer;" onclick='genererFactureClient("${v.id}")' title="Générer le reçu PDF">🧾 Reçu</span>
             ${hasPending?`<span class="badge b-orange">⏳ En révision</span>`:""}
           </div>
           <div style="font-size:11px;color:var(--green-mid);margin-bottom:5px;">${v.date} · <span style="color:var(--gray-500);">${v.client}</span></div>
@@ -5965,6 +6251,13 @@ function renderStock(){
   });
 
   pageEl.innerHTML=html;
+
+  // ── Performance multi-produits (#4) ──────────
+  setTimeout(()=>{
+    let pp = document.getElementById('perfProduitsContainer');
+    if(!pp){ pp=document.createElement('div'); pp.id='perfProduitsContainer'; pp.style.marginTop='16px'; pageEl.after(pp); }
+    renderPerformanceProduits('perfProduitsContainer');
+  }, 50);
 }
 
 function renderDemandes(){
@@ -6038,7 +6331,17 @@ function renderParams(){
       </div>
       <div style="font-size:10px;color:var(--gray-420);margin-top:10px;">Le catalogue produits est désormais dans <b>Commercial</b>, et les commissions/journal comptable dans <b>Finance &amp; Gestion</b>.</div>
     </div>`;
+  // Section charges fixes
+  html += `
+    <div class="card" style="margin-top:12px;">
+      <div style="font-size:12px;font-weight:800;color:var(--text);margin-bottom:10px;">📋 Charges fixes mensuelles</div>
+      <div style="font-size:11px;color:var(--gray-420);margin-bottom:10px;">Déduites du Résultat d'exploitation dans le SIG pour obtenir le Résultat Net réel.</div>
+      <div id="chargesFixesSection"></div>
+    </div>`;
   document.getElementById("page-params").innerHTML=html;
+  // Charger les charges fixes
+  if(typeof renderChargesFixesParams === "function") renderChargesFixesParams();
+  if(typeof renderDepotsParams==="function") renderDepotsParams();;
 }
 
 // (Le changement de PIN se fait désormais via "Gérer les utilisateurs" — modification du PIN par compte)
@@ -6046,21 +6349,80 @@ function renderParams(){
 function renderListeProduits(){
   const el=document.getElementById("listeProduits");
   if(!el) return;
-  if(!produits.length){el.innerHTML=`<div style="text-align:center;padding:30px;color:var(--green-mid);font-size:13px;">Aucun produit. Fais un Sync.</div>`;return;}
+  if(!produits.length){
+    el.innerHTML=`<div style="text-align:center;padding:30px;color:var(--green-mid);font-size:13px;">Aucun produit. Fais un Sync.</div>`;
+    return;
+  }
+  const fmt = v => Math.round(Number(v)||0).toLocaleString("fr-FR");
+  // Statistiques par produit
+  const statsParProduit = {};
+  produits.forEach(p=>{
+    const stockDispo   = stockDisponibleProduit(p.nom);
+    const ventesP      = ventes.filter(v=>v.produit===p.nom);
+    const achatsP      = achats.filter(a=>a.produit===p.nom && a.statut==="recu");
+    const caP          = ventesP.reduce((s,v)=>s+(v.quantite||0)*(v.prix_vente||0),0);
+    const qteVendueP   = ventesP.reduce((s,v)=>s+(v.quantite||0),0);
+    const qteAcheteeP  = achatsP.reduce((s,a)=>s+(a.quantite||0),0);
+    const margeP       = margebrute(ventesP);
+    const tauxP        = caP ? Math.round(margeP/caP*100) : 0;
+    const pertesP      = pertesLots.filter(pl=>pl.produit===p.nom).reduce((s,pl)=>s+(pl.valeur_perte||0),0);
+    // Seuil de stock (depuis seuils_stock si disponible)
+    const seuilStock   = 5; // seuil par défaut
+    statsParProduit[p.nom]={stockDispo,caP,qteVendueP,qteAcheteeP,margeP,tauxP,pertesP,seuilStock,nbVentes:ventesP.length};
+  });
+
   let html="";
   produits.forEach(p=>{
-    html+=`<div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:var(--sp-3);">
-      <div style="display:flex;align-items:center;gap:var(--sp-3);">
-        <span style="font-size:26px;">${p.icone}</span>
-        <div>
-          <div style="font-weight:700;color:var(--text);">${p.nom}</div>
-          <span class="badge ${p.actif?"b-lime":"b-stone"}">${p.actif?"Actif":"Inactif"}</span>
+    const s = statsParProduit[p.nom]||{};
+    const stockBas = s.stockDispo <= s.seuilStock;
+    const stockCouleur = s.stockDispo>20?"var(--green-700)":s.stockDispo>5?"var(--orange)":"var(--red)";
+
+    html+=`<div class="card" style="margin-bottom:10px;">
+      <!-- En-tête produit -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:30px;">${p.icone}</span>
+          <div>
+            <div style="font-weight:800;color:var(--text);font-size:14px;">${p.nom}</div>
+            <span class="badge ${p.actif?"b-lime":"b-stone"}">${p.actif?"Actif":"Inactif"}</span>
+            ${s.caP>0?`<span class="badge b-sky" style="margin-left:4px;">CA: ${fmt(s.caP)} F</span>`:""}
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button onclick="toggleProduitActif('${p.id}',${p.actif})" class="${p.actif?"icon-btn":"icon-btn-green"}" title="${p.actif?"Désactiver":"Activer"}">${p.actif?"⏸":"▶"}</button>
+          <button onclick="supprimerProduit('${p.id}')" class="icon-btn" title="Supprimer">🗑</button>
         </div>
       </div>
-      <div style="display:flex;gap:var(--sp-2);">
-        <button onclick="toggleProduitActif('${p.id}',${p.actif})" class="${p.actif?"icon-btn":"icon-btn-green"}" title="${p.actif?"Désactiver":"Activer"}">${p.actif?"⏸":"▶"}</button>
-        <button onclick="supprimerProduit('${p.id}')" class="icon-btn" title="Supprimer">🗑</button>
+
+      <!-- KPI grille 3 colonnes -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px;">
+        <div style="background:${stockBas?"var(--red-50)":"var(--gray-50)"};border-radius:var(--r-sm);padding:7px;text-align:center;">
+          <div style="font-size:16px;font-weight:800;color:${stockCouleur};">${s.stockDispo||0}</div>
+          <div style="font-size:9px;color:var(--gray-420);">En stock</div>
+          ${stockBas?`<div style="font-size:8px;color:var(--red);font-weight:700;">⚠ Stock bas</div>`:""}
+        </div>
+        <div style="background:var(--gray-50);border-radius:var(--r-sm);padding:7px;text-align:center;">
+          <div style="font-size:16px;font-weight:800;color:var(--green-700);">${s.nbVentes||0}</div>
+          <div style="font-size:9px;color:var(--gray-420);">Ventes</div>
+        </div>
+        <div style="background:var(--gray-50);border-radius:var(--r-sm);padding:7px;text-align:center;">
+          <div style="font-size:16px;font-weight:800;color:${s.tauxP>=20?"var(--green-700)":s.tauxP>0?"var(--orange)":"var(--gray-400)"};">${s.tauxP}%</div>
+          <div style="font-size:9px;color:var(--gray-420);">Marge brute</div>
+        </div>
       </div>
+
+      <!-- Barre de vente (achetées vs vendues) -->
+      ${s.qteAcheteeP>0?`<div style="margin-bottom:6px;">
+        <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--gray-420);margin-bottom:2px;">
+          <span>Achetées : ${s.qteAcheteeP}</span><span>Vendues : ${s.qteVendueP}</span>
+        </div>
+        <div style="background:var(--gray-150);border-radius:999px;height:6px;">
+          <div style="background:var(--green-700);width:${Math.min(100,Math.round(s.qteVendueP/s.qteAcheteeP*100))}%;height:6px;border-radius:999px;"></div>
+        </div>
+        <div style="font-size:9px;color:var(--gray-420);margin-top:2px;text-align:right;">Écoulé : ${Math.round(s.qteVendueP/s.qteAcheteeP*100)}%</div>
+      </div>`:""}
+
+      ${s.pertesP>0?`<div style="font-size:10px;color:var(--red);font-weight:600;">⚠ Pertes : ${fmt(s.pertesP)} F</div>`:""}
     </div>`;
   });
   el.innerHTML=html;
@@ -6132,6 +6494,13 @@ async function supprimerProduit(id){
 // ════════════════════════════════════════════════════════════════════════════
 let chatMessages = [];
 let chatAuteur = localStorage.getItem("va_chat_nom") || "";
+// Auto-sync avec currentUser si connecté
+function syncChatAuteur(){
+  if(currentUser && currentUser.nom && !chatAuteur){
+    chatAuteur = currentUser.nom;
+    localStorage.setItem("va_chat_nom", chatAuteur);
+  }
+}
 let chatPolling = null;
 let chatLastId = null;
 let chatImageFile = null;
@@ -6193,6 +6562,7 @@ function updateChatBadge(n) {
 function initChat() {
   chatUnreadCount = 0;
   updateChatBadge(0);
+  syncChatAuteur(); // Utilise currentUser.nom si disponible
   const page = document.getElementById("page-chat");
 
   if (!chatAuteur) {
@@ -6205,8 +6575,10 @@ function initChat() {
           <div style="font-size:12px;color:var(--gray-420);margin-top:4px;">Entre ton prénom pour commencer</div>
         </div>
         <input type="text" id="chatNomInput" placeholder="Ton prénom ou pseudo…"
+          value="${currentUser?.nom||''}"
           style="margin-bottom:12px;" onkeydown="if(event.key==='Enter')setChatNom()"/>
         <button class="btn btn-green" onclick="setChatNom()" style="width:100%;">Rejoindre →</button>
+        ${currentUser?.nom ? '<div style="font-size:10px;color:var(--green-mid);text-align:center;margin-top:-6px;">👤 Nom pré-rempli depuis ton compte</div>' : ''}
       </div>`;
     return;
   }
@@ -6221,7 +6593,7 @@ function initChat() {
             ${chatAuteur.charAt(0).toUpperCase()}
           </div>
           <div>
-            <div style="color:#fff;font-weight:700;font-size:13px;">Chat VerdApp CI</div>
+            <div style="color:#fff;font-weight:700;font-size:13px;">${chatAuteur} <span style="font-size:10px;opacity:.7;">(${currentUser?.role||''})</span></div>
             <div style="color:rgba(255,255,255,.55);font-size:10px;" id="chatStatus">● En ligne</div>
           </div>
         </div>
@@ -6229,6 +6601,7 @@ function initChat() {
           <button onclick="chatSearchMode()" title="Rechercher" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);color:#fff;border-radius:10px;padding:6px 10px;cursor:pointer;font-size:14px;">🔍</button>
           <button onclick="chatShowMembers()" title="Membres" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);color:#fff;border-radius:10px;padding:6px 10px;cursor:pointer;font-size:14px;">👥</button>
           <button onclick="loadMessages(true)" title="Rafraîchir" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);color:#fff;border-radius:10px;padding:6px 10px;cursor:pointer;font-size:14px;">↻</button>
+          <button onclick="changerNom()" title="Changer de nom" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);color:#fff;border-radius:10px;padding:6px 10px;cursor:pointer;font-size:12px;font-weight:700;">✏️</button>
         </div>
       </div>
 
@@ -6388,6 +6761,10 @@ function renderMessages(filterText) {
     const dateStr = d.toLocaleDateString("fr-CI",{day:"numeric",month:"long"});
     const timeStr = d.toLocaleTimeString("fr-CI",{hour:"2-digit",minute:"2-digit"});
     const isGrouped = lastAuteur === m.auteur && lastDate === dateStr;
+    // Rôle de l'auteur (depuis usersCache)
+    const userObj = usersCache.find(u => u.nom === m.auteur);
+    const auteurRole = userObj?.role || "";
+    const roleLabel = auteurRole==="super_admin"?"Admin":auteurRole==="admin"?"Gestion":"";
 
     // Séparateur de date
     if (dateStr !== lastDate) {
@@ -6441,7 +6818,11 @@ function renderMessages(filterText) {
     if (m.image_url) html += '<img src="'+m.image_url+'" style="max-width:220px;max-height:220px;border-radius:var(--r-sm);display:block;cursor:pointer;" onclick="window.open(\''+m.image_url+'\',\'_blank\')"/>';
     if (m.contenu) {
       // Mettre en évidence les mentions
-      const highlighted = m.contenu.replace(/@(\w+)/g, '<span style="background:rgba(244,120,32,.15);color:'+( isMe?"var(--yellow-400)":"var(--orange-dark)")+';font-weight:700;border-radius:4px;padding:0 3px;">@$1</span>');
+      // Sanitiser le contenu avant rendu (protection XSS)
+      const safeContenu = escapeHtml(m.contenu);
+      const highlighted = safeContenu
+        .replace(/\n/g, '<br>')
+        .replace(/@([\w\u00C0-\u017F]+)/g, '<span style="background:rgba(244,120,32,.15);color:'+( isMe?"var(--yellow-400)":"var(--orange-dark)")+';font-weight:700;border-radius:4px;padding:0 3px;">@$1</span>');
       html += '<div style="color:'+txtCol+';font-size:13px;line-height:1.5;'+(m.image_url?"margin-top:6px;":"")+'word-break:break-word;">'+highlighted+'</div>';
     }
     html += '<div style="display:flex;align-items:center;gap:2px;margin-top:3px;justify-content:flex-end;">';
@@ -6487,7 +6868,8 @@ async function envoyerMessage() {
       contenu: texte || null,
       image_url: imageUrl || null,
       reply_to: chatReplyTo ? chatReplyTo.id : null,
-      reactions: null
+      reactions: null,
+      created_at: new Date().toISOString()
     };
     const res = await sbSendMessage(payload);
     const msg = Array.isArray(res) ? res[0] : res;
@@ -6680,7 +7062,7 @@ function clearChatImg() {
   if (prev) prev.style.display = "none";
 }
 function setChatNom() {
-  const val = document.getElementById("chatNomInput")?.value.trim();
+  const val = document.getElementById("chatNomInput")?.value.trim() || currentUser?.nom || "";
   if (!val) return showToast("Entre un prénom","error");
   chatAuteur = val;
   localStorage.setItem("va_chat_nom", val);
@@ -6989,21 +7371,25 @@ function bilanFinancier(onglet, inline) {
       +'<div style="font-size:9px;font-weight:700;color:var(--blue-200);text-transform:uppercase;letter-spacing:.1em;">Total achats</div>'
       +'<div style="font-size:15px;font-weight:900;color:#fff;margin-top:3px;">'+fmt(totalA)+'</div>'
       +'<div style="font-size:9px;color:var(--blue-400);margin-top:2px;">Avances : '+fmt(totalAv)+'</div>'
+      +'<div style="font-size:8px;color:rgba(255,255,255,.45);font-style:italic;margin-top:1px;">= Σ(qté × prix unitaire)</div>'
     +'</div>'
     +'<div style="background:linear-gradient(135deg,var(--green-900d),var(--green-700));border-radius:var(--r);padding:12px;text-align:center;">'
       +'<div style="font-size:9px;font-weight:700;color:var(--green-bright2);text-transform:uppercase;letter-spacing:.1em;">Total ventes</div>'
       +'<div style="font-size:15px;font-weight:900;color:#fff;margin-top:3px;">'+fmt(totalV)+'</div>'
       +'<div style="font-size:9px;color:var(--green-bright);margin-top:2px;">Marge brute : '+fmt(margeB)+'</div>'
+      +'<div style="font-size:8px;color:rgba(255,255,255,.45);font-style:italic;margin-top:1px;">= Σ(qté × prix de vente)</div>'
     +'</div>'
     +'<div style="background:'+(solde>=0?'linear-gradient(135deg,var(--green-900d),var(--green-700))':'linear-gradient(135deg,#7f1d1d,#991b1b)')+';border-radius:var(--r);padding:12px;text-align:center;">'
       +'<div style="font-size:9px;font-weight:700;color:'+(solde>=0?'var(--green-bright2)':'var(--red-300)')+';text-transform:uppercase;letter-spacing:.1em;">Solde global</div>'
       +'<div style="font-size:15px;font-weight:900;color:#fff;margin-top:3px;">'+(solde>=0?'+':'')+fmt(solde)+'</div>'
       +'<div style="font-size:9px;color:rgba(255,255,255,.6);margin-top:2px;">Ventes - Achats</div>'
+      +'<div style="font-size:8px;color:rgba(255,255,255,.45);font-style:italic;margin-top:1px;">= Total ventes − Total achats</div>'
     +'</div>'
     +'<div style="background:'+(margeN>=0?'linear-gradient(135deg,var(--green-900d),var(--green-700))':'linear-gradient(135deg,#7f1d1d,#991b1b)')+';border-radius:var(--r);padding:12px;text-align:center;">'
       +'<div style="font-size:9px;font-weight:700;color:'+(margeN>=0?'var(--green-bright2)':'var(--red-300)')+';text-transform:uppercase;letter-spacing:.1em;">Marge nette</div>'
       +'<div style="font-size:15px;font-weight:900;color:#fff;margin-top:3px;">'+(margeN>=0?'+':'')+fmt(margeN)+'</div>'
       +'<div style="font-size:9px;color:rgba(255,255,255,.6);margin-top:2px;">Dû fourn. : '+fmt(totalDus)+'</div>'
+      +'<div style="font-size:8px;color:rgba(255,255,255,.45);font-style:italic;margin-top:1px;">= CA − CMV FIFO − Frais terrain</div>'
     +'</div>'
     +'</div>';
 
@@ -7155,13 +7541,18 @@ function bilanFinancier(onglet, inline) {
 
     function ligneSIG(label, montant, opts){
       opts=opts||{};
-      const isTotal = opts.total;
-      const isNeg   = opts.neg;
-      const color   = montant<0?'var(--red)':(isTotal?(montant>=0?'var(--green-700)':'var(--red)'):'var(--text)');
-      const prefix  = isNeg?'- ':'';
-      const valStr  = prefix + fmt(Math.abs(montant));
+      const isTotal  = opts.total;
+      const isNeg    = opts.neg;
+      const formule  = opts.formule || '';
+      const color    = montant<0?'var(--red)':(isTotal?(montant>=0?'var(--green-700)':'var(--red)'):'var(--text)');
+      const prefix   = isNeg?'- ':'';
+      const valStr   = prefix+fmt(Math.abs(montant));
       const tauxHtml = opts.taux!==undefined
         ? (' <span style="font-size:10px;font-weight:700;color:var(--gray-420);">('+opts.taux+'%)</span>')
+        : '';
+      const formuleHtml = formule
+        ? '<div style="font-size:9px;color:var(--gray-400);margin-top:1px;font-style:italic;opacity:.85;">'
+          +'= '+formule+'</div>'
         : '';
       return '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:'
         +(isTotal?'10px 12px':'7px 12px')+';'
@@ -7169,10 +7560,13 @@ function bilanFinancier(onglet, inline) {
           ?'background:var(--green-50);border:1.5px solid var(--green-bright3);border-radius:10px;margin:6px 0;'
           :'border-bottom:1px solid var(--gray-150);')
         +'">'
-        +'<span style="flex:1;min-width:0;font-size:'+(isTotal?'12px':'11px')
-          +';font-weight:'+(isTotal?'800':'600')
-          +';color:'+(isTotal?'var(--text)':'var(--green-mid)')
-          +';line-height:1.3;">'+label+'</span>'
+        +'<div style="flex:1;min-width:0;">'
+          +'<span style="font-size:'+(isTotal?'12px':'11px')
+            +';font-weight:'+(isTotal?'800':'600')
+            +';color:'+(isTotal?'var(--text)':'var(--green-mid)')
+            +';line-height:1.3;">'+label+'</span>'
+          +formuleHtml
+        +'</div>'
         +'<span style="flex-shrink:0;white-space:nowrap;font-size:'+(isTotal?'14px':'12px')
           +';font-weight:900;color:'+color+';">'+valStr+tauxHtml+'</span>'
         +'</div>';
@@ -7194,16 +7588,44 @@ function bilanFinancier(onglet, inline) {
         +'</div>'
         : '')
       +'<div style="background:#fff;border:1.5px solid var(--gray-150);border-radius:var(--r);padding:6px 4px;margin-bottom:16px;">'
-        +ligneSIG("Chiffre d'affaires (CA)", ca)
-        +ligneSIG("- Coût achat marchandises (CMV, FIFO)", coutMarchandiseVendu, {neg:true})
-        +ligneSIG("= MARGE BRUTE", margeBrute, {total:true, taux:tauxB})
-        +ligneSIG("- Frais accessoires (transport, droits…)", fraisAcc, {neg:true})
-        +ligneSIG("= MARGE NETTE COMMERCIALE", margeNetteCommerciale, {total:true, taux:tauxN})
-        +ligneSIG("- Commissions terrain", totalCommiss, {neg:true})
-        +ligneSIG("- Pertes sur stocks", totalPertesV, {neg:true})
-        +ligneSIG("= RÉSULTAT D'EXPLOITATION", resultatExploitation, {total:true, taux:tauxRE})
+        +ligneSIG("Chiffre d'affaires (CA)", ca, {formule:"Σ (quantité × prix de vente)"})
+        +ligneSIG("- Coût achat marchandises (CMV, FIFO)", coutMarchandiseVendu, {neg:true, formule:"Σ (coût réel FIFO des marchandises vendues)"})
+        +ligneSIG("= MARGE BRUTE", margeBrute, {total:true, taux:tauxB, formule:"CA − CMV"})
+        +ligneSIG("- Frais accessoires (transport, droits…)", fraisAcc, {neg:true, formule:"Σ (droit de terre + transport + droit de vente + charrette)"})
+        +ligneSIG("= MARGE NETTE COMMERCIALE", margeNetteCommerciale, {total:true, taux:tauxN, formule:"Marge brute − Frais accessoires"})
+        +ligneSIG("- Commissions terrain", totalCommiss, {neg:true, formule:"10% × marge nette par lot (agents terrain uniquement)"})
+        +ligneSIG("- Pertes sur stocks", totalPertesV, {neg:true, formule:"Σ (valeur_perte des lots déclarés perdus)"})
+        +ligneSIG("= RÉSULTAT D'EXPLOITATION", resultatExploitation, {total:true, taux:tauxRE, formule:"Marge nette − Commissions − Pertes"})
       +'</div>'
-      +'<div style="font-size:10px;color:var(--gray-420);margin-bottom:16px;">Le résultat d\'exploitation ne tient pas compte des charges fiscales (patente, impôts) ni des charges fixes générales (loyer, personnel administratif, amortissements), à intégrer par le comptable en charge de la comptabilité légale.</div>'
+      +'<div style="font-size:10px;color:var(--gray-420);margin-bottom:12px;">Le résultat d\'exploitation ci-dessus est avant charges fixes. Renseignez vos charges ci-dessous pour obtenir le Résultat Net réel.</div>'
+
+      // ── CHARGES FIXES ──
+      +(()=>{
+        // Lire les charges fixes depuis la config (localStorage)
+        const cf = JSON.parse(localStorage.getItem('verdapp_charges_fixes')||'{}');
+        const loyer    = cf.loyer||0;
+        const salaires = cf.salaires||0;
+        const patente  = cf.patente||0;
+        const electricite = cf.electricite||0;
+        const divers   = cf.divers||0;
+        const totalCF  = loyer+salaires+patente+electricite+divers;
+        const resultatNet = resultatExploitation - totalCF;
+        const tauxRN = ca ? Math.round(resultatNet/ca*100) : 0;
+        return '<div style="font-size:11px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">📋 Charges fixes</div>'
+          +'<div style="background:#fff;border:1.5px solid var(--gray-150);border-radius:var(--r);padding:6px 4px;margin-bottom:8px;">'
+            +ligneSIG("Résultat d\'exploitation (report)", resultatExploitation, {formule:"Marge nette − Commissions − Pertes"})
+            +ligneSIG("- Loyer / Location", loyer, {neg:true, formule:"Saisir dans ⚙ Paramètres charges"})
+            +ligneSIG("- Salaires & charges sociales", salaires, {neg:true, formule:"Personnel administratif et terrain fixe"})
+            +ligneSIG("- Patente & impôts professionnels", patente, {neg:true, formule:"Patente, TVA, IS, contributions"})
+            +ligneSIG("- Électricité & eau", electricite, {neg:true, formule:"Charges courantes du local"})
+            +ligneSIG("- Charges diverses", divers, {neg:true, formule:"Autres charges fixes non listées ci-dessus"})
+            +ligneSIG("= RÉSULTAT NET", resultatNet, {total:true, taux:tauxRN, formule:"Résultat exploitation − Charges fixes"})
+          +'</div>'
+          +(totalCF===0
+            ?'<div style="background:var(--orange-50);border:1px solid var(--orange-100);border-radius:var(--r-sm);padding:8px 12px;font-size:11px;color:var(--orange-dark);margin-bottom:12px;">⚙ Charges fixes à 0 F — configurez-les dans <b>Paramètres → Charges fixes</b> pour afficher le Résultat Net réel.</div>'
+            :'<div style="font-size:9px;color:var(--gray-400);font-style:italic;margin-bottom:12px;">Charges fixes mensuelles estimées : '+fmt(totalCF)+' F — modifiables dans Paramètres → Charges fixes</div>'
+          );
+      })()
 
       +'<div style="font-size:11px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">📐 Ratios financiers</div>'
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2);">'
@@ -8351,6 +8773,1386 @@ async function sbSelect(table, filters){
 }
 // ──────────────────────────────────────────────────────────────
 
+
+
+
+
+
+
+// ══════════════════════════════════════════════════════════════
+// ÉVOLUTION #9 — ALERTES INTELLIGENTES
+// ══════════════════════════════════════════════════════════════
+function renderAlertesIntelligentes(targetId){
+  const el = document.getElementById(targetId);
+  if(!el) return;
+
+  const fmt   = v => Math.round(v||0).toLocaleString("fr-FR");
+  const today = new Date().toISOString().slice(0,10);
+  const alertes = [];
+
+  // ── 1. Fournisseurs non payés depuis plus de 7 jours ──────────────
+  const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate()-7);
+  const sevenDaysStr = sevenDaysAgo.toISOString().slice(0,10);
+  const achatsNonPaies = achats.filter(a=>{
+    const brut=(a.quantite||0)*(a.prix_unitaire||0)-(a.avance_paye||0);
+    const reglF=reglements.filter(r=>(r.fournisseur||"").toLowerCase()===(a.fournisseur||"").toLowerCase()).reduce((s,r)=>s+(r.montant||0),0);
+    return brut-reglF>0 && (a.date||"") < sevenDaysStr;
+  });
+  const fournNonPaies=[...new Set(achatsNonPaies.map(a=>a.fournisseur))];
+  fournNonPaies.forEach(f=>{
+    const montantDu=achatsNonPaies.filter(a=>a.fournisseur===f).reduce((s,a)=>{
+      const brut=(a.quantite||0)*(a.prix_unitaire||0)-(a.avance_paye||0);
+      const reglF=reglements.filter(r=>r.fournisseur===f).reduce((s2,r)=>s2+(r.montant||0),0);
+      return s+Math.max(0,brut-reglF);
+    },0);
+    alertes.push({
+      type:"danger", icon:"💸",
+      titre:`Fournisseur non payé depuis >7j`,
+      detail:`${f} — Reste dû : ${fmt(montantDu)} F`,
+      action:`switchTab('finance');switchFinanceSub('tiers')`,
+      btnLabel:"Régler"
+    });
+  });
+
+  // ── 2. Colis en retard (ETA dépassé sans arrivée confirmée) ───────
+  const colisRetard = achats.filter(a=>{
+    const sl = getStatutLivraison(a);
+    return sl==="en_transit" && a.date_arrivee_prevue && a.date_arrivee_prevue < today;
+  });
+  colisRetard.forEach(a=>{
+    const joursRetard = Math.round((new Date(today)-new Date(a.date_arrivee_prevue))/(1000*3600*24));
+    alertes.push({
+      type:"warning", icon:"🚚",
+      titre:`Colis en retard — ${joursRetard}j`,
+      detail:`${a.produit} de ${a.fournisseur} · ETA ${a.date_arrivee_prevue} dépassée`,
+      action:`switchTab('commercial');switchCommercialSub('colis')`,
+      btnLabel:"Voir colis"
+    });
+  });
+
+  // ── 3. Stock négatif ou sous le seuil ─────────────────────────────
+  const produitsActifs=[...new Set(achats.filter(a=>a.statut==="recu").map(a=>a.produit))];
+  produitsActifs.forEach(p=>{
+    const dispo = stockDisponibleProduit(p);
+    const seuil = (seuilsStock&&seuilsStock[p]) || 0;
+    if(dispo < 0){
+      alertes.push({type:"danger", icon:"📦", titre:`Stock négatif — ${p}`,
+        detail:`${Math.abs(dispo)} unités vendues en trop — vérifier les saisies`,
+        action:`switchTab('commercial');switchCommercialSub('stock')`, btnLabel:"Voir stock"});
+    } else if(seuil>0 && dispo<=seuil){
+      alertes.push({type:"warning", icon:"📦", titre:`Stock bas — ${p}`,
+        detail:`${dispo} unités restantes (seuil : ${seuil})`,
+        action:`switchTab('commercial');switchCommercialSub('stock')`, btnLabel:"Voir stock"});
+    }
+  });
+
+  // ── 4. Trésorerie sous le seuil ────────────────────────────────────
+  const soldeCourant = soldeCaisse(tousMouvementsCaisse());
+  const seuil = typeof seuilTresorerie==="function" ? seuilTresorerie() : 200000;
+  if(soldeCourant < seuil){
+    alertes.push({
+      type: soldeCourant < 0 ? "danger" : "warning",
+      icon:"💵",
+      titre:`Trésorerie ${soldeCourant<0?"négative":"sous le seuil"}`,
+      detail:`Solde actuel : ${fmt(soldeCourant)} F (seuil : ${fmt(seuil)} F)`,
+      action:`switchTab('finance');switchFinanceSub('tresorerie')`,
+      btnLabel:"Voir tréso"
+    });
+  }
+
+  // ── 5. Marge en baisse 2 semaines consécutives ─────────────────────
+  const margeSem = [];
+  for(let i=0;i<3;i++){
+    const d1=new Date(); d1.setDate(d1.getDate()-(i+1)*7);
+    const d2=new Date(); d2.setDate(d2.getDate()-i*7);
+    const s1=d1.toISOString().slice(0,10), s2=d2.toISOString().slice(0,10);
+    const ventesS = ventes.filter(v=>v.date>=s1&&v.date<s2);
+    const ca   = ventesS.reduce((s,v)=>s+(v.quantite||0)*(v.prix_vente||0),0);
+    const mb   = typeof margebrute==="function" ? margebrute(ventesS) : 0;
+    margeSem.push({s1,s2,ca,mb,taux:ca?Math.round(mb/ca*100):0});
+  }
+  if(margeSem[0].taux < margeSem[1].taux && margeSem[1].taux < margeSem[2].taux && margeSem[0].taux > 0){
+    alertes.push({
+      type:"warning", icon:"📉",
+      titre:"Marge en baisse 2 semaines consécutives",
+      detail:`S-2: ${margeSem[2].taux}% → S-1: ${margeSem[1].taux}% → S-0: ${margeSem[0].taux}%`,
+      action:`switchTab('finance');switchFinanceSub('sig')`,
+      btnLabel:"Voir SIG"
+    });
+  }
+
+  // ── Rendu ──────────────────────────────────────────────────────────
+  if(!alertes.length){
+    el.innerHTML =
+      '<div style="text-align:center;padding:30px;background:var(--green-50);border:1.5px solid var(--green-bright3);border-radius:var(--r);">'
+      +'<div style="font-size:32px;margin-bottom:8px;">✅</div>'
+      +'<div style="font-size:14px;font-weight:800;color:var(--green-700);">Tout est en ordre</div>'
+      +'<div style="font-size:11px;color:var(--green-mid);margin-top:4px;">Aucune alerte — stock, trésorerie et paiements fournisseurs OK</div>'
+      +'</div>';
+    return;
+  }
+
+  const colorMap = {danger:"var(--red-50)","danger-border":"var(--red-200)","danger-text":"var(--red)",
+                    warning:"var(--orange-50)","warning-border":"var(--orange-100)","warning-text":"var(--orange-dark)"};
+
+  el.innerHTML =
+    '<div style="font-size:11px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">'
+    +'🔔 Alertes ('+alertes.length+')</div>'
+    +alertes.map((a,i)=>`
+      <div style="background:${colorMap[a.type]};border:1px solid ${colorMap[a.type+"-border"]};border-radius:var(--r);padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:12px;">
+        <div style="font-size:24px;flex-shrink:0;">${a.icon}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12px;font-weight:800;color:${colorMap[a.type+"-text"]};">${a.titre}</div>
+          <div style="font-size:10px;color:var(--gray-500);margin-top:2px;">${a.detail}</div>
+        </div>
+        <button onclick="${a.action}" style="flex-shrink:0;background:${colorMap[a.type+"-text"]};color:#fff;border:none;border-radius:var(--r-sm);padding:6px 12px;font-size:10px;font-weight:700;cursor:pointer;font-family:inherit;">${a.btnLabel}</button>
+      </div>`).join('');
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
+// ══════════════════════════════════════════════════════════════
+// ÉVOLUTION #7 — MODULE TRANSPORTEURS
+// ══════════════════════════════════════════════════════════════
+function renderTransporteurs(){
+  const target = document.getElementById("page-transporteurs");
+  if(!target) return;
+  const fmt = v => Math.round(v||0).toLocaleString("fr-FR");
+  const today = new Date().toISOString().slice(0,10);
+
+  // Construire la liste des transporteurs depuis les achats
+  const transMap = {};
+  achats.filter(a => a.transporteur).forEach(a => {
+    const nom   = (a.transporteur||"").trim();
+    const tel   = (a.vehicule||"").replace(/[^0-9+]/g,"") || "";
+    const key   = nom.toLowerCase();
+    if(!transMap[key]) transMap[key] = {
+      nom, tel, colis:0, retards:0, onTime:0,
+      fraisCumul:0, livraisons:[]
+    };
+
+    const t = transMap[key];
+    t.colis++;
+
+    // Calcul retard
+    const eta   = a.date_arrivee_prevue || null;
+    const reelle= a.date_arrivee_reelle || null;
+    const depart= a.date_depart         || null;
+
+    let statut = "en_transit";
+    if(reelle) statut = "livre";
+    else if(eta && today > eta) statut = "retard";
+
+    if(statut === "retard") t.retards++;
+    else if(statut === "livre") {
+      t.onTime++;
+      // Retard réel si arrivée réelle > ETA
+      if(eta && reelle && reelle > eta) t.retards++;
+    }
+
+    // Frais transport
+    t.fraisCumul += (a.transport||0);
+
+    t.livraisons.push({
+      produit: a.produit||"—",
+      fournisseur: a.fournisseur||"—",
+      date: a.date||"",
+      depart, eta, reelle, statut,
+      qte: a.quantite||0,
+      transport: a.transport||0
+    });
+  });
+
+  const transporteurs = Object.values(transMap).sort((a,b) => b.colis - a.colis);
+
+  if(!transporteurs.length){
+    target.innerHTML = `
+      <div style="text-align:center;padding:40px 20px;color:var(--gray-420);">
+        <div style="font-size:32px;margin-bottom:10px;">🚛</div>
+        <div style="font-size:14px;font-weight:700;">Aucun transporteur enregistré</div>
+        <div style="font-size:11px;margin-top:6px;">Renseignez le transporteur lors de la saisie d'un achat (suivi colis).</div>
+      </div>`;
+    return;
+  }
+
+  const cartes = transporteurs.map(t => {
+    const fiabilite = t.colis > 0 ? Math.round((t.colis - t.retards) / t.colis * 100) : 100;
+    const colorFiab = fiabilite >= 80 ? "var(--green-700)" : fiabilite >= 60 ? "var(--orange)" : "var(--red)";
+    const scoreBadge = fiabilite >= 80 ? "✅" : fiabilite >= 60 ? "⚠️" : "❌";
+
+    const derniers = [...t.livraisons].sort((a,b) => (b.date||"").localeCompare(a.date||"")).slice(0,3);
+
+    return `
+      <div style="background:#fff;border:1.5px solid var(--gray-150);border-radius:var(--r);padding:16px;margin-bottom:12px;">
+
+        <!-- Header transporteur -->
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
+          <div>
+            <div style="font-size:15px;font-weight:900;color:var(--text);">🚛 ${t.nom}</div>
+            ${t.tel ? `<div style="font-size:11px;color:var(--gray-420);margin-top:3px;">
+              📞 <a href="tel:${t.tel}" style="color:var(--green-mid);text-decoration:none;">${t.tel}</a>
+              &nbsp;·&nbsp;
+              <a href="https://wa.me/${t.tel.replace(/[^0-9]/g,'')}" target="_blank" style="color:#25d366;font-weight:700;text-decoration:none;">WhatsApp</a>
+            </div>` : ""}
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:20px;font-weight:900;color:${colorFiab};">${fiabilite}%</div>
+            <div style="font-size:9px;color:var(--gray-420);">fiabilité ${scoreBadge}</div>
+          </div>
+        </div>
+
+        <!-- Barre fiabilité -->
+        <div style="margin-bottom:12px;">
+          <div style="background:var(--gray-100);border-radius:10px;height:6px;overflow:hidden;">
+            <div style="height:100%;width:${fiabilite}%;background:${colorFiab};border-radius:10px;"></div>
+          </div>
+        </div>
+
+        <!-- KPI grille -->
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:12px;">
+          <div style="text-align:center;background:var(--gray-50);border-radius:var(--r-sm);padding:8px 4px;">
+            <div style="font-size:16px;font-weight:900;color:var(--text);">${t.colis}</div>
+            <div style="font-size:9px;color:var(--gray-420);">Colis totaux</div>
+          </div>
+          <div style="text-align:center;background:var(--gray-50);border-radius:var(--r-sm);padding:8px 4px;">
+            <div style="font-size:16px;font-weight:900;color:${t.retards > 0 ? "var(--red)" : "var(--green-700)"};">${t.retards}</div>
+            <div style="font-size:9px;color:var(--gray-420);">Retards</div>
+          </div>
+          <div style="text-align:center;background:var(--gray-50);border-radius:var(--r-sm);padding:8px 4px;">
+            <div style="font-size:14px;font-weight:900;color:var(--text);">${fmt(t.fraisCumul)} F</div>
+            <div style="font-size:9px;color:var(--gray-420);">Frais cumulés</div>
+          </div>
+        </div>
+
+        <!-- Historique dernières livraisons -->
+        <div style="font-size:9px;font-weight:700;color:var(--gray-420);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Dernières livraisons</div>
+        ${derniers.map(l => {
+          const icone = l.statut === "livre" ? "✅" : l.statut === "retard" ? "⚠️" : "🚚";
+          const statutLabel = l.statut === "livre" ? "Livré" : l.statut === "retard" ? "En retard" : "En transit";
+          const couleur = l.statut === "livre" ? "var(--green-700)" : l.statut === "retard" ? "var(--red)" : "var(--orange)";
+          return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:var(--gray-50);border-radius:var(--r-sm);margin-bottom:4px;font-size:11px;">
+            <div>
+              <span>${icone}</span>
+              <span style="font-weight:700;color:var(--text);margin-left:4px;">${l.produit}</span>
+              <span style="color:var(--gray-420);"> · ${l.qte} u. · ${l.fournisseur}</span>
+            </div>
+            <span style="font-weight:700;color:${couleur};flex-shrink:0;margin-left:8px;">${statutLabel}</span>
+          </div>`;
+        }).join("")}
+      </div>`;
+  });
+
+  target.innerHTML = `
+    <div style="font-size:11px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;">
+      🚛 Transporteurs (${transporteurs.length})
+    </div>
+    ${cartes.join("")}
+    <div style="font-size:9px;color:var(--gray-420);font-style:italic;text-align:center;margin-top:8px;">
+      Fiabilité = (colis sans retard ÷ colis totaux) × 100
+    </div>
+  `;
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
+
+
+// ══════════════════════════════════════════════════════════════
+// ÉVOLUTION #14 — RAPPROCHEMENT BANCAIRE BOA-CI
+// Import relevé bancaire + matching automatique + écarts
+// ══════════════════════════════════════════════════════════════
+
+// Ajouter onglet "Banque" dans Finance
+// (déclaré dans FINANCE_SUBTABS en haut du fichier)
+
+let releveBancaire = JSON.parse(localStorage.getItem("verdapp_releve_bancaire")||"[]");
+
+function sauvegarderReleveBancaire(){
+  localStorage.setItem("verdapp_releve_bancaire", JSON.stringify(releveBancaire));
+}
+
+function renderRapprochementBancaire(){
+  const target = document.getElementById("page-financeContent");
+  if(!target) return;
+
+  const fmt = v=>Math.round(v||0).toLocaleString("fr-FR");
+  const tous = tousMouvementsCaisse();
+
+  // Matcher les mouvements VerdApp avec le relevé
+  const matches = [];
+  const unmatchedReleve   = [];
+  const unmatchedVerdapp  = [];
+
+  releveBancaire.forEach(rb=>{
+    const match = tous.find(m=>{
+      const mnt = Math.abs((m.montant||0)-Math.abs(rb.montant||0)) < 500; // tolérance 500F
+      const date = Math.abs(new Date(m.date)-new Date(rb.date))/(1000*3600*24) <= 3; // ±3 jours
+      return mnt && date;
+    });
+    if(match) matches.push({rb, m:match});
+    else unmatchedReleve.push(rb);
+  });
+
+  tous.forEach(m=>{
+    const matched = matches.find(x=>x.m===m);
+    if(!matched && m.sens==="entree") unmatchedVerdapp.push(m);
+  });
+
+  const soldeReleve  = releveBancaire.reduce((s,r)=>s+(r.montant||0),0);
+  const soldeVerdapp = soldeCaisse(tous);
+  const ecart        = soldeVerdapp - soldeReleve;
+
+  target.innerHTML = `
+    <div style="margin-bottom:16px;">
+      <div style="font-size:14px;font-weight:800;color:var(--text);margin-bottom:4px;">🏦 Rapprochement bancaire BOA-CI</div>
+      <div style="font-size:11px;color:var(--gray-420);">Comparez vos relevés BOA-CI avec les transactions VerdApp CI</div>
+    </div>
+
+    <!-- Soldes comparés -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px;">
+      <div style="background:#fff;border:1.5px solid var(--gray-150);border-radius:var(--r);padding:14px;text-align:center;">
+        <div style="font-size:9px;font-weight:700;color:var(--gray-420);text-transform:uppercase;">Solde VerdApp</div>
+        <div style="font-size:20px;font-weight:900;color:var(--green-700);margin:6px 0;">${fmt(soldeVerdapp)} F</div>
+        <div style="font-size:9px;color:var(--gray-420);">Caisse + Mobile Money</div>
+      </div>
+      <div style="background:#fff;border:1.5px solid var(--gray-150);border-radius:var(--r);padding:14px;text-align:center;">
+        <div style="font-size:9px;font-weight:700;color:var(--gray-420);text-transform:uppercase;">Solde BOA-CI</div>
+        <div style="font-size:20px;font-weight:900;color:var(--blue-600);margin:6px 0;">${fmt(soldeReleve)} F</div>
+        <div style="font-size:9px;color:var(--gray-420);">${releveBancaire.length} opérations importées</div>
+      </div>
+      <div style="background:${Math.abs(ecart)<1000?'var(--green-50)':'var(--orange-50)'};border:1.5px solid ${Math.abs(ecart)<1000?'var(--green-bright3)':'var(--orange-100)'};border-radius:var(--r);padding:14px;text-align:center;">
+        <div style="font-size:9px;font-weight:700;color:var(--gray-420);text-transform:uppercase;">Écart</div>
+        <div style="font-size:20px;font-weight:900;color:${Math.abs(ecart)<1000?'var(--green-700)':'var(--orange-dark)'};margin:6px 0;">${fmt(ecart)} F</div>
+        <div style="font-size:9px;color:var(--gray-420);">${Math.abs(ecart)<1000?'✅ Rapprochement OK':'⚠️ Vérifiez les écarts'}</div>
+      </div>
+    </div>
+
+    <!-- Import relevé -->
+    <div style="background:#fff;border:1.5px solid var(--gray-150);border-radius:var(--r);padding:14px;margin-bottom:12px;">
+      <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:10px;">📥 Importer un relevé bancaire</div>
+      <div style="font-size:11px;color:var(--gray-420);margin-bottom:10px;">
+        Collez les lignes de votre relevé BOA-CI (CSV) au format :<br>
+        <code style="background:var(--gray-100);padding:2px 6px;border-radius:4px;font-size:10px;">Date;Description;Montant</code>
+        (montant négatif = débit)
+      </div>
+      <textarea id="releve_csv_input" rows="6" placeholder="2026-06-15;VIREMENT RECU SALIFOU;150000&#10;2026-06-16;FRAIS BANCAIRES;-2500&#10;2026-06-17;DEPOT ESPECES;200000" style="font-family:monospace;font-size:11px;width:100%;padding:10px;border:1.5px solid var(--gray-200);border-radius:var(--r-sm);"></textarea>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button onclick="importerReleveBancaire()" class="btn btn-green" style="flex:1;">📥 Importer</button>
+        <button onclick="saisirOperationManuelle()" style="background:#fff;border:1.5px solid var(--gray-200);color:var(--text);border-radius:var(--r-sm);padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">+ Saisie manuelle</button>
+        ${releveBancaire.length?'<button onclick="effacerReleve()" style="background:var(--red-50);border:1px solid var(--red-200);color:var(--red);border-radius:var(--r-sm);padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">🗑 Effacer</button>':''}
+      </div>
+    </div>
+
+    <!-- Opérations rapprochées -->
+    ${matches.length ? `
+    <div style="margin-bottom:12px;">
+      <div style="font-size:11px;font-weight:700;color:var(--green-700);margin-bottom:6px;">✅ Opérations rapprochées (${matches.length})</div>
+      ${matches.slice(0,5).map(x=>`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--green-50);border:1px solid var(--green-bright3);border-radius:var(--r-sm);margin-bottom:4px;font-size:11px;">
+          <div>
+            <span style="font-weight:700;">${x.rb.description||x.m.note||''}</span>
+            <span style="color:var(--gray-420);"> · ${x.rb.date}</span>
+          </div>
+          <span style="font-weight:800;color:var(--green-700);">${fmt(Math.abs(x.rb.montant||0))} F ✅</span>
+        </div>`).join('')}
+    </div>` : ''}
+
+    <!-- Écarts non rapprochés -->
+    ${unmatchedReleve.length ? `
+    <div style="margin-bottom:12px;">
+      <div style="font-size:11px;font-weight:700;color:var(--orange-dark);margin-bottom:6px;">⚠️ Dans BOA-CI mais pas dans VerdApp (${unmatchedReleve.length})</div>
+      ${unmatchedReleve.map(rb=>`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--orange-50);border:1px solid var(--orange-100);border-radius:var(--r-sm);margin-bottom:4px;font-size:11px;">
+          <div>
+            <span style="font-weight:700;">${rb.description||'—'}</span>
+            <span style="color:var(--gray-420);"> · ${rb.date}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-weight:800;color:var(--orange-dark);">${fmt(Math.abs(rb.montant||0))} F</span>
+            <button onclick="ajouterMouvementDepuisReleve('${rb.date}','${(rb.description||'').replace(/'/g,'')}',(${rb.montant||0}))" style="background:var(--orange);color:#fff;border:none;border-radius:var(--r-sm);padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;font-family:inherit;">+ Enregistrer</button>
+          </div>
+        </div>`).join('')}
+    </div>` : ''}
+
+    <div style="font-size:9px;color:var(--gray-400);font-style:italic;text-align:center;margin-top:12px;">
+      Le rapprochement automatique tolère une différence de 500 F et ±3 jours. Pour un rapprochement exact, utilisez l'option saisie manuelle.
+    </div>
+  `;
+}
+
+function importerReleveBancaire(){
+  const csv = document.getElementById("releve_csv_input")?.value.trim();
+  if(!csv) return showToast("Collez d'abord votre relevé CSV","error");
+
+  const lignes = csv.split("
+").filter(l=>l.trim());
+  let imported = 0;
+  lignes.forEach(l=>{
+    const parts = l.split(";");
+    if(parts.length < 3) return;
+    const date   = parts[0].trim();
+    const desc   = parts[1].trim();
+    const montant= parseFloat(parts[2].replace(/[^0-9.-]/g,""));
+    if(!date||isNaN(montant)) return;
+    releveBancaire.push({date, description:desc, montant});
+    imported++;
+  });
+
+  sauvegarderReleveBancaire();
+  showToast("✅ "+imported+" opération(s) importée(s)");
+  renderRapprochementBancaire();
+}
+
+function saisirOperationManuelle(){
+  showModal(`
+    <div class="form-block">
+      <div class="form-block-title">🏦 Opération bancaire manuelle</div>
+      <div class="form-grid">
+        <div><label class="label">Date</label><input type="date" id="rb_date" value="${new Date().toISOString().slice(0,10)}"/></div>
+        <div><label class="label">Description</label><input type="text" id="rb_desc" placeholder="Virement reçu..."/></div>
+        <div><label class="label">Montant (F) — négatif si débit</label><input type="number" id="rb_montant" placeholder="150000" inputmode="numeric"/></div>
+      </div>
+    </div>
+    <button class="btn btn-green" onclick="saveOperationManuelle()">💾 Ajouter</button>
+    <button class="btn btn-ghost" style="margin-top:8px;" onclick="closeModal()">Annuler</button>
+  `);
+}
+
+function saveOperationManuelle(){
+  const date   = document.getElementById("rb_date")?.value;
+  const desc   = document.getElementById("rb_desc")?.value.trim()||"";
+  const montant= parseFloat(document.getElementById("rb_montant")?.value||"0");
+  if(!date||isNaN(montant)) return showToast("Champs requis manquants","error");
+  releveBancaire.push({date, description:desc, montant});
+  sauvegarderReleveBancaire();
+  closeModal();
+  showToast("✅ Opération ajoutée au relevé");
+  renderRapprochementBancaire();
+}
+
+async function ajouterMouvementDepuisReleve(date, description, montant){
+  const sens = montant>=0?"entree":"sortie";
+  const mvt = {
+    id:genId(), date, sens,
+    categorie: sens==="entree"?"paiement_client":"autre",
+    montant:Math.abs(montant), mode_paiement:"BOA-CI",
+    note:"[BOA-CI] "+description
+  };
+  mouvementsCaisse.push(mvt);
+  try{ await sbInsert("mouvements_caisse", mvt); }catch(e){ /* pas bloquant */ }
+  saveLocal();
+  showToast("✅ Mouvement enregistré depuis relevé BOA-CI");
+  renderRapprochementBancaire();
+}
+
+function effacerReleve(){
+  if(!confirm("Effacer tout le relevé importé ?")) return;
+  releveBancaire=[];
+  sauvegarderReleveBancaire();
+  renderRapprochementBancaire();
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
+// ══════════════════════════════════════════════════════════════
+// ÉVOLUTION #13 — COMPTABILITÉ LÉGALE SYSCOHADA COMPLÈTE
+// Plan comptable étendu + Grand Livre + Balance + Bilan
+// ══════════════════════════════════════════════════════════════
+
+const PLAN_COMPTES_ETENDU = {
+  // CLASSE 1 — Capitaux
+  "101": {libelle:"Capital",                          classe:"1 - Capitaux",          sens:"P"},
+  "129": {libelle:"Report à nouveau déficitaire",     classe:"1 - Capitaux",          sens:"A"},
+  // CLASSE 3 — Stocks
+  "311": {libelle:"Marchandises en stock (FIFO)",     classe:"3 - Stocks",            sens:"A"},
+  // CLASSE 4 — Tiers
+  "401": {libelle:"Fournisseurs",                     classe:"4 - Tiers",             sens:"P"},
+  "411": {libelle:"Clients",                          classe:"4 - Tiers",             sens:"A"},
+  "421": {libelle:"Personnel — rémunérations dues",   classe:"4 - Tiers",             sens:"P"},
+  "447": {libelle:"État — impôts et taxes",           classe:"4 - Tiers",             sens:"P"},
+  // CLASSE 5 — Trésorerie
+  "521": {libelle:"Banques (BOA-CI)",                 classe:"5 - Trésorerie",        sens:"A"},
+  "571": {libelle:"Caisse / Mobile Money (Wave)",     classe:"5 - Trésorerie",        sens:"A"},
+  // CLASSE 6 — Charges
+  "601": {libelle:"Achats de marchandises",           classe:"6 - Charges d'exploit.",sens:"C"},
+  "6011":{libelle:"Frais accessoires d'achat",        classe:"6 - Charges d'exploit.",sens:"C"},
+  "622": {libelle:"Loyers et charges locatives",      classe:"6 - Charges d'exploit.",sens:"C"},
+  "624": {libelle:"Entretien et réparations",         classe:"6 - Charges d'exploit.",sens:"C"},
+  "626": {libelle:"Transports de marchandises",       classe:"6 - Charges d'exploit.",sens:"C"},
+  "641": {libelle:"Commissions terrain (personnel)",  classe:"6 - Charges d'exploit.",sens:"C"},
+  "644": {libelle:"Patente et impôts professionnels", classe:"6 - Charges d'exploit.",sens:"C"},
+  "645": {libelle:"Charges sociales",                 classe:"6 - Charges d'exploit.",sens:"C"},
+  "658": {libelle:"Pertes et charges diverses",       classe:"6 - Charges d'exploit.",sens:"C"},
+  "681": {libelle:"Dotations aux amortissements",     classe:"6 - Charges d'exploit.",sens:"C"},
+  // CLASSE 7 — Produits
+  "701": {libelle:"Ventes de marchandises",           classe:"7 - Produits d'exploit.",sens:"P"},
+  "758": {libelle:"Produits divers d'exploitation",   classe:"7 - Produits d'exploit.",sens:"P"},
+};
+
+// ── Grand Livre ───────────────────────────────────────────────────────────────
+function genererGrandLivre(){
+  const lignes = journalComptable.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||""));
+  const gl = {}; // compte → [{date, libelle, debit, credit}]
+
+  lignes.forEach(e=>{
+    if(!gl[e.compte_debit]) gl[e.compte_debit]={libelle:e.compte_debit_libelle,mvts:[]};
+    gl[e.compte_debit].mvts.push({date:e.date,libelle:e.libelle,debit:e.montant,credit:0,ref:e.type_operation});
+
+    if(!gl[e.compte_credit]) gl[e.compte_credit]={libelle:e.compte_credit_libelle,mvts:[]};
+    gl[e.compte_credit].mvts.push({date:e.date,libelle:e.libelle,debit:0,credit:e.montant,ref:e.type_operation});
+  });
+
+  return gl;
+}
+
+function renderGrandLivre(){
+  const target = document.getElementById("journalInline");
+  if(!target) return;
+  const fmt = v=>Math.round(v||0).toLocaleString("fr-FR");
+  const gl = genererGrandLivre();
+  const comptes = Object.keys(gl).sort();
+
+  let html = '<div style="margin-bottom:16px;">'
+    +'<div style="font-size:14px;font-weight:800;color:var(--text);margin-bottom:4px;">📗 Grand Livre SYSCOHADA</div>'
+    +'<div style="font-size:11px;color:var(--gray-420);">Mouvements par compte — '+journalComptable.length+' écriture(s)</div>'
+    +'<div style="display:flex;gap:8px;margin-top:10px;">'
+      +'<button onclick="renderGrandLivre()" style="background:var(--green-800);color:#fff;border:none;border-radius:var(--r-sm);padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;">📗 Grand Livre</button>'
+      +'<button onclick="renderBalanceGenerale()" style="background:#fff;border:1.5px solid var(--gray-200);color:var(--text);border-radius:var(--r-sm);padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;">⚖ Balance</button>'
+      +'<button onclick="renderBilanSYSCOHADA()" style="background:#fff;border:1.5px solid var(--gray-200);color:var(--text);border-radius:var(--r-sm);padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;">📊 Bilan</button>'
+      +'<button onclick="exporterJournalPDF()" style="background:var(--orange);color:#fff;border:none;border-radius:var(--r-sm);padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;">📄 PDF</button>'
+    +'</div>'
+  +'</div>';
+
+  comptes.forEach(compte=>{
+    const data = gl[compte];
+    const plan = PLAN_COMPTES_ETENDU[compte]||PLAN_COMPTES[compte];
+    const totalD = data.mvts.reduce((s,m)=>s+m.debit,0);
+    const totalC = data.mvts.reduce((s,m)=>s+m.credit,0);
+    const solde  = totalD - totalC;
+    const isSoldeDebiteur = solde >= 0;
+
+    html += '<div style="background:#fff;border:1.5px solid var(--gray-150);border-radius:var(--r);margin-bottom:10px;overflow:hidden;">'
+      +'<div style="background:var(--green-800);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;">'
+        +'<div><span style="font-size:13px;font-weight:900;color:#fff;">'+compte+'</span> <span style="font-size:11px;color:rgba(255,255,255,.7);">'+(plan?.libelle||data.libelle||compte)+'</span></div>'
+        +'<div style="text-align:right;">'
+          +'<div style="font-size:10px;color:rgba(255,255,255,.6);">'+(plan?.classe||'')+'</div>'
+          +'<div style="font-size:12px;font-weight:800;color:'+(isSoldeDebiteur?'#90EE90':'#FF9999')+';">Solde : '+(isSoldeDebiteur?'D ':'C ')+fmt(Math.abs(solde))+'</div>'
+        +'</div>'
+      +'</div>'
+      +'<div style="overflow-x:auto;">'
+        +'<table style="width:100%;border-collapse:collapse;font-size:10px;">'
+          +'<thead><tr style="background:var(--gray-50);border-bottom:1.5px solid var(--gray-200);">'
+            +'<th style="padding:5px 10px;text-align:left;color:var(--gray-420);">Date</th>'
+            +'<th style="padding:5px 10px;text-align:left;color:var(--gray-420);">Libellé</th>'
+            +'<th style="padding:5px 10px;text-align:right;color:var(--green-700);">Débit</th>'
+            +'<th style="padding:5px 10px;text-align:right;color:var(--red);">Crédit</th>'
+          +'</tr></thead>'
+          +'<tbody>'
+          +data.mvts.map(m=>'<tr style="border-bottom:1px solid var(--gray-100);">'
+            +'<td style="padding:5px 10px;color:var(--gray-420);white-space:nowrap;">'+m.date+'</td>'
+            +'<td style="padding:5px 10px;color:var(--text);">'+m.libelle+'</td>'
+            +'<td style="padding:5px 10px;text-align:right;font-weight:'+(m.debit>0?'700':'400')+';color:'+(m.debit>0?'var(--green-700)':'var(--gray-300)')+';">'+(m.debit>0?fmt(m.debit):'—')+'</td>'
+            +'<td style="padding:5px 10px;text-align:right;font-weight:'+(m.credit>0?'700':'400')+';color:'+(m.credit>0?'var(--red)':'var(--gray-300)')+';">'+(m.credit>0?fmt(m.credit):'—')+'</td>'
+          +'</tr>').join('')
+          +'<tr style="background:var(--gray-50);font-weight:900;border-top:2px solid var(--gray-200);">'
+            +'<td colspan="2" style="padding:6px 10px;font-size:11px;">TOTAUX</td>'
+            +'<td style="padding:6px 10px;text-align:right;color:var(--green-700);">'+fmt(totalD)+'</td>'
+            +'<td style="padding:6px 10px;text-align:right;color:var(--red);">'+fmt(totalC)+'</td>'
+          +'</tr>'
+          +'</tbody>'
+        +'</table>'
+      +'</div>'
+    +'</div>';
+  });
+
+  if(!comptes.length) html += '<div style="text-align:center;padding:30px;color:var(--gray-420);">Aucune écriture. Régénérez le journal d'abord.</div>';
+  target.innerHTML = html;
+}
+
+// ── Balance générale ──────────────────────────────────────────────────────────
+function renderBalanceGenerale(){
+  const target = document.getElementById("journalInline");
+  if(!target) return;
+  const fmt = v=>Math.round(v||0).toLocaleString("fr-FR");
+  const gl = genererGrandLivre();
+
+  let totalD=0, totalC=0;
+  const rows = Object.keys(gl).sort().map(compte=>{
+    const data = gl[compte];
+    const plan = PLAN_COMPTES_ETENDU[compte]||PLAN_COMPTES[compte];
+    const D = data.mvts.reduce((s,m)=>s+m.debit,0);
+    const C = data.mvts.reduce((s,m)=>s+m.credit,0);
+    totalD+=D; totalC+=C;
+    const solde = D-C;
+    return {compte, libelle:(plan?.libelle||data.libelle||compte), D, C, solde};
+  });
+
+  let html = '<div style="margin-bottom:16px;">'
+    +'<div style="font-size:14px;font-weight:800;color:var(--text);margin-bottom:4px;">⚖ Balance des comptes SYSCOHADA</div>'
+    +'<div style="font-size:11px;color:var(--gray-420);">Vérification équilibre Débit = Crédit</div>'
+    +'<div style="display:flex;gap:8px;margin-top:10px;">'
+      +'<button onclick="renderGrandLivre()" style="background:#fff;border:1.5px solid var(--gray-200);color:var(--text);border-radius:var(--r-sm);padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;">📗 Grand Livre</button>'
+      +'<button onclick="renderBalanceGenerale()" style="background:var(--green-800);color:#fff;border:none;border-radius:var(--r-sm);padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;">⚖ Balance</button>'
+      +'<button onclick="renderBilanSYSCOHADA()" style="background:#fff;border:1.5px solid var(--gray-200);color:var(--text);border-radius:var(--r-sm);padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;">📊 Bilan</button>'
+    +'</div>'
+  +'</div>';
+
+  const ecart = Math.abs(totalD-totalC);
+  html += '<div style="background:'+(ecart<1?'var(--green-50)':'var(--red-50)')+';border:1.5px solid '+(ecart<1?'var(--green-bright3)':'var(--red-200)')+';border-radius:var(--r);padding:12px 16px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;">'
+    +'<div><div style="font-weight:800;font-size:12px;color:var(--text);">'+(ecart<1?'✅ Balance équilibrée':'❌ Déséquilibre détecté')+'</div>'
+    +'<div style="font-size:10px;color:var(--gray-420);">Total Débit = '+fmt(totalD)+' F · Total Crédit = '+fmt(totalC)+' F'+(ecart>0?' · Écart : '+fmt(ecart)+' F':'')+'</div></div>'
+  +'</div>';
+
+  html += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">'
+    +'<thead><tr style="background:var(--green-800);">'
+      +'<th style="padding:8px 12px;text-align:left;color:#fff;font-weight:700;">Compte</th>'
+      +'<th style="padding:8px 12px;text-align:left;color:#fff;font-weight:700;">Intitulé</th>'
+      +'<th style="padding:8px 12px;text-align:right;color:#fff;font-weight:700;">Total Débit</th>'
+      +'<th style="padding:8px 12px;text-align:right;color:#fff;font-weight:700;">Total Crédit</th>'
+      +'<th style="padding:8px 12px;text-align:right;color:#fff;font-weight:700;">Solde</th>'
+    +'</tr></thead><tbody>'
+    +rows.map((r,i)=>'<tr style="background:'+(i%2===0?'#fff':'var(--gray-50)')+';border-bottom:1px solid var(--gray-150);">'
+      +'<td style="padding:7px 12px;font-weight:800;color:var(--green-mid);">'+r.compte+'</td>'
+      +'<td style="padding:7px 12px;color:var(--text);">'+r.libelle+'</td>'
+      +'<td style="padding:7px 12px;text-align:right;color:var(--green-700);font-weight:700;">'+fmt(r.D)+'</td>'
+      +'<td style="padding:7px 12px;text-align:right;color:var(--red);font-weight:700;">'+fmt(r.C)+'</td>'
+      +'<td style="padding:7px 12px;text-align:right;font-weight:900;color:'+(r.solde>=0?'var(--green-700)':'var(--red)')+';white-space:nowrap;">'
+        +(r.solde>=0?'D ':'C ')+fmt(Math.abs(r.solde))
+      +'</td>'
+    +'</tr>').join('')
+    +'<tr style="background:var(--green-800);font-weight:900;">'
+      +'<td colspan="2" style="padding:8px 12px;color:#fff;">TOTAUX GÉNÉRAUX</td>'
+      +'<td style="padding:8px 12px;text-align:right;color:#90EE90;">'+fmt(totalD)+'</td>'
+      +'<td style="padding:8px 12px;text-align:right;color:#FF9999;">'+fmt(totalC)+'</td>'
+      +'<td style="padding:8px 12px;text-align:right;color:'+(ecart<1?'#90EE90':'#FF9999')+';">'+(ecart<1?'✅ Équilibré':'❌ Écart '+fmt(ecart))+'</td>'
+    +'</tr></tbody></table></div>';
+
+  target.innerHTML = html;
+}
+
+// ── Bilan SYSCOHADA ───────────────────────────────────────────────────────────
+function renderBilanSYSCOHADA(){
+  const target = document.getElementById("journalInline");
+  if(!target) return;
+  const fmt = v=>Math.round(v||0).toLocaleString("fr-FR");
+  const gl = genererGrandLivre();
+  const solde = compte=>{
+    if(!gl[compte]) return 0;
+    const D=gl[compte].mvts.reduce((s,m)=>s+m.debit,0);
+    const C=gl[compte].mvts.reduce((s,m)=>s+m.credit,0);
+    return D-C;
+  };
+
+  // ACTIF
+  const stockFIFO = [...new Set(achats.map(a=>a.produit))].reduce((s,p)=>s+calculerFIFO(p).coutFIFO,0);
+  const actifs = [
+    {label:"311 — Marchandises en stock (FIFO)", montant:stockFIFO},
+    {label:"411 — Clients",                       montant:Math.max(0, solde("411"))},
+    {label:"571 — Caisse / Mobile Money",          montant:soldeCaisse(tousMouvementsCaisse())},
+    {label:"521 — Banque (BOA-CI)",                montant:0},
+  ];
+  const totalActif = actifs.reduce((s,a)=>s+a.montant,0);
+
+  // PASSIF
+  const totalA = achats.reduce((s,a)=>s+(a.quantite||0)*(a.prix_unitaire||0),0);
+  const totalAv= achats.reduce((s,a)=>s+(a.avance_paye||0),0);
+  const totalRg= reglements.reduce((s,r)=>s+(r.montant||0),0);
+  const dusFourn= Math.max(0, totalA-totalAv-totalRg);
+
+  const commDues= typeof totalCommissionsDues==="function"?totalCommissionsDues():0;
+  const cf      = JSON.parse(localStorage.getItem("verdapp_charges_fixes")||"{}");
+  const cfTotal = (cf.loyer||0)+(cf.salaires||0)+(cf.patente||0)+(cf.electricite||0)+(cf.divers||0);
+  const resultat= typeof margenette==="function"?margenette()-commDues-(typeof totalPertesValeur==="function"?totalPertesValeur():0)-cfTotal:0;
+  const capital  = solde("101")||0;
+
+  const passifs = [
+    {label:"101 — Capital",                             montant:capital},
+    {label:"Résultat de l'exercice (SYSCOHADA)",        montant:resultat, highlight:true},
+    {label:"401 — Fournisseurs",                        montant:dusFourn},
+    {label:"421 — Personnel (commissions dues)",        montant:commDues},
+    {label:"447 — Impôts et taxes dus",                 montant:0},
+  ];
+  const totalPassif = passifs.reduce((s,p)=>s+p.montant,0);
+
+  const ligneRow = (item, side)=>'<tr style="border-bottom:1px solid var(--gray-100);">'
+    +'<td style="padding:7px 12px;font-size:11px;color:var(--text);'+(item.highlight?"font-weight:800;":"")+'">'+item.label+'</td>'
+    +'<td style="padding:7px 12px;text-align:right;font-size:11px;font-weight:700;color:'+(side==="A"?"var(--blue-600)":"var(--green-700)")+';">'+fmt(item.montant)+' F</td>'
+  +'</tr>';
+
+  target.innerHTML =
+    '<div style="margin-bottom:16px;">'
+      +'<div style="font-size:14px;font-weight:800;color:var(--text);margin-bottom:4px;">📊 Bilan SYSCOHADA</div>'
+      +'<div style="font-size:11px;color:var(--gray-420);">Situation patrimoniale — conforme OHADA révisé</div>'
+      +'<div style="display:flex;gap:8px;margin-top:10px;">'
+        +'<button onclick="renderGrandLivre()" style="background:#fff;border:1.5px solid var(--gray-200);color:var(--text);border-radius:var(--r-sm);padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;">📗 Grand Livre</button>'
+        +'<button onclick="renderBalanceGenerale()" style="background:#fff;border:1.5px solid var(--gray-200);color:var(--text);border-radius:var(--r-sm);padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;">⚖ Balance</button>'
+        +'<button onclick="renderBilanSYSCOHADA()" style="background:var(--green-800);color:#fff;border:none;border-radius:var(--r-sm);padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;">📊 Bilan</button>'
+      +'</div>'
+    +'</div>'
+    +'<div style="background:'+(Math.abs(totalActif-totalPassif)<100?'var(--green-50)':'var(--orange-50)')+';border:1.5px solid '+(Math.abs(totalActif-totalPassif)<100?'var(--green-bright3)':'var(--orange-100)')+';border-radius:var(--r);padding:10px 14px;margin-bottom:12px;font-size:11px;">'
+      +(Math.abs(totalActif-totalPassif)<100?'✅ Actif = Passif (bilan équilibré)':'⚠️ Écart '+fmt(Math.abs(totalActif-totalPassif))+' F — vérifiez le capital social')
+    +'</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
+      +'<div>'
+        +'<div style="font-size:11px;font-weight:800;color:var(--blue-600);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">ACTIF</div>'
+        +'<table style="width:100%;border-collapse:collapse;">'
+          +'<tbody>'+actifs.map(a=>ligneRow(a,"A")).join('')+'</tbody>'
+          +'<tfoot><tr style="background:var(--blue-50);border-top:2px solid var(--blue-200);">'
+            +'<td style="padding:8px 12px;font-weight:800;font-size:11px;color:var(--blue-600);">TOTAL ACTIF</td>'
+            +'<td style="padding:8px 12px;text-align:right;font-weight:900;font-size:13px;color:var(--blue-600);">'+fmt(totalActif)+'</td>'
+          +'</tr></tfoot>'
+        +'</table>'
+      +'</div>'
+      +'<div>'
+        +'<div style="font-size:11px;font-weight:800;color:var(--green-700);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">PASSIF</div>'
+        +'<table style="width:100%;border-collapse:collapse;">'
+          +'<tbody>'+passifs.map(p=>ligneRow(p,"P")).join('')+'</tbody>'
+          +'<tfoot><tr style="background:var(--green-50);border-top:2px solid var(--green-bright3);">'
+            +'<td style="padding:8px 12px;font-weight:800;font-size:11px;color:var(--green-700);">TOTAL PASSIF</td>'
+            +'<td style="padding:8px 12px;text-align:right;font-weight:900;font-size:13px;color:var(--green-700);">'+fmt(totalPassif)+'</td>'
+          +'</tr></tfoot>'
+        +'</table>'
+      +'</div>'
+    +'</div>'
+    +'<div style="font-size:9px;color:var(--gray-400);font-style:italic;text-align:center;margin-top:10px;">Bilan simplifié SYSCOHADA Révisé — Régime normal PME/PMI · Pour usage comptable légal, faire certifier par un comptable ONECCA-CI</div>';
+}
+
+// ── Export Journal PDF ────────────────────────────────────────────────────────
+function exporterJournalPDF(){
+  if(typeof window.jspdf === 'undefined'){ showToast('jsPDF non disponible','error'); return; }
+  const {jsPDF} = window.jspdf;
+  const doc  = new jsPDF({unit:'mm', format:'a4', orientation:'landscape'});
+  const fmt  = v=>Math.round(v||0).toLocaleString('fr-FR');
+  const W    = 297, PH=210;
+  const lignes = journalComptable.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||""));
+
+  // Header
+  doc.setFillColor(13,61,26);
+  doc.rect(0,0,W,22,'F');
+  doc.setTextColor(255,255,255);
+  doc.setFontSize(14); doc.setFont('helvetica','bold');
+  doc.text('VerdApp CI — Journal comptable SYSCOHADA',W/2,10,{align:'center'});
+  doc.setFontSize(9); doc.setFont('helvetica','normal');
+  doc.text('Exporté le '+new Date().toLocaleDateString('fr-CI')+' · '+lignes.length+' écritures',W/2,17,{align:'center'});
+
+  // En-têtes tableau
+  let y = 30;
+  doc.setFillColor(232,244,232);
+  doc.rect(10,y-5,W-20,8,'F');
+  doc.setTextColor(13,61,26); doc.setFontSize(8); doc.setFont('helvetica','bold');
+  doc.text('Date',    12,y);
+  doc.text('Libellé', 38,y);
+  doc.text('Type',   120,y);
+  doc.text('Cpt D',  155,y);
+  doc.text('Cpt C',  175,y);
+  doc.text('Débit',  210,y,{align:'right'});
+  doc.text('Crédit', 235,y,{align:'right'});
+  doc.text('Montant',W-12,y,{align:'right'});
+  y+=6;
+  doc.setDrawColor(200,220,200);
+  doc.line(10,y,W-10,y);
+
+  doc.setTextColor(30,30,30); doc.setFont('helvetica','normal');
+  lignes.slice(0,120).forEach((e,i)=>{
+    if(y > PH-20){ doc.addPage(); y=20; }
+    if(i%2===0){ doc.setFillColor(248,252,248); doc.rect(10,y-3,W-20,6,'F'); }
+    doc.text((e.date||'').slice(0,10), 12, y);
+    doc.text((e.libelle||'').slice(0,45), 38, y);
+    doc.text((e.type_operation||'').slice(0,20), 120, y);
+    doc.text(String(e.compte_debit||''), 155, y);
+    doc.text(String(e.compte_credit||''), 175, y);
+    doc.setFont('helvetica','bold');
+    doc.text(fmt(e.montant), 210, y, {align:'right'});
+    doc.text(fmt(e.montant), 235, y, {align:'right'});
+    doc.text(fmt(e.montant), W-12, y, {align:'right'});
+    doc.setFont('helvetica','normal');
+    y+=6;
+  });
+
+  // Total
+  const total = lignes.reduce((s,e)=>s+(e.montant||0),0);
+  doc.setFillColor(13,61,26); doc.rect(10,y,W-20,8,'F');
+  doc.setTextColor(255,255,255); doc.setFont('helvetica','bold');
+  doc.text('TOTAL', 12, y+5);
+  doc.text(fmt(total)+' F', W-12, y+5, {align:'right'});
+
+  doc.save('Journal_SYSCOHADA_VerdApp_CI.pdf');
+  showToast('✅ Journal PDF exporté');
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
+// ══════════════════════════════════════════════════════════════
+// ÉVOLUTION #4 — PERFORMANCE PAR PRODUIT
+// ══════════════════════════════════════════════════════════════
+function renderPerformanceProduits(targetId){
+  const target = document.getElementById(targetId);
+  if(!target) return;
+
+  // Lister tous les produits actifs qui ont des achats
+  const produitsActifs = [...new Set(achats.map(a=>a.produit).filter(Boolean))];
+  if(!produitsActifs.length){
+    target.innerHTML = '<div style="text-align:center;padding:20px;color:var(--gray-420);font-size:12px;">Aucun produit en stock.</div>';
+    return;
+  }
+
+  const fmt = v => Math.round(v||0).toLocaleString('fr-FR');
+  const today = new Date().toISOString().slice(0,10);
+
+  const rows = produitsActifs.map(produit => {
+    const ventesP   = ventes.filter(v=>v.produit===produit);
+    const achatsP   = achats.filter(a=>a.produit===produit && a.statut==="recu");
+    const pertesP   = pertesLots.filter(p=>p.produit===produit);
+    const ca        = ventesP.reduce((s,v)=>s+(v.quantite||0)*(v.prix_vente||0),0);
+    const qteVendue = ventesP.reduce((s,v)=>s+(v.quantite||0),0);
+    const qteAchetee= achatsP.reduce((s,a)=>s+(a.quantite||0),0);
+    const qtePerte  = pertesP.reduce((s,p)=>s+(p.quantite_perdue||0),0);
+    const stockDispo= stockDisponibleProduit(produit);
+    const mb        = margebrute(ventesP);
+    const tauxMB    = ca ? Math.round(mb/ca*100) : 0;
+    const tauxPerte = qteAchetee ? Math.round(qtePerte/qteAchetee*100) : 0;
+    const pxMoyVente= qteVendue ? Math.round(ca/qteVendue) : 0;
+    const icon      = getProduitIcon ? getProduitIcon(produit) : '🌿';
+    const colorMB   = tauxMB>=20?'var(--green-700)':tauxMB>=10?'var(--orange)':'var(--red)';
+    const stockBar  = qteAchetee>0 ? Math.round(qteVendue/qteAchetee*100) : 0;
+
+    // Lots anciens avec stock restant (>3 jours) → candidats démarque
+    const lotsAnciensAvecStock = achatsP.filter(a=>{
+      const age = (new Date(today)-new Date(a.date_reception||a.date))/(1000*3600*24);
+      return age>3 && stockDisponibleProduit(a.produit)>0;
+    });
+
+    return `
+      <div style="background:#fff;border:1.5px solid var(--gray-150);border-radius:var(--r);padding:14px;margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <div style="font-size:14px;font-weight:800;color:var(--text);">${icon} ${produit}</div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <span style="background:${stockDispo>0?'var(--green-50)':'var(--red-50)'};color:${stockDispo>0?'var(--green-700)':'var(--red)'};border:1px solid ${stockDispo>0?'var(--green-bright3)':'var(--red-200)'};border-radius:20px;padding:2px 10px;font-size:10px;font-weight:700;">
+              ${stockDispo>0?'📦 '+fmt(stockDispo)+' en stock':'⚠ Stock épuisé'}
+            </span>
+          </div>
+        </div>
+
+        <!-- Barre d'écoulement -->
+        <div style="margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--gray-420);margin-bottom:3px;">
+            <span>Taux d'écoulement</span><span>${stockBar}%</span>
+          </div>
+          <div style="background:var(--gray-100);border-radius:10px;height:6px;overflow:hidden;">
+            <div style="height:100%;width:${stockBar}%;background:${stockBar>=80?'var(--green-600)':stockBar>=50?'var(--orange)':'var(--red)'};border-radius:10px;transition:width .4s;"></div>
+          </div>
+        </div>
+
+        <!-- KPI grille -->
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px;">
+          <div style="text-align:center;background:var(--gray-50);border-radius:var(--r-sm);padding:8px 4px;">
+            <div style="font-size:11px;font-weight:800;color:var(--green-700);">${fmt(ca)} F</div>
+            <div style="font-size:9px;color:var(--gray-420);">CA total</div>
+          </div>
+          <div style="text-align:center;background:var(--gray-50);border-radius:var(--r-sm);padding:8px 4px;">
+            <div style="font-size:11px;font-weight:800;color:${colorMB};">${tauxMB}%</div>
+            <div style="font-size:9px;color:var(--gray-420);">Taux marge brute</div>
+          </div>
+          <div style="text-align:center;background:var(--gray-50);border-radius:var(--r-sm);padding:8px 4px;">
+            <div style="font-size:11px;font-weight:800;color:var(--text);">${fmt(pxMoyVente)} F</div>
+            <div style="font-size:9px;color:var(--gray-420);">Prix moyen / u.</div>
+          </div>
+          <div style="text-align:center;background:var(--gray-50);border-radius:var(--r-sm);padding:8px 4px;">
+            <div style="font-size:11px;font-weight:800;color:var(--text);">${fmt(qteAchetee)}</div>
+            <div style="font-size:9px;color:var(--gray-420);">Acheté</div>
+          </div>
+          <div style="text-align:center;background:var(--gray-50);border-radius:var(--r-sm);padding:8px 4px;">
+            <div style="font-size:11px;font-weight:800;color:var(--blue-600);">${fmt(qteVendue)}</div>
+            <div style="font-size:9px;color:var(--gray-420);">Vendu</div>
+          </div>
+          <div style="text-align:center;background:var(--gray-50);border-radius:var(--r-sm);padding:8px 4px;">
+            <div style="font-size:11px;font-weight:800;color:${tauxPerte>5?'var(--red)':'var(--gray-500)'};">${tauxPerte}%</div>
+            <div style="font-size:9px;color:var(--gray-420);">Taux de perte</div>
+          </div>
+        </div>
+
+        <!-- Alertes démarque -->
+        ${lotsAnciensAvecStock.length>0
+          ? `<div style="background:var(--orange-50);border:1px solid var(--orange-100);border-radius:var(--r-sm);padding:8px 10px;font-size:10px;color:var(--orange-dark);display:flex;justify-content:space-between;align-items:center;">
+              <span>📉 ${lotsAnciensAvecStock.length} lot(s) anciens avec stock restant — démarque recommandée</span>
+              <button onclick="ouvrirDeMarque('${lotsAnciensAvecStock[0].id}')" style="background:var(--orange);color:#fff;border:none;border-radius:var(--r-sm);padding:4px 10px;font-size:10px;font-weight:700;cursor:pointer;font-family:inherit;">Démarquer</button>
+            </div>`
+          : ''}
+      </div>`;
+  });
+
+  target.innerHTML =
+    '<div style="font-size:11px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">📊 Performance par produit</div>'
+    + rows.join('');
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
+// ── Démarque / Vente invendus ────────────────────────────────────────────────
+function ouvrirDeMarque(lotId){
+  const lot = achats.find(a=>a.id===lotId);
+  if(!lot) return;
+  const stockRestant = stockDisponibleProduit(lot.produit);
+  if(stockRestant<=0){ showToast("Stock épuisé pour ce lot", "error"); return; }
+
+  // Prix d'achat moyen du lot (coût de revient unitaire)
+  const frais = (lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0);
+  const coutRevient = lot.quantite ? (lot.quantite*lot.prix_unitaire+frais)/lot.quantite : lot.prix_unitaire;
+  const prixMin = Math.round(coutRevient*0.8); // suggestion : 80% du coût revient
+  const prixNormal = Math.round(coutRevient*1.2); // marge min 20%
+
+  showModal(`
+    <div class="form-block">
+      <div class="form-block-title">📉 Démarque — ${lot.produit}</div>
+      <div style="background:var(--orange-50);border:1px solid var(--orange-100);border-radius:var(--r-sm);padding:10px;margin-bottom:12px;font-size:11px;color:var(--orange-dark);">
+        Lot de <b>${lot.fournisseur}</b> · Stock restant : <b>${stockRestant} ${lot.unite||"u."}</b><br>
+        Coût de revient unitaire : <b>${Math.round(coutRevient).toLocaleString("fr-FR")} F</b><br>
+        Prix normal ≥ ${prixNormal.toLocaleString("fr-FR")} F/u. · Prix plancher ≥ ${prixMin.toLocaleString("fr-FR")} F/u.
+      </div>
+      <div class="form-grid">
+        <div>
+          <label class="label">Client</label>
+          <input type="text" id="dm_client" placeholder="Acheteur démarque..." autocomplete="off"/>
+        </div>
+        <div>
+          <label class="label">Quantité (max ${stockRestant})</label>
+          <input type="number" id="dm_qte" value="${stockRestant}" min="1" max="${stockRestant}"
+            step="1" inputmode="numeric" oninput="calcDeMarque(${coutRevient})"/>
+        </div>
+        <div>
+          <label class="label">Prix réduit / unité (F)</label>
+          <input type="number" id="dm_prix" value="${prixMin}" min="1" step="100"
+            inputmode="numeric" oninput="calcDeMarque(${coutRevient})"/>
+        </div>
+        <div>
+          <label class="label">Mode paiement</label>
+          <select id="dm_mode">
+            <option>Espèces</option><option>Wave</option>
+            <option>MTN MoMo</option><option>Orange Money</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Date</label>
+          <input type="date" id="dm_date" value="${new Date().toISOString().slice(0,10)}"/>
+        </div>
+        <div>
+          <label class="label">Motif de la démarque</label>
+          <input type="text" id="dm_motif" placeholder="Surstock, approche date limite..."/>
+        </div>
+      </div>
+      <div id="dm_resume" style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--r-sm);padding:10px;margin:10px 0;font-size:11px;">
+        <div style="display:flex;justify-content:space-between;"><span>Montant encaissé</span><span id="dm_montant" style="font-weight:800;color:var(--orange-dark);"></span></div>
+        <div style="display:flex;justify-content:space-between;margin-top:4px;"><span>Perte/gain vs coût revient</span><span id="dm_pnl" style="font-weight:700;"></span></div>
+      </div>
+    </div>
+    <button class="btn btn-orange" onclick="saveDeMarque('${lotId}',${coutRevient})">✓ Enregistrer la démarque</button>
+    <button class="btn btn-ghost" style="margin-top:8px;" onclick="closeModal()">Annuler</button>
+  `);
+  setTimeout(()=>{ calcDeMarque(coutRevient); document.getElementById('dm_client')?.focus(); }, 200);
+}
+
+function calcDeMarque(coutRevient){
+  const qte  = +document.getElementById('dm_qte')?.value||0;
+  const prix = +document.getElementById('dm_prix')?.value||0;
+  if(!qte||!prix) return;
+  const montant = qte*prix;
+  const coutTotal = qte*coutRevient;
+  const pnl = montant-coutTotal;
+  const fmt = v=>Math.round(v).toLocaleString('fr-FR');
+  const el_m = document.getElementById('dm_montant');
+  const el_p = document.getElementById('dm_pnl');
+  if(el_m) el_m.textContent = fmt(montant)+' F';
+  if(el_p){
+    el_p.textContent = (pnl>=0?'+':'')+fmt(pnl)+' F';
+    el_p.style.color = pnl>=0?'var(--green-700)':'var(--red)';
+  }
+}
+
+async function saveDeMarque(lotId, coutRevient){
+  const client = document.getElementById('dm_client')?.value.trim()||'Démarque';
+  const qte    = +document.getElementById('dm_qte')?.value||0;
+  const prix   = +document.getElementById('dm_prix')?.value||0;
+  const mode   = document.getElementById('dm_mode')?.value||'Espèces';
+  const date   = document.getElementById('dm_date')?.value||new Date().toISOString().slice(0,10);
+  const motif  = document.getElementById('dm_motif')?.value||'Démarque';
+  const lot    = achats.find(a=>a.id===lotId);
+
+  if(!qte||!prix||!lot) { showToast('Champs requis manquants','error'); return; }
+  if(qte>stockDisponibleProduit(lot.produit)){ showToast('Stock insuffisant','error'); return; }
+
+  const vente = {
+    id: genId(), date, produit: lot.produit,
+    client, quantite: qte, prix_vente: prix,
+    mode_paiement: mode,
+    notes: `[DÉMARQUE] ${motif}`,
+    enregistre_par: currentUser?.nom||'',
+    lot_ref: lotId
+  };
+
+  try{
+    await sbInsert('ventes', vente);
+    ventes.push(vente);
+    const pnl = qte*prix - qte*coutRevient;
+    saveLocal(); closeModal();
+    showToast(`📉 Démarque enregistrée — ${(qte*prix).toLocaleString('fr-FR')} F encaissés (${pnl>=0?'+':''}${Math.round(pnl).toLocaleString('fr-FR')} F vs coût)`);
+    render();
+  }catch(e){ showToast('Erreur : '+e.message,'error'); }
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
+
+// ── Multi-dépôts (#11) ────────────────────────────────────────────────────────
+function getDepots(){
+  return JSON.parse(localStorage.getItem('verdapp_depots')||
+    '[{"id":"adjame","nom":"Marché Adjamé","actif":true},{"id":"yopougon","nom":"Yopougon","actif":false}]');
+}
+
+function renderDepotsParams(){
+  const el = document.getElementById('depotsSection');
+  if(!el) return;
+  const depots = getDepots();
+  const actif  = currentDepot;
+  el.innerHTML = `
+    <div style="margin-bottom:10px;">
+      <div style="font-size:10px;color:var(--gray-420);margin-bottom:6px;">Dépôt actif (filtre global) :</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button onclick="setDepot('tous')" style="padding:6px 14px;border-radius:20px;border:1.5px solid var(--gray-200);cursor:pointer;font-family:inherit;font-size:11px;font-weight:700;background:${actif==='tous'?'var(--green-800)':'#fff'};color:${actif==='tous'?'#fff':'var(--text)'};">🌍 Tous</button>
+        ${depots.filter(d=>d.actif).map(d=>`
+          <button onclick="setDepot('${d.id}')" style="padding:6px 14px;border-radius:20px;border:1.5px solid var(--gray-200);cursor:pointer;font-family:inherit;font-size:11px;font-weight:700;background:${actif===d.id?'var(--green-800)':'#fff'};color:${actif===d.id?'#fff':'var(--text)'};">
+            🏪 ${d.nom}
+          </button>`).join('')}
+      </div>
+    </div>
+    <div style="font-size:10px;font-weight:700;color:var(--text);margin-bottom:6px;">Gérer les dépôts :</div>
+    ${depots.map((d,i)=>`
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--gray-50);border-radius:var(--r-sm);margin-bottom:4px;">
+        <input type="text" value="${d.nom}" onchange="renommerDepot(${i},this.value)" style="flex:1;border:1px solid var(--gray-200);border-radius:var(--r-sm);padding:4px 8px;font-family:inherit;font-size:12px;"/>
+        <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;">
+          <input type="checkbox" ${d.actif?'checked':''} onchange="toggleDepot(${i},this.checked)"/> Actif
+        </label>
+        <button onclick="supprimerDepot(${i})" style="background:var(--red-50);color:var(--red);border:1px solid var(--red-200);border-radius:var(--r-sm);padding:4px 8px;cursor:pointer;font-size:11px;">✕</button>
+      </div>`).join('')}
+    <div style="display:flex;gap:8px;margin-top:8px;">
+      <input type="text" id="nouveau_depot" placeholder="Nom du nouveau dépôt..." style="flex:1;"/>
+      <button onclick="ajouterDepot()" class="btn btn-green" style="flex-shrink:0;">+ Ajouter</button>
+    </div>
+  `;
+}
+
+function setDepot(id){
+  currentDepot = id;
+  localStorage.setItem('verdapp_depot_actif', id);
+  renderDepotsParams();
+  showToast('Dépôt actif : '+(id==='tous'?'Tous':getDepots().find(d=>d.id===id)?.nom||id));
+  render();
+}
+
+function ajouterDepot(){
+  const nom = document.getElementById('nouveau_depot')?.value.trim();
+  if(!nom) return showToast('Entrez un nom de dépôt','error');
+  const depots = getDepots();
+  const id = nom.toLowerCase().replace(/\s+/g,'-').replace(/[^a-z0-9-]/g,'');
+  depots.push({id, nom, actif:true});
+  localStorage.setItem('verdapp_depots', JSON.stringify(depots));
+  showToast('✅ Dépôt ajouté : '+nom);
+  renderDepotsParams();
+}
+
+function renommerDepot(i, nom){
+  const depots = getDepots();
+  if(depots[i]) { depots[i].nom = nom; localStorage.setItem('verdapp_depots', JSON.stringify(depots)); }
+}
+
+function toggleDepot(i, actif){
+  const depots = getDepots();
+  if(depots[i]) { depots[i].actif = actif; localStorage.setItem('verdapp_depots', JSON.stringify(depots)); renderDepotsParams(); }
+}
+
+function supprimerDepot(i){
+  const depots = getDepots();
+  if(!confirm('Supprimer le dépôt '+depots[i]?.nom+' ?')) return;
+  depots.splice(i,1);
+  localStorage.setItem('verdapp_depots', JSON.stringify(depots));
+  renderDepotsParams();
+  showToast('Dépôt supprimé');
+}
+
+// Filtre dépôt dans les listes (si un dépôt est actif, filtrer par champ depot)
+function achatsParDepot(arr){
+  if(currentDepot==='tous') return arr||achats;
+  return (arr||achats).filter(a=>(a.depot||'adjame')===currentDepot);
+}
+function ventesParDepot(arr){
+  if(currentDepot==='tous') return arr||ventes;
+  return (arr||ventes).filter(v=>(v.depot||'adjame')===currentDepot);
+}
+
+// Ajouter le sélecteur de dépôt dans le champ achat (depuis buildAchatForm)
+function getDepotOptions(selected){
+  const depots = getDepots().filter(d=>d.actif);
+  return depots.map(d=>`<option value="${d.id}" ${d.id===(selected||currentDepot)?'selected':''}>${d.nom}</option>`).join('');
+}
+// ────────────────────────────────────────────────────────────────────────────
+
+// ── Solde initial de trésorerie ──────────────────────────────────────────────
+function definirSoldeInitial(){
+  const existant = mouvementsCaisse.find(m=>m.categorie==="solde_initial");
+  const valActuelle = existant?.montant || 0;
+  showModal(`
+    <div class="form-block">
+      <div class="form-block-title">💰 Solde initial de caisse</div>
+      <div style="font-size:11px;color:var(--gray-420);margin-bottom:12px;">
+        Montant en caisse au démarrage de l'activité (capital de départ, fonds propres, etc.).
+        Ce montant sera comptabilisé comme une entrée de trésorerie initiale.
+      </div>
+      <div>
+        <label class="label">Montant initial (F)</label>
+        <input type="number" id="si_montant" value="${valActuelle}" min="0" step="1000"
+          inputmode="numeric" style="font-size:18px;font-weight:700;"/>
+      </div>
+      <div style="margin-top:10px;">
+        <label class="label">Date de démarrage</label>
+        <input type="date" id="si_date" value="${existant?.date || new Date().toISOString().slice(0,10)}"/>
+      </div>
+      <div style="font-size:10px;color:var(--gray-400);margin-top:8px;font-style:italic;">
+        Exemple : si vous avez démarré avec 200 000 F, saisissez 200 000 F.
+      </div>
+    </div>
+    <button class="btn btn-green" onclick="sauvegarderSoldeInitial('${existant?.id||''}')">💾 Sauvegarder</button>
+    <button class="btn btn-ghost" style="margin-top:8px;" onclick="closeModal()">Annuler</button>
+  `);
+  setTimeout(()=>document.getElementById('si_montant')?.select(), 200);
+}
+
+async function sauvegarderSoldeInitial(existantId){
+  const montant = +document.getElementById('si_montant')?.value||0;
+  const date    = document.getElementById('si_date')?.value||new Date().toISOString().slice(0,10);
+
+  // Payload local (inclut 'auto' pour la logique JS côté client)
+  const mvtLocal = {
+    id: existantId || genId(),
+    date, sens: 'entree', categorie: 'solde_initial',
+    montant, mode_paiement: '', note: 'Solde initial de caisse',
+    auto: false
+  };
+  // Payload Supabase (sans 'auto' qui n'est pas une colonne de la table)
+  const mvtDB = {
+    id: mvtLocal.id, date, sens: 'entree', categorie: 'solde_initial',
+    montant, mode_paiement: '', note: 'Solde initial de caisse'
+  };
+
+  try {
+    if(existantId){
+      // Modifier le solde initial existant
+      mouvementsCaisse = mouvementsCaisse.map(m=>m.id===existantId?mvtLocal:m);
+      await sbUpdate('mouvements_caisse', existantId, {montant, date});
+    } else {
+      // Créer le solde initial
+      mouvementsCaisse.push(mvtLocal);
+      await sbInsert('mouvements_caisse', mvtDB);
+    }
+    saveLocal();
+    closeModal();
+    showToast('✅ Solde initial : '+montant.toLocaleString('fr-FR')+' F enregistré');
+    render();
+  } catch(e){
+    showToast('Erreur : '+e.message, 'error');
+  }
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
+
+// ── Fonctions Wave CI ──────────────────────────────────────────────────────────
+function sauvegarderWaveConfig(){
+  const num = document.getElementById('wave_numero_input')?.value.trim();
+  const key = document.getElementById('wave_api_key_input')?.value.trim();
+  if(num) localStorage.setItem('wave_numero', num);
+  if(key) localStorage.setItem('wave_api_key', key);
+  showToast('✅ Configuration Wave sauvegardée');
+  render();
+}
+
+function previewWaveLink(){
+  const montant = +document.getElementById('wave_montant_gen')?.value||0;
+  const desc    = document.getElementById('wave_desc_gen')?.value||'';
+  const num     = localStorage.getItem('wave_numero')||'';
+  const preview = document.getElementById('wave_link_preview');
+  if(!preview) return;
+  if(montant>0 && num){
+    preview.style.display='block';
+    const url = genererURLWave(num, montant, desc);
+    const el = document.getElementById('wave_link_url');
+    if(el) el.textContent = url;
+  } else {
+    preview.style.display='none';
+  }
+}
+
+function genererURLWave(numero, montant, desc){
+  // Format Wave CI standard pour liens de paiement
+  const tel = (numero||'').replace(/[^0-9]/g,'');
+  const encodedDesc = encodeURIComponent(desc||'Paiement VerdApp CI');
+  return `https://pay.wave.com/m/${tel}?amount=${Math.round(montant)}&currency=XOF&name=${encodedDesc}`;
+}
+
+function genererWaveLink(){
+  const montant = +document.getElementById('wave_montant_gen')?.value||0;
+  const desc    = document.getElementById('wave_desc_gen')?.value||'Paiement VerdApp CI';
+  const num     = localStorage.getItem('wave_numero')||'';
+  if(!num){ showToast('Configurez votre numéro Wave Business d'abord','error'); return; }
+  if(!montant){ showToast('Entrez un montant','error'); return; }
+  // Mettre à jour les stats
+  const stats = JSON.parse(localStorage.getItem('wave_stats')||'{"envoyes":0,"confirmes":0,"montant":0}');
+  stats.envoyes++;
+  localStorage.setItem('wave_stats', JSON.stringify(stats));
+  previewWaveLink();
+  showToast('✅ Lien Wave généré — '+montant.toLocaleString('fr-FR')+' F');
+}
+
+function copierWaveLink(){
+  const url = document.getElementById('wave_link_url')?.textContent||'';
+  if(!url) return;
+  navigator.clipboard.writeText(url).then(()=>showToast('✅ Lien copié!')).catch(()=>{
+    // Fallback
+    const ta = document.createElement('textarea');
+    ta.value = url; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+    showToast('✅ Lien copié!');
+  });
+}
+
+function envoyerWaveWhatsApp(){
+  const url    = document.getElementById('wave_link_url')?.textContent||'';
+  const montant= document.getElementById('wave_montant_gen')?.value||'';
+  const desc   = document.getElementById('wave_desc_gen')?.value||'Paiement VerdApp CI';
+  const msg    = `💳 *Paiement Wave CI*\n\nMontant : *${Math.round(montant).toLocaleString('fr-FR')} F CFA*\nMotif : ${desc}\n\nCliquez ici pour payer : ${url}\n\n_VerdApp CI_`;
+  const numWA  = localStorage.getItem('whatsapp_direction')||'';
+  if(numWA){
+    const wa = numWA.replace(/[^0-9]/g,'');
+    window.open('https://wa.me/'+wa+'?text='+encodeURIComponent(msg),'_blank');
+  } else {
+    window.open('https://wa.me/?text='+encodeURIComponent(msg),'_blank');
+  }
+}
+
+async function confirmerWave(venteId){
+  if(!confirm('Confirmer que le paiement Wave a été reçu ?')) return;
+  try{
+    ventes = ventes.map(v=>v.id===venteId?{...v,wave_confirme:true,mode_paiement:'Wave ✅'}:v);
+    await sbUpdate('ventes', venteId, {mode_paiement:'Wave ✅'});
+    // Mise à jour stats
+    const v = ventes.find(x=>x.id===venteId);
+    const stats = JSON.parse(localStorage.getItem('wave_stats')||'{"envoyes":0,"confirmes":0,"montant":0}');
+    stats.confirmes++;
+    stats.montant += (v?.quantite||0)*(v?.prix_vente||0);
+    localStorage.setItem('wave_stats', JSON.stringify(stats));
+    saveLocal();
+    showToast('✅ Paiement Wave confirmé !');
+    render();
+  }catch(e){ showToast('Erreur : '+e.message,'error'); }
+}
+// ────────────────────────────────────────────────────────────────────────────
+
+// ── Charges fixes (Paramètres → SIG) ────────────────────────────────────────
+function renderChargesFixesParams();
+  if(typeof renderDepotsParams==="function") renderDepotsParams();{
+  const el = document.getElementById('chargesFixesSection');
+  if(!el) return;
+  const cf = JSON.parse(localStorage.getItem('verdapp_charges_fixes')||'{}');
+  const fmt = v=>Math.round(v||0).toLocaleString('fr-FR');
+  const total = (cf.loyer||0)+(cf.salaires||0)+(cf.patente||0)+(cf.electricite||0)+(cf.divers||0);
+  el.innerHTML = `
+    <div class="form-grid">
+      <div><label class="label">Loyer / Location (F/mois)</label>
+        <input type="number" id="cf_loyer" value="${cf.loyer||0}" min="0" step="1000" inputmode="numeric" oninput="previewCF()"/></div>
+      <div><label class="label">Salaires & charges sociales</label>
+        <input type="number" id="cf_salaires" value="${cf.salaires||0}" min="0" step="1000" inputmode="numeric" oninput="previewCF()"/></div>
+      <div><label class="label">Patente & impôts professionnels</label>
+        <input type="number" id="cf_patente" value="${cf.patente||0}" min="0" step="1000" inputmode="numeric" oninput="previewCF()"/></div>
+      <div><label class="label">Électricité & eau</label>
+        <input type="number" id="cf_electricite" value="${cf.electricite||0}" min="0" step="1000" inputmode="numeric" oninput="previewCF()"/></div>
+      <div><label class="label">Charges diverses</label>
+        <input type="number" id="cf_divers" value="${cf.divers||0}" min="0" step="1000" inputmode="numeric" oninput="previewCF()"/></div>
+    </div>
+    <div id="cf_preview" style="background:var(--gray-50);border-radius:var(--r-sm);padding:8px 12px;margin:8px 0;font-size:12px;">
+      Total charges fixes : <b id="cf_total">${fmt(total)} F/mois</b>
+    </div>
+    <button class="btn btn-green" onclick="sauvegarderChargesFixes()" style="margin-top:4px;">💾 Sauvegarder</button>
+  `;
+}
+
+function previewCF(){
+  const get = id => +document.getElementById(id)?.value||0;
+  const total = get('cf_loyer')+get('cf_salaires')+get('cf_patente')+get('cf_electricite')+get('cf_divers');
+  const el = document.getElementById('cf_total');
+  if(el) el.textContent = Math.round(total).toLocaleString('fr-FR')+' F/mois';
+}
+
+function sauvegarderChargesFixes(){
+  const get = id => +document.getElementById(id)?.value||0;
+  const cf = {
+    loyer:       get('cf_loyer'),
+    salaires:    get('cf_salaires'),
+    patente:     get('cf_patente'),
+    electricite: get('cf_electricite'),
+    divers:      get('cf_divers'),
+  };
+  localStorage.setItem('verdapp_charges_fixes', JSON.stringify(cf));
+  const total = Object.values(cf).reduce((s,v)=>s+v,0);
+  showToast('✅ Charges fixes : '+total.toLocaleString('fr-FR')+' F/mois sauvegardées');
+}
+// ────────────────────────────────────────────────────────────────────────────
+
+
+// ── Queue offline (#12) ──────────────────────────────────────────────────────
+let offlineQueue = JSON.parse(localStorage.getItem('verdapp_offline_queue')||'[]');
+let isOnline = navigator.onLine;
+
+window.addEventListener('online',  () => { isOnline=true;  syncOfflineQueue(); showToast('✅ Reconnecté — synchronisation en cours'); });
+window.addEventListener('offline', () => { isOnline=false; showToast('⚠️ Hors ligne — les saisies seront synchronisées à la reconnexion','error'); });
+
+async function syncOfflineQueue(){
+  if(!isOnline || !offlineQueue.length) return;
+  const toSync = [...offlineQueue];
+  offlineQueue = [];
+  localStorage.setItem('verdapp_offline_queue','[]');
+  let ok=0, fail=0;
+  for(const op of toSync){
+    try{
+      if(op.type==='INSERT') await sbInsert(op.table, op.data);
+      else if(op.type==='UPDATE') await sbUpdate(op.table, op.id, op.data);
+      ok++;
+    }catch(e){ offlineQueue.push(op); fail++; }
+  }
+  localStorage.setItem('verdapp_offline_queue', JSON.stringify(offlineQueue));
+  if(ok>0) showToast('✅ '+ok+' opération(s) synchronisée(s)');
+  if(fail>0) showToast('⚠️ '+fail+' échec(s) de synchronisation','error');
+}
+
+function queueOrInsert(table, data){
+  if(isOnline) return sbInsert(table, data);
+  offlineQueue.push({type:'INSERT', table, data, ts: Date.now()});
+  localStorage.setItem('verdapp_offline_queue', JSON.stringify(offlineQueue));
+  return Promise.resolve(data); // simuler un succès local
+}
+
+function queueOrUpdate(table, id, data){
+  if(isOnline) return sbUpdate(table, id, data);
+  offlineQueue.push({type:'UPDATE', table, id, data, ts: Date.now()});
+  localStorage.setItem('verdapp_offline_queue', JSON.stringify(offlineQueue));
+  return Promise.resolve(data);
+}
+
+// Indicateur offline dans le header
+function updateOnlineStatus(){
+  const dot = document.querySelector('#syncBtn');
+  if(!dot) return;
+  if(!isOnline){
+    dot.style.background='rgba(231,76,60,.8)';
+    dot.title='Hors ligne — '+offlineQueue.length+' op. en attente';
+  } else {
+    dot.style.background='';
+    dot.title='Synchroniser';
+  }
+}
+setInterval(updateOnlineStatus, 3000);
+// ────────────────────────────────────────────────────────────────────────────
+
 // ── Polling unifié : un seul setInterval au lieu de 4 ──
 // Remplace les setInterval dispersés dans le code
 setInterval(()=>{
@@ -8568,14 +10370,119 @@ async function marquerArriveColis(id){
 }
 
 async function marquerVenduColis(id){
-  if(!confirm("Marquer ce colis comme entièrement vendu ?")) return;
+  // Trouver le lot correspondant
+  const lot = achats.find(a=>a.id===id);
+  if(!lot) return;
+
+  // Calculer stock disponible de ce produit
+  const stockDispo = stockDisponibleProduit(lot.produit);
+  const qteMax = Math.min(stockDispo, lot.quantite);
+
+  // Ouvrir un mini formulaire de vente pré-rempli depuis le colis
+  showModal(`
+    <div class="form-block">
+      <div class="form-block-title">🛒 Vente depuis colis — ${lot.produit}</div>
+      <div style="background:var(--green-50);border:1px solid var(--green-bright3);border-radius:var(--r-sm);padding:10px;margin-bottom:12px;font-size:12px;color:var(--green-mid);">
+        Lot : <b>${lot.fournisseur}</b> · ${lot.quantite} ${lot.unite||"u."} reçus<br>
+        Stock disponible : <b>${qteMax} ${lot.unite||"u."}</b>
+      </div>
+      <div class="form-grid">
+        <div>
+          <label class="label" for="cv_client">Client *</label>
+          <input type="text" id="cv_client" placeholder="Marché Adjamé..." autocomplete="off"/>
+        </div>
+        <div>
+          <label class="label" for="cv_qte">Quantité (max ${qteMax})</label>
+          <input type="number" id="cv_qte" min="1" max="${qteMax}" value="${qteMax}" step="1" inputmode="numeric" oninput="calcVenteColis()"/>
+        </div>
+        <div>
+          <label class="label" for="cv_prix">Prix vente / unité (F) *</label>
+          <input type="number" id="cv_prix" min="1" step="1" inputmode="numeric" placeholder="4000" oninput="calcVenteColis()"/>
+        </div>
+        <div>
+          <label class="label" for="cv_mode">Mode paiement</label>
+          <select id="cv_mode">
+            <option value="Espèces">Espèces</option>
+            <option value="Wave">Wave CI</option>
+            <option value="MTN MoMo">MTN MoMo</option>
+            <option value="Orange Money">Orange Money</option>
+            <option value="Crédit">Crédit</option>
+          </select>
+        </div>
+        <div>
+          <label class="label" for="cv_date">Date de vente</label>
+          <input type="date" id="cv_date" value="${new Date().toISOString().slice(0,10)}"/>
+        </div>
+        <div>
+          <label class="label" for="cv_notes">Notes</label>
+          <input type="text" id="cv_notes" placeholder="Optionnel"/>
+        </div>
+      </div>
+      <div id="cv_resume" style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--r-sm);padding:10px;margin:10px 0;font-size:12px;display:none;">
+        <div style="display:flex;justify-content:space-between;"><span>Montant vente</span><span id="cv_montant" style="font-weight:800;color:var(--green-700);"></span></div>
+        <div style="display:flex;justify-content:space-between;margin-top:4px;"><span>Marge brute estimée</span><span id="cv_marge" style="font-weight:700;color:var(--green-600);"></span></div>
+      </div>
+    </div>
+    <button class="btn btn-green" onclick="saveVenteColis('${id}')">✓ Enregistrer la vente</button>
+    <button class="btn btn-ghost" style="margin-top:8px;" onclick="closeModal()">Annuler</button>
+  `);
+  // Focus sur le champ client
+  setTimeout(()=>document.getElementById('cv_client')?.focus(), 250);
+}
+
+function calcVenteColis(){
+  const qte = +document.getElementById('cv_qte')?.value||0;
+  const prix = +document.getElementById('cv_prix')?.value||0;
+  const resume = document.getElementById('cv_resume');
+  if(qte>0 && prix>0 && resume){
+    const montant = qte*prix;
+    document.getElementById('cv_montant').textContent = montant.toLocaleString('fr-FR')+' F';
+    const fmt = v=>Math.round(v).toLocaleString('fr-FR');
+    resume.style.display='block';
+  } else if(resume){ resume.style.display='none'; }
+}
+
+async function saveVenteColis(achatId){
+  const client = document.getElementById('cv_client')?.value.trim();
+  const qte = +document.getElementById('cv_qte')?.value||0;
+  const prix = +document.getElementById('cv_prix')?.value||0;
+  const mode = document.getElementById('cv_mode')?.value||'Espèces';
+  const date = document.getElementById('cv_date')?.value||new Date().toISOString().slice(0,10);
+  const notes = document.getElementById('cv_notes')?.value||'';
+  const lot = achats.find(a=>a.id===achatId);
+
+  if(!client){ showToast('Client requis','error'); return; }
+  if(!prix||prix<=0){ showToast('Prix de vente requis','error'); return; }
+  if(!qte||qte<=0){ showToast('Quantité requise','error'); return; }
+  if(!lot){ showToast('Lot introuvable','error'); return; }
+
+  const vente = {
+    id: genId(), date, produit: lot.produit,
+    client, quantite: qte, prix_vente: prix,
+    mode_paiement: mode, notes,
+    enregistre_par: currentUser?.nom||'',
+    lot_ref: achatId  // lien vers le colis d'origine
+  };
+
   try{
-    await sbUpdate("achats", id, {statut_livraison:"vendu"});
-    achats = achats.map(x=>x.id===id?{...x,statut_livraison:"vendu"}:x);
+    // 1. Enregistrer la vente
+    ventes.push(vente);
+    await sbInsert('ventes', vente);
+
+    // 2. Marquer le colis vendu si tout le stock de ce lot est écoulé
+    const stockRestant = stockDisponibleProduit(lot.produit) - qte;
+    if(stockRestant <= 0){
+      await sbUpdate('achats', achatId, {statut_livraison:'vendu'});
+      achats = achats.map(a=>a.id===achatId?{...a,statut_livraison:'vendu'}:a);
+    }
+
     saveLocal();
-    showToast("[+] Colis marqué vendu");
-    renderSuiviColis();
-  }catch(e){ showToast("Erreur : "+e.message,"error"); }
+    closeModal();
+    showToast(`✅ Vente enregistrée — ${qte} ${lot.unite||'u.'} × ${prix.toLocaleString('fr-FR')} F = ${(qte*prix).toLocaleString('fr-FR')} F`);
+    render();
+  }catch(e){
+    showToast('Erreur : '+e.message,'error');
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -8600,8 +10507,13 @@ async function renderDashboardDirection(){
   const taux_mn = ca ? Math.round(mn/ca*100) : 0;
 
   // Top 3 clients
+  // Top clients — dédoublonnage insensible à la casse
+  const _dcCanon={};
   const topClients = [...ventes].reduce((acc,v)=>{
-    const k=v.client; if(!k) return acc;
+    if(!v.client) return acc;
+    const nn=normNom(v.client);
+    if(!_dcCanon[nn]) _dcCanon[nn]=v.client;
+    const k=_dcCanon[nn];
     acc[k]=(acc[k]||0)+(v.quantite||0)*(v.prix_vente||0); return acc;
   },{});
   const top3 = Object.entries(topClients).sort((a,b)=>b[1]-a[1]).slice(0,3);
@@ -9022,21 +10934,72 @@ function renderPrevisions(){
       Basé sur ${achats.filter(a=>a.statut==="recu").length} achats historiques
     </div>
   `;
-}
 
-// ════════════════════════════════════════════════════════════════
-// 4. FIDÉLISATION CLIENTS (extension de renderTiers)
-// ════════════════════════════════════════════════════════════════
+  // ── PRÉVISIONS TRÉSORERIE 30J (#8) ───────────────────────────────────────
+  const _today   = new Date();
+  const _todayStr = _today.toISOString().slice(0,10);
+  const _semaines = 4;
+  let _ventesSem = 0;
+  for(let i=0; i<_semaines; i++){
+    const _d1 = new Date(_today); _d1.setDate(_d1.getDate()-(i+1)*7);
+    const _d2 = new Date(_today); _d2.setDate(_d2.getDate()-i*7);
+    const _s1=_d1.toISOString().slice(0,10), _s2=_d2.toISOString().slice(0,10);
+    _ventesSem += ventes.filter(v=>v.date>=_s1&&v.date<_s2).reduce((s,v)=>s+(v.quantite||0)*(v.prix_vente||0),0);
+  }
+  const _moyJour = _ventesSem / (_semaines*7);
+  const _colisTransit = achats.filter(a=>getStatutLivraison(a)==="en_transit");
+  const _revTransit   = _colisTransit.reduce((s,a)=>s+(a.quantite||0)*(a.prix_unitaire||0)*1.3,0);
+  const _totalA  = achats.reduce((s,a)=>s+(a.quantite||0)*(a.prix_unitaire||0),0);
+  const _totalAv = achats.reduce((s,a)=>s+(a.avance_paye||0),0);
+  const _totalR  = reglements.reduce((s,r)=>s+(r.montant||0),0);
+  const _dus     = Math.max(0,_totalA-_totalAv-_totalR);
+  const _solde   = soldeCaisse(tousMouvementsCaisse());
+  const _seuil   = typeof seuilTresorerie==="function" ? seuilTresorerie() : 200000;
+  const _proj = [
+    {label:"J+7",  sub:"Dans 7 jours",  val:_solde+_moyJour*7},
+    {label:"J+15", sub:"Dans 15 jours", val:_solde+_moyJour*15+_revTransit*0.5-_dus*0.3},
+    {label:"J+30", sub:"Dans 30 jours", val:_solde+_moyJour*30+_revTransit-_dus},
+  ];
+  const _pColor = v => v>=_seuil?"var(--green-700)":v>=0?"var(--orange)":"var(--red)";
+  const _pIcon  = v => v>=_seuil?"✅":v>=0?"⚠️":"🔴";
+
+  el.innerHTML += '<div style="margin-top:20px;">'
+    +'<div style="font-size:11px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;">💵 Prévisions trésorerie</div>'
+    +'<div style="background:var(--green-50);border:1.5px solid var(--green-bright3);border-radius:var(--r);padding:12px 16px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;">'
+      +'<div><div style="font-size:10px;font-weight:700;color:var(--green-mid);">Solde aujourd\'hui</div>'
+      +'<div style="font-size:9px;color:var(--gray-420);">Encaissements − Décaissements</div></div>'
+      +'<div style="font-size:22px;font-weight:900;color:var(--green-700);">'+fmt(_solde)+' F</div>'
+    +'</div>'
+    +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;">'
+    +_proj.map(p=>'<div style="background:#fff;border:1.5px solid var(--gray-150);border-radius:var(--r);padding:10px;text-align:center;">'
+      +'<div style="font-size:9px;font-weight:700;color:var(--gray-420);text-transform:uppercase;">'+p.label+' '+_pIcon(p.val)+'</div>'
+      +'<div style="font-size:13px;font-weight:900;color:'+_pColor(p.val)+';margin:6px 0;">'+fmt(p.val)+' F</div>'
+      +'<div style="font-size:9px;color:var(--gray-400);">'+p.sub+'</div>'
+    +'</div>').join('')
+    +'</div>'
+    +'<div style="background:var(--gray-50);border-radius:var(--r-sm);padding:10px 12px;font-size:10px;color:var(--gray-420);">'
+      +'<div style="font-weight:700;color:var(--text);margin-bottom:6px;">📋 Hypothèses</div>'
+      +'<div>• Ventes estimées : <b>'+fmt(_moyJour)+' F/jour</b> (moy. 4 dernières semaines)</div>'
+      +'<div>• Revenus colis en transit : <b>+'+fmt(_revTransit)+' F</b> ('+_colisTransit.length+' colis, +30% estimé)</div>'
+      +'<div>• Paiements fournisseurs : <b>-'+fmt(_dus)+' F</b></div>'
+    +'</div>'
+  +'</div>';
+}
 function renderTopClients(){
   const fmt = v => Math.round(Number(v)||0).toLocaleString("fr-FR");
+  // Dédoublonnage clients insensible à la casse
   const clientStats = {};
+  const _clientCanon = {};
   ventes.forEach(v=>{
     if(!v.client) return;
-    if(!clientStats[v.client]) clientStats[v.client] = {ca:0, nb:0, qte:0, derniere:v.date};
-    clientStats[v.client].ca += (v.quantite||0)*(v.prix_vente||0);
-    clientStats[v.client].nb++;
-    clientStats[v.client].qte += v.quantite||0;
-    if(v.date > clientStats[v.client].derniere) clientStats[v.client].derniere = v.date;
+    const nomNorm = normNom(v.client);
+    if(!_clientCanon[nomNorm]) _clientCanon[nomNorm] = v.client;
+    const nom = _clientCanon[nomNorm];
+    if(!clientStats[nom]) clientStats[nom] = {ca:0, nb:0, qte:0, derniere:v.date};
+    clientStats[nom].ca += (v.quantite||0)*(v.prix_vente||0);
+    clientStats[nom].nb++;
+    clientStats[nom].qte += v.quantite||0;
+    if(v.date > clientStats[nom].derniere) clientStats[nom].derniere = v.date;
   });
 
   const caTotal = Object.values(clientStats).reduce((s,c)=>s+c.ca,0);
@@ -9074,161 +11037,97 @@ function renderTopClients(){
 // 5. WAVE CI — FRAMEWORK (clé API à configurer)
 // ════════════════════════════════════════════════════════════════
 function renderWaveCadre(){
+  const waveKey = localStorage.getItem('wave_api_key')||'';
+  const waveNum = localStorage.getItem('wave_numero')||'';
+  const waveStats = JSON.parse(localStorage.getItem('wave_stats')||'{"envoyes":0,"confirmes":0,"montant":0}');
+  const fmt = v => Math.round(v||0).toLocaleString('fr-FR');
+
   return `
     <div class="card" style="margin-top:12px;">
-      <div style="font-weight:800;font-size:13px;margin-bottom:6px;">💳 Intégration Wave CI</div>
-      <div style="font-size:12px;color:var(--gray-420);margin-bottom:10px;">
-        Connectez Wave Business pour confirmer automatiquement les paiements reçus.
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+        <div style="width:36px;height:36px;background:linear-gradient(135deg,#1eb5ff,#005fff);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;">💳</div>
+        <div>
+          <div style="font-weight:800;font-size:14px;color:var(--text);">Wave CI Business</div>
+          <div style="font-size:10px;color:var(--gray-420);">Paiements mobiles intégrés</div>
+        </div>
+        <div style="margin-left:auto;">
+          <span style="background:${waveNum?'var(--green-50)':'var(--orange-50)'};color:${waveNum?'var(--green-700)':'var(--orange-dark)'};border:1px solid ${waveNum?'var(--green-bright3)':'var(--orange-100)'};border-radius:20px;padding:3px 10px;font-size:10px;font-weight:700;">
+            ${waveNum?'✅ Configuré':'⚙ À configurer'}
+          </span>
+        </div>
       </div>
-      <div style="background:var(--orange-50);border:1px solid var(--orange-100);border-radius:var(--r-sm);padding:10px;margin-bottom:10px;font-size:11px;color:var(--orange-dark);">
-        ⚠️ Nécessite un compte Wave Business CI et une clé API Wave.
-        Contactez Wave Business au <b>+225 XX XX XX XX</b> pour activer.
+
+      <!-- Config Wave -->
+      <div style="background:var(--gray-50);border-radius:var(--r-sm);padding:12px;margin-bottom:12px;">
+        <div style="font-size:11px;font-weight:700;color:var(--text);margin-bottom:8px;">⚙ Configuration</div>
+        <div class="form-grid">
+          <div>
+            <label class="label">Numéro Wave Business (225XXXXXXXX)</label>
+            <input type="tel" id="wave_numero_input" value="${waveNum}" placeholder="22507XXXXXXXX" inputmode="numeric"/>
+          </div>
+          <div>
+            <label class="label">Clé API Wave Business (optionnel)</label>
+            <input type="password" id="wave_api_key_input" value="${waveKey}" placeholder="wave_sk_prod_..."/>
+          </div>
+        </div>
+        <button onclick="sauvegarderWaveConfig()" class="btn btn-green" style="margin-top:8px;">💾 Sauvegarder</button>
       </div>
-      <div>
-        <label class="label">Clé API Wave Business</label>
-        <input type="password" id="wave_api_key" placeholder="wave_sk_prod_..." style="width:100%;padding:9px 12px;border:1.5px solid var(--gray-200);border-radius:var(--r-sm);font-family:monospace;font-size:12px;" />
+
+      <!-- Stats Wave -->
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:12px;">
+        <div style="text-align:center;background:var(--blue-50);border:1px solid var(--blue-100);border-radius:var(--r-sm);padding:10px;">
+          <div style="font-size:16px;font-weight:900;color:var(--blue-600);">${waveStats.envoyes}</div>
+          <div style="font-size:9px;color:var(--gray-420);">Liens envoyés</div>
+        </div>
+        <div style="text-align:center;background:var(--green-50);border:1px solid var(--green-bright3);border-radius:var(--r-sm);padding:10px;">
+          <div style="font-size:16px;font-weight:900;color:var(--green-700);">${waveStats.confirmes}</div>
+          <div style="font-size:9px;color:var(--gray-420);">Paiements confirmés</div>
+        </div>
+        <div style="text-align:center;background:var(--green-50);border:1px solid var(--green-bright3);border-radius:var(--r-sm);padding:10px;">
+          <div style="font-size:14px;font-weight:900;color:var(--green-700);">${fmt(waveStats.montant)} F</div>
+          <div style="font-size:9px;color:var(--gray-420);">Encaissé Wave</div>
+        </div>
       </div>
-      <button onclick="sauvegarderWaveKey()" style="${S.btnPrimary};margin-top:10px;">💾 Sauvegarder la clé Wave</button>
+
+      <!-- Générer un lien de paiement -->
+      <div style="border-top:1px solid var(--gray-150);padding-top:12px;margin-bottom:12px;">
+        <div style="font-size:11px;font-weight:700;color:var(--text);margin-bottom:8px;">🔗 Générer un lien de paiement</div>
+        <div class="form-grid">
+          <div>
+            <label class="label">Montant (F CFA)</label>
+            <input type="number" id="wave_montant_gen" placeholder="15000" inputmode="numeric" min="1" oninput="previewWaveLink()"/>
+          </div>
+          <div>
+            <label class="label">Description</label>
+            <input type="text" id="wave_desc_gen" placeholder="Tomate Marché Adjamé"/>
+          </div>
+        </div>
+        <div id="wave_link_preview" style="display:none;margin-top:8px;background:var(--blue-50);border:1px solid var(--blue-100);border-radius:var(--r-sm);padding:10px;">
+          <div style="font-size:10px;color:var(--gray-420);margin-bottom:4px;">Lien Wave généré :</div>
+          <div id="wave_link_url" style="font-size:11px;font-weight:700;color:var(--blue-600);word-break:break-all;"></div>
+          <div style="display:flex;gap:6px;margin-top:8px;">
+            <button onclick="copierWaveLink()" class="btn btn-ghost" style="flex:1;font-size:11px;">📋 Copier</button>
+            <button onclick="envoyerWaveWhatsApp()" class="btn btn-green" style="flex:1;font-size:11px;">📱 WhatsApp</button>
+          </div>
+        </div>
+        <button onclick="genererWaveLink()" class="btn btn-green" style="margin-top:8px;background:linear-gradient(135deg,#1eb5ff,#005fff);">💳 Générer le lien Wave</button>
+      </div>
+
+      <!-- Ventes en attente de paiement Wave -->
+      ${(()=>{
+        const ventesWave = ventes.filter(v=>v.mode_paiement==='Wave'&&!v.wave_confirme);
+        if(!ventesWave.length) return '<div style="font-size:11px;color:var(--green-mid);text-align:center;padding:8px;">✅ Toutes les ventes Wave sont confirmées</div>';
+        return '<div style="border-top:1px solid var(--gray-150);padding-top:12px;">'
+          +'<div style="font-size:11px;font-weight:700;color:var(--orange-dark);margin-bottom:8px;">⏳ Paiements Wave en attente ('+ventesWave.length+')</div>'
+          +ventesWave.map(v=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:var(--orange-50);border:1px solid var(--orange-100);border-radius:var(--r-sm);margin-bottom:6px;">'
+            +'<div><div style="font-size:12px;font-weight:700;">'+v.client+' · '+Math.round((v.quantite||0)*(v.prix_vente||0)).toLocaleString('fr-FR')+' F</div>'
+            +'<div style="font-size:10px;color:var(--gray-420);">'+v.date+' · '+v.produit+'</div></div>'
+            +'<button onclick="confirmerWave(''+v.id+'')" style="background:linear-gradient(135deg,#1eb5ff,#005fff);color:#fff;border:none;border-radius:var(--r-sm);padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;">✅ Confirmer</button>'
+          +'</div>').join('')
+          +'</div>';
+      })()}
     </div>
   `;
 }
-
-async function sauvegarderWaveKey(){
-  const key = document.getElementById("wave_api_key")?.value?.trim();
-  if(!key) return showToast("Entrez la clé API Wave","error");
-  try {
-    await sbFetch(`/rest/v1/config?cle=eq.wave_api_key`,
-      {method:"PATCH", body:JSON.stringify({valeur:key})});
-    showToast("✅ Clé Wave sauvegardée — intégration activée");
-  } catch(e){ showToast("Erreur : "+e.message,"error"); }
-}
-
-async function renderCockpitFinancier(){
-  const el = document.getElementById("cockpitInline");
-  if(!el) return;
-  el.innerHTML = `<div style="padding:8px 0 4px;text-align:center;color:var(--gray-mid);font-size:.85rem">⏳ Calcul en cours…</div>`;
-
-  const ca        = totalVentes();
-  const mb        = margebrute();
-  const mn        = margenette();
-  const tousFlux  = tousMouvementsCaisse();
-  const encaiss   = totalEntreesCaisse(tousFlux);
-  const decaiss   = totalSortiesCaisse(tousFlux);
-  const solde     = soldeCaisse(tousFlux);
-  const pertes    = (pertesLots||[]).reduce((s,p)=>s+(p.valeur_perte||0),0);
-  const commiss   = typeof totalCommissionsDues==="function" ? totalCommissionsDues() : 0;
-  const nbVentes  = (ventes||[]).length;
-  const nbAchats  = (achats||[]).length;
-  const seuilTreso = seuilTresorerie ? seuilTresorerie() : 0;
-  const alerteTreso = seuilTreso > 0 && solde < seuilTreso;
-  const taux_mb   = ca ? Math.round(mb/ca*100) : 0;
-  const taux_mn   = ca ? Math.round(mn/ca*100) : 0;
-
-  // Seuil de rentabilité : charges fixes réelles (sorties manuelles) / taux de marge brute
-  // Les sorties auto (achats) = coûts variables → on les exclut, on garde uniquement
-  // les mouvements_caisse manuels côté sortie (salaires, loyer, dépenses fixes, etc.)
-  const fluxAuto  = typeof fluxCaisseAuto === "function" ? fluxCaisseAuto() : [];
-  const autoIds   = new Set(fluxAuto.map(f=>f.id));
-  const cfixes    = tousFlux.filter(f=>f.sens==="sortie" && !autoIds.has(f.id))
-                            .reduce((s,f)=>s+(+f.montant||0), 0);
-  const cv        = ca - mb;
-  const tmcv      = ca > 0 ? mb / ca : 0;
-  const seuilRentab = (tmcv > 0 && cfixes > 0) ? Math.round(cfixes / tmcv) : 0;
-  const marge_sec = ca - seuilRentab;
-  const maxBar    = Math.max(ca, seuilRentab)*1.1||1;
-
-  const fcfa = v => Math.round(Number(v)||0).toLocaleString("fr-FR")+" F";
-  const accentClass = {
-    'var(--green-800)':'accent-green','var(--orange)':'accent-orange',
-    'var(--red)':'accent-red','var(--red-600)':'accent-red'
-  };
-  const card = (label, val, sub, couleur) =>
-    `<div class="kpi-light${couleur?' '+(accentClass[couleur]||''):''}">
-      <div class="kl-label">${label}</div>
-      <div class="kl-value">${val}</div>
-      ${sub?`<div class="kl-sub">${sub}</div>`:""}
-    </div>`;
-
-  el.innerHTML = `
-    ${alerteTreso?`<div style="background:var(--orange-50);border:1px solid var(--orange-100);color:var(--orange-dark);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:.82rem;font-weight:600">⚠️ Trésorerie sous le seuil</div>`:""}
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:10px">
-      ${card("Chiffre d'affaires", fcfa(ca), nbVentes+" vente"+(nbVentes>1?"s":""), "var(--green-800)")}
-      ${card("Marge brute FIFO", fcfa(mb), taux_mb+"%", "var(--green-800)")}
-      ${card("Marge nette FIFO", fcfa(mn), taux_mn+"% (après frais)", "var(--green-800)")}
-      ${card("Trésorerie", fcfa(solde), alerteTreso?"⚠️ Sous seuil":"✅ OK", alerteTreso?"var(--red-600)":"var(--orange)")}
-    </div>
-    <div style="background:#fff;border:1px solid var(--gray-200);border-radius:var(--r);padding:13px 14px;margin-bottom:10px">
-      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-        <span style="font-size:.68rem;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-mid);font-weight:600">Seuil de rentabilité</span>
-        <span style="font-weight:700;font-size:.82rem;color:${marge_sec>=0?'var(--green-700b)':'var(--red-600)'}">${marge_sec>=0?"[+] Rentable":"✗ Sous le point mort"}</span>
-      </div>
-      <div style="position:relative;height:12px;background:var(--green-50);border-radius:var(--r-sm);overflow:hidden">
-        <div style="height:100%;width:${Math.min(100,ca/maxBar*100)}%;background:linear-gradient(90deg,var(--green-800),var(--green-700));border-radius:var(--r-sm)"></div>
-      </div>
-      <div style="display:flex;gap:var(--sp-3);margin-top:8px;font-size:.75rem;color:var(--gray-mid);flex-wrap:wrap">
-        <span>Seuil : <b>${fcfa(seuilRentab)}</b></span>
-        <span>CA : <b>${fcfa(ca)}</b></span>
-        <span>Écart : <b style="color:${marge_sec>=0?'var(--green-700b)':'var(--red-600)'}">${marge_sec>=0?"+":""}${fcfa(marge_sec)}</b></span>
-      </div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:12px">
-      ${card("Encaissements", fcfa(encaiss), "Total entré en caisse", null)}
-      ${card("Décaissements", fcfa(decaiss), "Total sorti de caisse", null)}
-      ${card("Pertes valorisées", fcfa(pertes), "Marchandises perdues", null)}
-      ${card("Commissions versées", fcfa(commiss), nbAchats+" lot"+(nbAchats>1?"s":"")+" achetés", null)}
-    </div>
-    <button id="btnCFOAI" onclick="lancerAnalyseCFO()" style="width:100%;background:var(--orange);color:#fff;border:0;border-radius:var(--r);padding:13px;font-weight:700;font-size:.95rem;cursor:pointer;margin-bottom:10px">
-      🤖 Lancer l'analyse du CFO IA
-    </button>
-    <div id="cfo-analyse-resultat"></div>
-  `;
-
-  window._kpiCockpit = {ca, marge_brute:mb, marge_nette:mn, solde_treso:solde,
-    encaissements:encaiss, decaissements:decaiss, pertes, seuil_rentab:seuilRentab,
-    nb_ventes:nbVentes, nb_achats:nbAchats};
-}
-
-async function lancerAnalyseCFO(){
-  const btn = document.getElementById("btnCFOAI");
-  const out = document.getElementById("cfo-analyse-resultat");
-  if(!btn||!out) return;
-  btn.disabled=true; btn.textContent="⏳ Analyse en cours…";
-  out.innerHTML="";
-  try{
-    const res = await fetch(`${SB_URL}/functions/v1/cfo-ai`,{
-      method:"POST",
-      headers:{apikey:SB_KEY, Authorization:`Bearer ${SB_KEY}`, "content-type":"application/json"},
-      body: JSON.stringify({kpi: window._kpiCockpit||{}})
-    });
-    const a = await res.json();
-    if(a.erreur) throw new Error(a.erreur);
-    const c = a.couleur==="vert"?"var(--green-700b)":a.couleur==="rouge"?"var(--red-600)":"var(--orange)";
-    const ul = arr=>(arr||[]).map(x=>`<li style="margin-bottom:3px">${x}</li>`).join("");
-    out.innerHTML=`
-      <div style="background:#fff;border:1px solid var(--gray-200);border-radius:var(--r);padding:14px">
-        <div style="font-weight:800;font-size:1.05rem;color:${c};margin-bottom:8px">Score ${a.score??'—'}/100 — ${(a.couleur||"").toUpperCase()}</div>
-        <p style="font-size:.88rem;line-height:1.5;margin:0 0 10px">${a.diagnostic||""}</p>
-        ${(a.points_forts||[]).length?`<div style="margin-bottom:8px"><b style="font-size:.75rem;text-transform:uppercase;color:var(--gray-mid)">✅ Points forts</b><ul style="margin:5px 0 0 14px;font-size:.84rem">${ul(a.points_forts)}</ul></div>`:""}
-        ${(a.points_faibles||[]).length?`<div style="margin-bottom:8px"><b style="font-size:.75rem;text-transform:uppercase;color:var(--gray-mid)">⚠️ Points faibles</b><ul style="margin:5px 0 0 14px;font-size:.84rem">${ul(a.points_faibles)}</ul></div>`:""}
-        ${(a.risques||[]).length?`<div style="margin-bottom:8px"><b style="font-size:.75rem;text-transform:uppercase;color:var(--gray-mid)">🔴 Risques</b><ul style="margin:5px 0 0 14px;font-size:.84rem">${ul(a.risques)}</ul></div>`:""}
-        ${(a.recommandations||[]).length?`<div><b style="font-size:.75rem;text-transform:uppercase;color:var(--gray-mid)">💡 Recommandations</b><ul style="margin:5px 0 0 14px;font-size:.84rem">${ul(a.recommandations)}</ul></div>`:""}
-      </div>`;
-  }catch(e){
-    out.innerHTML=`<p style="color:var(--red-600);font-size:.82rem;padding:8px">Erreur : ${e.message}</p>`;
-  }finally{
-    btn.disabled=false; btn.textContent="🤖 Relancer l'analyse CFO IA";
-  }
-}
-</script>
-</body>
-</html>
-
-
-
-
-
-
-
-
 
 

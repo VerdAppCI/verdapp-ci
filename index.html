@@ -336,46 +336,14 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 </style>
 
 <script>
-// ── Service Worker — Mode offline (#12) ──────────────────────────────────────
-if('serviceWorker' in navigator){
-  // Créer le SW dynamiquement (app monofichier)
-  const swCode = `
-const CACHE_NAME = 'verdapp-ci-v3';
-const ASSETS = [self.location.href];
-
-self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE_NAME).then(c => c.add(self.location.href)));
-  self.skipWaiting();
-});
-
-self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys =>
-    Promise.all(keys.filter(k=>k!==CACHE_NAME).map(k=>caches.delete(k)))
-  ));
-  self.clients.claim();
-});
-
-self.addEventListener('fetch', e => {
-  // Réseau en premier, fallback cache
-  if(e.request.url.includes('supabase.co')){
-    // Supabase — toujours réseau
-    e.respondWith(fetch(e.request).catch(()=>new Response('{"error":"offline"}',{headers:{'Content-Type':'application/json'}})));
-    return;
-  }
-  e.respondWith(
-    fetch(e.request).then(r=>{
-      const c2 = r.clone();
-      caches.open(CACHE_NAME).then(c=>c.put(e.request,c2));
-      return r;
-    }).catch(()=>caches.match(e.request))
-  );
-});
-`;
-  const blob = new Blob([swCode], {type:'text/javascript'});
-  const swUrl = URL.createObjectURL(blob);
-  navigator.serviceWorker.register(swUrl, {scope:'./'})
-    .then(()=>console.log('✅ VerdApp CI — Service Worker actif (mode offline)'))
-    .catch(e=>console.warn('SW:', e));
+// ── Mode offline (#12) ───────────────────────────────────────────────────────
+// Le Service Worker s'active automatiquement sur Netlify (HTTPS).
+// En local (fichier index.html), seule la queue localStorage est active.
+if('serviceWorker' in navigator && location.protocol === 'https:'){
+  // Tenter de charger sw.js depuis la racine (si déployé sur Netlify)
+  navigator.serviceWorker.register('/sw.js')
+    .then(()=>console.log('✅ VerdApp CI — Service Worker Netlify actif'))
+    .catch(()=>{}); // Silencieux si sw.js absent
 }
 </script>
 </head>
@@ -432,7 +400,7 @@ self.addEventListener('fetch', e => {
 
 <!-- MAIN CONTENT -->
 <!-- ═══ ÉCRAN DE CONNEXION ═══ -->
-<div id="loginScreen" style="display:none;position:fixed;inset:0;z-index:2000;background:linear-gradient(160deg,#071c0d 0%,var(--green-800) 50%,var(--green-900) 100%);display:flex;align-items:center;justify-content:center;padding:20px;">
+<div id="loginScreen" style="display:none;position:fixed;inset:0;z-index:2000;background:linear-gradient(160deg,#071c0d 0%,var(--green-800) 50%,var(--green-900) 100%);align-items:center;justify-content:center;padding:20px;">
   <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:24px;padding:36px 32px;width:100%;max-width:380px;backdrop-filter:blur(20px);box-shadow:0 24px 80px rgba(0,0,0,.4);">
     <div style="text-align:center;margin-bottom:28px;">
       <img id="loginLogo" style="height:130px;width:auto;object-fit:contain;mix-blend-mode:screen;display:block;margin:0 auto 10px;"/>
@@ -441,7 +409,8 @@ self.addEventListener('fetch', e => {
 
     <!-- Sélection utilisateur -->
     <div id="loginStep1">
-      <div style="font-size:13px;font-weight:700;color:rgba(255,255,255,.7);margin-bottom:12px;">Qui êtes-vous ?</div>
+      <div style="font-size:13px;font-weight:700;color:rgba(255,255,255,.7);margin-bottom:6px;">Qui êtes-vous ?</div>
+        <div id="loginNetworkStatus" style="font-size:10px;color:rgba(255,255,255,.3);margin-bottom:12px;text-align:center;"></div>
       <div id="userList" style="display:flex;flex-direction:column;gap:var(--sp-2);margin-bottom:16px;max-height:240px;overflow-y:auto;"></div>
       <div id="loginError" style="display:none;background:rgba(220,38,38,.15);border:1px solid rgba(220,38,38,.3);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--red-300);margin-bottom:12px;text-align:center;"></div>
     </div>
@@ -678,8 +647,9 @@ setInterval(checkSessionExpiry, 60000);
 function showLoginScreen() {
   const el = document.getElementById("loginScreen");
   if (el) el.style.display = "flex";
-  if (typeof syncLogos === "function") syncLogos();
-  loginBackToList();
+  // syncLogos dans un try pour ne pas bloquer le chargement des utilisateurs
+  try { if (typeof syncLogos === "function") syncLogos(); } catch(e){}
+  try { loginBackToList(); } catch(e){}
   loadUserListForLogin();
 }
 
@@ -695,33 +665,71 @@ function hideLoginScreen() {
 async function loadUserListForLogin() {
   const container = document.getElementById("userList");
   if (!container) return;
-  container.innerHTML = '<div style="text-align:center;padding:20px;color:rgba(255,255,255,.4);font-size:12px;">Chargement...</div>';
+
+  // Indicateur de chargement visible
+  container.innerHTML = '<div style="text-align:center;padding:24px;">'
+    + '<div style="width:32px;height:32px;border:3px solid rgba(255,255,255,.15);border-top:3px solid #f47820;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px;"></div>'
+    + '<div style="color:rgba(255,255,255,.7);font-size:13px;font-weight:600;">Chargement des utilisateurs...</div>'
+    + '</div>';
+
   try {
     const r = await fetch(SB_URL + "/rest/v1/utilisateurs_public?order=nom.asc&actif=eq.true", {
       headers: { "apikey": SB_KEY, "Authorization": "Bearer " + SB_KEY },
     });
-    if (!r.ok) throw new Error(await r.text());
+
+    if (!r.ok) {
+      const errText = await r.text();
+      let hint = "";
+      if(r.status === 404) hint = "La vue 'utilisateurs_public' est introuvable dans Supabase.";
+      else if(r.status === 401) hint = "Clé API Supabase invalide — vérifier SB_KEY.";
+      else if(r.status === 403) hint = "Accès refusé — vérifier les politiques RLS.";
+      throw new Error('HTTP ' + r.status + (hint ? ' · ' + hint : '') + ' · ' + errText.slice(0,100));
+    }
+
     usersCache = await r.json();
+
     if (!usersCache.length) {
-      container.innerHTML = '<div style="text-align:center;padding:20px;color:rgba(255,255,255,.4);font-size:12px;">Aucun utilisateur actif.</div>';
+      container.innerHTML =
+        '<div style="background:rgba(244,120,32,.15);border:1px solid rgba(244,120,32,.3);border-radius:12px;padding:16px;text-align:center;">'
+        + '<div style="font-size:18px;margin-bottom:6px;">⚠️</div>'
+        + '<div style="color:#fff;font-size:13px;font-weight:700;">Aucun utilisateur actif</div>'
+        + '<div style="color:rgba(255,255,255,.5);font-size:11px;margin-top:4px;">Vérifiez la table utilisateurs dans Supabase</div>'
+        + '<button onclick="loadUserListForLogin()" style="margin-top:10px;background:var(--orange);color:#fff;border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;">↻ Réessayer</button>'
+        + '</div>';
       return;
     }
+
+    // Afficher les cartes utilisateurs
     container.innerHTML = usersCache.map(u => {
       const col = avatarColor(u.nom);
       const roleLabel = u.role === "super_admin" ? "Super-administrateur"
                        : u.role === "admin" ? "Administrateur"
                        : "Utilisateur";
-      return '<button onclick="loginSelectUser(\'' + u.id + '\')" style="display:flex;align-items:center;gap:var(--sp-3);padding:14px;background:rgba(255,255,255,.04);border:1.5px solid rgba(255,255,255,.08);border-radius:14px;cursor:pointer;width:100%;font-family:inherit;">'
-        + '<div style="width:40px;height:40px;border-radius:var(--r-pill);background:' + col + ';display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:900;color:#fff;flex-shrink:0;">' + escapeHtml(u.nom.charAt(0).toUpperCase()) + '</div>'
-        + '<div style="text-align:left;">'
+      return '<button onclick="loginSelectUser(\'' + u.id + '\')" style="display:flex;align-items:center;gap:var(--sp-3);padding:14px;background:rgba(255,255,255,.06);border:1.5px solid rgba(255,255,255,.12);border-radius:14px;cursor:pointer;width:100%;font-family:inherit;transition:background .15s;" onmouseover="this.style.background=\'rgba(255,255,255,.12)\'" onmouseout="this.style.background=\'rgba(255,255,255,.06)\'">'
+        + '<div style="width:42px;height:42px;border-radius:50%;background:' + col + ';display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:900;color:#fff;flex-shrink:0;">' + escapeHtml(u.nom.charAt(0).toUpperCase()) + '</div>'
+        + '<div style="text-align:left;flex:1;">'
           + '<div style="font-weight:700;color:#fff;font-size:14px;">' + escapeHtml(u.nom) + '</div>'
-          + '<div style="font-size:11px;color:rgba(255,255,255,.4);">' + roleLabel + '</div>'
+          + '<div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:2px;">' + roleLabel + '</div>'
         + '</div>'
-        + '<div style="margin-left:auto;color:rgba(244,120,6);font-size:18px;">›</div>'
+        + '<div style="color:var(--orange);font-size:20px;font-weight:300;">›</div>'
         + '</button>';
-    }).join("");
+    }).join('<div style="height:6px;"></div>');
+
   } catch (e) {
-    container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--red-300);font-size:12px;">Erreur de connexion au serveur.<br>' + escapeHtml(errMsg(e)) + '</div>';
+    const msg = e.message || String(e);
+    container.innerHTML =
+      '<div style="background:rgba(231,76,60,.15);border:1.5px solid rgba(231,76,60,.4);border-radius:12px;padding:16px;">'
+      + '<div style="font-size:18px;text-align:center;margin-bottom:8px;">🔴</div>'
+      + '<div style="color:#fff;font-size:13px;font-weight:700;text-align:center;margin-bottom:6px;">Impossible de se connecter</div>'
+      + '<div style="background:rgba(0,0,0,.3);border-radius:8px;padding:10px;font-size:10px;color:rgba(255,200,200,.8);font-family:monospace;word-break:break-all;margin-bottom:10px;">'
+        + escapeHtml(msg)
+      + '</div>'
+      + '<div style="font-size:10px;color:rgba(255,255,255,.4);margin-bottom:10px;">'
+      + '💡 Vérifiez : connexion internet · URL Supabase · vue utilisateurs_public'
+      + '</div>'
+      + '<button onclick="loadUserListForLogin()" style="width:100%;background:var(--orange);color:#fff;border:none;border-radius:8px;padding:10px;cursor:pointer;font-size:13px;font-weight:700;font-family:inherit;">↻ Réessayer</button>'
+      + '</div>';
+    console.error('[VerdApp CI] loadUserListForLogin:', msg);
   }
 }
 
@@ -820,9 +828,10 @@ async function demarrerApp() {
     currentUser = s.user;
     syncIsAdmin();
     hideLoginScreen();
-    await syncAll();
+    // Afficher d'abord avec données en cache, puis sync
     applyRoleVisibility();
-    render();
+    render(); // Affichage immédiat avec données localStorage
+    try { await syncAll(); render(); } catch(e) { console.warn('[VerdApp] syncAll:', e.message); }
   } else {
     showLoginScreen();
   }
@@ -1370,6 +1379,12 @@ async function syncAll(silent=false){
     ]);
     achats=a||[]; localStorage.setItem("va_achats",JSON.stringify(achats));
     ventes=v||[]; localStorage.setItem("va_ventes",JSON.stringify(ventes));
+    // Charger les règlements fournisseurs
+    try{
+      const reg = await sbFetch('/rest/v1/reglements_fournisseurs?order=date.desc').then(r=>r.ok?r.json():[]);
+      reglements = reg || [];
+      localStorage.setItem('va_reglements', JSON.stringify(reglements));
+    }catch(e){}
     demandes=d||[]; localStorage.setItem("va_demandes",JSON.stringify(demandes));
     if(p&&p.length){produits=p; localStorage.setItem("va_produits",JSON.stringify(p));}
     commissionsPaiements=cp||[]; localStorage.setItem("va_commissions_paiements",JSON.stringify(commissionsPaiements));
@@ -2062,18 +2077,37 @@ function setFilterDemandes(f){
 
 // ─── RENDER ───────────────────────────────────────────────────────────────────
 function render(){
-  if(currentTab==="dashboard") renderDashboard();
-  else if(currentTab==="commercial"){
-    if(commercialSubTab==="achats") renderAchats();
-    else if(commercialSubTab==="colis") renderSuiviColis();
-    else if(commercialSubTab==="ventes") renderVentes();
-    else if(commercialSubTab==="stock") renderStock();
-    else if(commercialSubTab==="demandes") renderDemandes();
-    else if(commercialSubTab==="catalogue") renderCatalogue();
+  const _target = currentTab==="dashboard" ? "page-dashboard"
+    : currentTab==="commercial" ? "page-"+commercialSubTab
+    : currentTab==="finance" ? "page-financeContent"
+    : currentTab==="params" ? "page-params" : null;
+
+  try {
+    if(currentTab==="dashboard") renderDashboard();
+    else if(currentTab==="commercial"){
+      if(commercialSubTab==="achats") renderAchats();
+      else if(commercialSubTab==="colis") renderSuiviColis();
+      else if(commercialSubTab==="ventes") renderVentes();
+      else if(commercialSubTab==="stock") renderStock();
+      else if(commercialSubTab==="demandes") renderDemandes();
+      else if(commercialSubTab==="catalogue") renderCatalogue();
+      else if(commercialSubTab==="transporteurs") renderTransporteurs();
+    }
+    else if(currentTab==="finance") renderFinanceContent();
+    else if(currentTab==="params") renderParams();
+    // chat géré séparément via initChat
+  } catch(err) {
+    console.error('[VerdApp CI] render() erreur:', err);
+    const errEl = _target ? document.getElementById(_target) : null;
+    if(errEl) errEl.innerHTML =
+      '<div style="margin:20px;padding:16px;background:#fff0f0;border:2px solid #f87171;border-radius:12px;">'
+      +'<div style="font-size:14px;font-weight:800;color:#dc2626;margin-bottom:8px;">⚠️ Erreur d\'affichage</div>'
+      +'<div style="font-family:monospace;font-size:11px;color:#7f1d1d;background:#fef2f2;padding:10px;border-radius:8px;word-break:break-all;">'
+        +escapeHtml(err.message||String(err))
+      +'</div>'
+      +'<button onclick="render()" style="margin-top:10px;background:#dc2626;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">↻ Réessayer</button>'
+      +'</div>';
   }
-  else if(currentTab==="finance") renderFinanceContent();
-  else if(currentTab==="params") renderParams();
-  // chat géré séparément via initChat
 }
 
 function stockDisponibleProduit(produit){
@@ -6341,6 +6375,7 @@ function renderParams(){
   document.getElementById("page-params").innerHTML=html;
   // Charger les charges fixes
   if(typeof renderChargesFixesParams === "function") renderChargesFixesParams();
+  if(typeof renderDepotsParams === "function") setTimeout(renderDepotsParams, 50);
   if(typeof renderDepotsParams==="function") renderDepotsParams();;
 }
 
@@ -9182,8 +9217,7 @@ function importerReleveBancaire(){
   const csv = document.getElementById("releve_csv_input")?.value.trim();
   if(!csv) return showToast("Collez d'abord votre relevé CSV","error");
 
-  const lignes = csv.split("
-").filter(l=>l.trim());
+  const lignes = csv.split("\n").filter(l=>l.trim()).filter(l=>l.trim());
   let imported = 0;
   lignes.forEach(l=>{
     const parts = l.split(";");
@@ -9362,7 +9396,7 @@ function renderGrandLivre(){
     +'</div>';
   });
 
-  if(!comptes.length) html += '<div style="text-align:center;padding:30px;color:var(--gray-420);">Aucune écriture. Régénérez le journal d'abord.</div>';
+  if(!comptes.length) html += '<div style="text-align:center;padding:30px;color:var(--gray-420);">Aucune écriture. Régénérez le journal d\'abord.</div>';
   target.innerHTML = html;
 }
 
@@ -9994,7 +10028,7 @@ function genererWaveLink(){
   const montant = +document.getElementById('wave_montant_gen')?.value||0;
   const desc    = document.getElementById('wave_desc_gen')?.value||'Paiement VerdApp CI';
   const num     = localStorage.getItem('wave_numero')||'';
-  if(!num){ showToast('Configurez votre numéro Wave Business d'abord','error'); return; }
+  if(!num){ showToast('Configurez votre numéro Wave Business d\'abord','error'); return; }
   if(!montant){ showToast('Entrez un montant','error'); return; }
   // Mettre à jour les stats
   const stats = JSON.parse(localStorage.getItem('wave_stats')||'{"envoyes":0,"confirmes":0,"montant":0}');
@@ -10049,8 +10083,7 @@ async function confirmerWave(venteId){
 // ────────────────────────────────────────────────────────────────────────────
 
 // ── Charges fixes (Paramètres → SIG) ────────────────────────────────────────
-function renderChargesFixesParams();
-  if(typeof renderDepotsParams==="function") renderDepotsParams();{
+function renderChargesFixesParams(){
   const el = document.getElementById('chargesFixesSection');
   if(!el) return;
   const cf = JSON.parse(localStorage.getItem('verdapp_charges_fixes')||'{}');
@@ -11122,12 +11155,13 @@ function renderWaveCadre(){
           +ventesWave.map(v=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:var(--orange-50);border:1px solid var(--orange-100);border-radius:var(--r-sm);margin-bottom:6px;">'
             +'<div><div style="font-size:12px;font-weight:700;">'+v.client+' · '+Math.round((v.quantite||0)*(v.prix_vente||0)).toLocaleString('fr-FR')+' F</div>'
             +'<div style="font-size:10px;color:var(--gray-420);">'+v.date+' · '+v.produit+'</div></div>'
-            +'<button onclick="confirmerWave(''+v.id+'')" style="background:linear-gradient(135deg,#1eb5ff,#005fff);color:#fff;border:none;border-radius:var(--r-sm);padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;">✅ Confirmer</button>'
+            +'<button onclick="confirmerWave(this.dataset.id)" data-id="'+v.id+'"" style="background:linear-gradient(135deg,#1eb5ff,#005fff);color:#fff;border:none;border-radius:var(--r-sm);padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;">✅ Confirmer</button>'
           +'</div>').join('')
           +'</div>';
       })()}
     </div>
   `;
 }
-
-
+</script>
+</body>
+</html>

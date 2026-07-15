@@ -1305,6 +1305,18 @@ function showToast(msg,type="ok"){
 
 // ─── SUPABASE ────────────────────────────────────────────────────────────────
 
+
+// ── Générateur numéro de lot ─────────────────────────────────────────────────
+function genNumeroLot(){
+  const annee = new Date().getFullYear();
+  const existing = achats.filter(a=>a.numero_lot).map(a=>{
+    const m = (a.numero_lot||"").match(/LOT-(\d{4})-(\d+)/);
+    return m ? parseInt(m[2]) : 0;
+  });
+  const next = existing.length ? Math.max(...existing)+1 : 1;
+  return "LOT-"+annee+"-"+String(next).padStart(3,"0");
+}
+// ────────────────────────────────────────────────────────────────────────────
 // ── Helper universel statut livraison ──────────────────────────────────────
 // Lit statut_livraison si disponible dans le cache, sinon déduit depuis statut.
 // Garantit que le suivi colis fonctionne même sans le nouveau champ en cache.
@@ -1384,6 +1396,27 @@ async function syncAll(silent=false){
       const reg = await sbFetch('/rest/v1/reglements_fournisseurs?order=date.desc').then(r=>r.ok?r.json():[]);
       reglements = reg || [];
       localStorage.setItem('va_reglements', JSON.stringify(reglements));
+    }catch(e){}
+
+    // ── PERTES LOTS — DB = source de vérité ─────────────────────────────
+    try{
+      const pl = await sbFetch('/rest/v1/pertes_lots?order=date.desc').then(r=>r.ok?r.json():null);
+      if(pl !== null){
+        pertesLots = pl || [];
+        localStorage.setItem('va_pertes_lots', JSON.stringify(pertesLots));
+      }
+    }catch(e){
+      console.warn('[VerdApp] pertes_lots:', e.message);
+    }
+
+    // ── SEUILS STOCK ──────────────────────────────────────────────────────────
+    try{
+      const ss = await sbFetch('/rest/v1/seuils_stock').then(r=>r.ok?r.json():[]);
+      if(ss && ss.length){
+        seuilsStock = {};
+        ss.forEach(s=>{ seuilsStock[s.produit] = s.seuil_min; });
+        localStorage.setItem('va_seuils', JSON.stringify(seuilsStock));
+      }
     }catch(e){}
     demandes=d||[]; localStorage.setItem("va_demandes",JSON.stringify(demandes));
     if(p&&p.length){produits=p; localStorage.setItem("va_produits",JSON.stringify(p));}
@@ -1500,6 +1533,15 @@ function buildAchatForm(data, onSubmit, submitLabel){
   return `
     <div class="form-block">
       <div class="form-block-title">1. Lot et fournisseur</div>
+      <!-- Numéro de lot -->
+      <div style="background:var(--green-50);border:1px solid var(--green-bright3);border-radius:var(--r-sm);padding:8px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-size:9px;color:var(--green-mid);font-weight:700;text-transform:uppercase;letter-spacing:.06em;">Numéro de lot</div>
+          <div style="font-size:16px;font-weight:900;color:var(--green-800);">${data.numero_lot||genNumeroLot()}</div>
+          <input type="hidden" id="af_numero_lot" value="${data.numero_lot||genNumeroLot()}"/>
+        </div>
+        <div style="font-size:9px;color:var(--gray-400);font-style:italic;">Auto-généré</div>
+      </div>
       <div class="form-grid">
         <div><label class="label" for="af_date">Date *</label><input type="date" id="af_date" value="${data.date||today()}" required/></div>
         <div><label class="label" for="af_fourn">Fournisseur *</label><input type="text" id="af_fourn" value="${data.fournisseur||''}" placeholder="Kouassi Amara" required/></div>
@@ -1600,6 +1642,7 @@ async function soumettreModifAchat(id){
     date:document.getElementById("af_date").value, fournisseur:fourn,
     lieu:document.getElementById("af_lieu").value,
     produit:document.getElementById("af_produit").value,
+    numero_lot:document.getElementById("af_numero_lot")?.value||genNumeroLot(),
     unite:document.getElementById("af_unite").value,
     quantite:+qte, prix_unitaire:+prix,
     avance_paye:+document.getElementById("af_avance").value||0,
@@ -1900,6 +1943,7 @@ const FINANCE_SUBTABS = [
   {id:"previsions",  label:"Prévisions",  icon:"📈", isNew:true},
   {id:"alertes",    label:"Alertes",     icon:"🔔", isNew:true},
   {id:"banque",     label:"Banque BOA-CI", icon:"🏦", isNew:true},
+  {id:"rapport_jour",label:"Rapport J",   icon:"📋", isNew:true},
 ];
 
 function renderCommercialSubnav(){
@@ -2006,6 +2050,16 @@ function renderFinanceContent(){
   else if(financeSubTab==="previsions"){ el.innerHTML = '<div id="previsionsInline"></div><div id="alertesInlineDiv" style="padding:16px 0;"></div>'; renderPrevisions(); }
   else if(financeSubTab==="alertes"){ el.innerHTML = '<div id="alertesPanel" style="padding:4px 0;"></div>'; renderAlertesIntelligentes("alertesPanel"); }
   else if(financeSubTab==="banque"){ renderRapprochementBancaire(); }
+  else if(financeSubTab==="rapport_jour"){
+    el.innerHTML = '<div style="padding:8px 0;">'
+      +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">'
+        +'<label style="font-size:12px;font-weight:700;color:var(--text);">Date :</label>'
+        +'<input type="date" id="rapportJourDate" value="'+new Date().toISOString().slice(0,10)+'" onchange="renderRapportJournalier(\'rapportJourContent\',this.value)"/>'
+      +'</div>'
+      +'<div id="rapportJourContent"></div>'
+    +'</div>';
+    renderRapportJournalier("rapportJourContent", new Date().toISOString().slice(0,10));
+  }
   else if(financeSubTab==="sig"){ bilanOnglet="sig"; el.innerHTML = renderBilanInline(); }
   else if(financeSubTab==="budget"){ bilanOnglet="budget"; el.innerHTML = renderBilanInline(); }
   else if(financeSubTab==="pertes"){ bilanOnglet="pertes"; el.innerHTML = renderBilanInline(); }
@@ -3789,7 +3843,10 @@ function imprimerFacture(venteId){
 
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({unit:'mm', format:'a5', orientation:'portrait'});
-  const fmt  = n => Math.round(n||0).toLocaleString('fr-FR');
+  const fmt  = n => {
+    const s = String(Math.round(n||0));
+    return s.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  };
   const montant = (v.quantite||0)*(v.prix_vente||0);
   const numDoc  = v.numero_document || ('VT-'+(v.id||'').slice(-6).toUpperCase());
   const dateStr = v.date ? new Date(v.date).toLocaleDateString('fr-CI',{day:'2-digit',month:'long',year:'numeric'}) : '';
@@ -3830,9 +3887,9 @@ function imprimerFacture(venteId){
   doc.setFontSize(8); doc.setFont('helvetica','bold');
   doc.setTextColor(120,120,120);
   doc.text('PRODUIT', 14, 66);
-  doc.text('QTE', 100, 66, {align:'center'});
-  doc.text('P.U (F)', 125, 66, {align:'center'});
-  doc.text('TOTAL (F)', W-14, 66, {align:'right'});
+  doc.text('QTE', 92, 66, {align:'center'});
+  doc.text('PU (F)', 118, 66, {align:'center'});
+  doc.text('TOTAL (F)', W-12, 66, {align:'right'});
 
   doc.setDrawColor(200,200,200);
   doc.setLineDash([1,1]);
@@ -3843,10 +3900,10 @@ function imprimerFacture(venteId){
   doc.setTextColor(30,30,30);
   doc.text(v.produit||'', 14, 76);
   doc.setFontSize(10);
-  doc.text(String(v.quantite||0), 100, 76, {align:'center'});
-  doc.text(fmt(v.prix_vente), 125, 76, {align:'center'});
+  doc.text(String(v.quantite||0), 92, 76, {align:'center'});
+  doc.text(fmt(v.prix_vente), 118, 76, {align:'center'});
   doc.setTextColor(13, 100, 26);
-  doc.text(fmt(montant), W-14, 76, {align:'right'});
+  doc.text(fmt(montant), W-12, 76, {align:'right'});
 
   // ── Total ──
   doc.setFillColor(232, 244, 232);
@@ -3857,7 +3914,7 @@ function imprimerFacture(venteId){
   doc.setFontSize(8); doc.setFont('helvetica','normal');
   doc.text(v.mode_paiement||'Especes', 22, 99);
   doc.setFontSize(18); doc.setFont('helvetica','bold');
-  doc.text(fmt(montant)+' F', W-18, 97, {align:'right'});
+  doc.text(fmt(montant)+' F', W-12, 97, {align:'right'});
 
   // ── Enregistré par ──
   doc.setFontSize(7); doc.setFont('helvetica','normal');
@@ -4454,7 +4511,7 @@ function renderEmprunts(){
     alerteHtml = '<div style="background:var(--orange-50);border:1.5px solid var(--orange-100);border-radius:var(--r);padding:12px;margin-bottom:12px;">'
       +'<div style="font-size:12px;font-weight:800;color:var(--orange-dark);margin-bottom:6px;">⏰ '+proches.length+' échéance'+(proches.length>1?'s':'')+' sous 7 jours</div>'
       +proches.map(p=>{
-        const retard = p.joursRestants<0;
+        const retard = p.joursRestants < 0;  // <0 = dépassé, =0 = aujourd'hui = pas retard
         return '<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:4px 0;border-top:1px solid var(--orange-100);">'
           +'<div><span style="font-weight:700;color:var(--text);">'+p.emp.libelle+'</span> · '+p.echeance.date+'</div>'
           +'<div style="text-align:right;"><span style="font-weight:900;color:var(--orange-dark);">'+fmt(p.echeance.mensualite)+'</span> '
@@ -5433,6 +5490,8 @@ function renderAchats(){
             <span style="font-size:18px;">${getProduitIcon(a.produit)||"🌿"}</span>
             <span style="font-weight:800;color:var(--text);font-size:14px;">${a.produit}</span>
             <span class="badge ${a.statut==="recu"?"b-lime":"b-amber"}">${a.statut==="recu"?"[+] Reçu":"⏳ Transit"}</span>
+            ${a.numero_document?`<span class="badge b-stone" style="font-family:monospace;font-size:10px;">${a.numero_document}</span>`:""}
+            ${(()=>{const ml=margeParLot(a);return ml.estVendu?'<span class="badge b-green" style="font-size:10px;">✅ Vendu</span>':ml.qteVendueLot>0?'<span class="badge b-amber" style="font-size:10px;">⚡ Partiel</span>':'';})()}
             <span class="badge b-stone">${a.unite}</span>
             ${a.numero_document?`<span class="badge b-stone" style="font-family:monospace;cursor:pointer;" onclick='genererDocumentPDF("achat",${JSON.stringify(a).replace(/'/g,"&#39;")})' title="Imprimer le bon de réception">🖨 ${a.numero_document}</span>`:""}
             ${hasPending?`<span class="badge b-orange">⏳ En révision</span>`:""}
@@ -5447,6 +5506,7 @@ function renderAchats(){
         </div>
         <div style="display:flex;flex-direction:column;gap:var(--sp-2);">
           ${a.statut==="en_cours" && currentUser?`<button onclick="marquerRecu('${a.id}')" class="icon-btn-green" title="Accuser réception">[+] Reçu</button>`:""}
+          ${a.statut==="recu" && !margeParLot(a).estVendu?`<button onclick="marquerVenduColis('${a.id}')" class="icon-btn-green" style="background:var(--green-700);font-size:11px;" title="Vendre ce lot">💰 Vendre</button>`:""}
           ${isAdmin&&!hasPending?`<button onclick="demandeModifAchat('${a.id}')" class="icon-btn-orange" title="Modifier">✏️</button>`:""}
           ${isAdmin&&!hasPending?`<button onclick="demandeSupprAchat('${a.id}')" class="icon-btn" title="Supprimer">🗑</button>`:""}
         </div>
@@ -5496,8 +5556,9 @@ function renderVentes(){
             <span style="font-size:18px;">${getProduitIcon(v.produit)||"🌿"}</span>
             <span style="font-weight:800;color:var(--text);font-size:14px;">${v.produit}</span>
             <span class="badge b-sky">${v.mode_paiement}</span>
-            ${v.numero_document?`<span class="badge b-stone" style="font-family:monospace;cursor:pointer;" onclick='genererFactureClient("${v.id}")' title="Imprimer la facture">🖨 ${v.numero_document}</span>`:""}
-            <span class="badge b-stone" style="cursor:pointer;" onclick='genererFactureClient("${v.id}")' title="Générer le reçu PDF">🧾 Reçu</span>
+            ${v.numero_document
+              ? `<span class="badge b-stone" style="font-family:monospace;cursor:pointer;" onclick='genererFactureClient("${v.id}")' title="Imprimer la facture">🖨 ${v.numero_document}</span>`
+              : `<span class="badge b-stone" style="cursor:pointer;" onclick='genererFactureClient("${v.id}")' title="Générer le reçu PDF">🧾 Reçu</span>`}
             ${hasPending?`<span class="badge b-orange">⏳ En révision</span>`:""}
           </div>
           <div style="font-size:11px;color:var(--green-mid);margin-bottom:5px;">${v.date} · <span style="color:var(--gray-500);">${v.client}</span></div>
@@ -5834,7 +5895,7 @@ function voirPertesLots() {
         +'<div style="font-size:13px;font-weight:900;color:var(--red);">-'+p.qte_perte+' u.</div>'
         +'<div style="font-size:11px;font-weight:700;color:var(--orange-dark);">-'+fmt(p.valeur_perte)+'</div>'
         +'<div style="font-size:9px;color:var(--gray-420);">Au '+( p.mode_valorisation==="revient"?"coût revient":"prix achat")+' : '+fmt(p.cout_unitaire)+'/u</div>'
-        +'<button onclick="modalModifierPerte(\''+p.id+'\')" style="margin-top:4px;background:var(--gray-150);border:none;border-radius:var(--r-sm);padding:3px 9px;font-size:10px;font-weight:700;color:var(--green-mid);cursor:pointer;font-family:inherit;">✏ Modifier</button>'
+        +'<div style="display:flex;gap:6px;margin-top:4px;">'        +'<button onclick="modalModifierPerte(\''+p.id+'\')" style="background:var(--gray-150);border:none;border-radius:var(--r-sm);padding:3px 9px;font-size:10px;font-weight:700;color:var(--green-mid);cursor:pointer;font-family:inherit;">✏ Modifier</button>'        +'<button onclick="supprimerPerte(\''+p.id+'\')" style="background:var(--red-50);border:1px solid var(--red-200);border-radius:var(--r-sm);padding:3px 9px;font-size:10px;font-weight:700;color:var(--red);cursor:pointer;font-family:inherit;">🗑 Supprimer</button>'        +'</div>'
       +'</div>'
     +'</div>'
     +'</div>'
@@ -5873,10 +5934,36 @@ function voirPertesLots() {
  * (marges, etc.) — recalcul en cascade automatique car renderDashboard()
  * relit pertesLots/pertes à chaque render().
  */
+async function supprimerPerte(perteId){
+  const p = pertesLots.find(x=>x.id===perteId);
+  if(!p) return;
+  if(!confirm(`Supprimer la perte de ${p.qte_perte||p.quantite_perdue||0} u. (${(p.valeur_perte||0).toLocaleString('fr-FR')} F) du lot ${p.fournisseur||''} ?`)) return;
+  try{
+    // Supprimer de Supabase
+    await sbFetch(`/rest/v1/pertes_lots?id=eq.${perteId}`, {method:'DELETE'});
+  }catch(e){ console.warn('Suppression Supabase:', e.message); }
+  // Supprimer du cache local
+  pertesLots = pertesLots.filter(x=>x.id!==perteId);
+  localStorage.setItem('va_pertes_lots', JSON.stringify(pertesLots));
+  showToast('✅ Perte supprimée');
+  render();
+}
+
 function modalModifierPerte(perteId) {
   if(!isAdmin){ showToast("Réservé à l'administrateur","error"); return; }
   const p = pertesLots.find(x=>x.id===perteId);
   if(!p){ showToast("Perte introuvable","error"); return; }
+  // Calculer coût de revient réel depuis le lot source
+  const _lotSrc = achats.find(a=>a.id===p.lot_id);
+  let _prixAchat=p.cout_unitaire||0, _coutRevient=p.cout_unitaire||0;
+  if(_lotSrc){
+    _prixAchat = _lotSrc.prix_unitaire||0;
+    const _frais=(_lotSrc.droit_terre||0)+(_lotSrc.transport||0)+(_lotSrc.droit_vente||0)+(_lotSrc.charrette||0);
+    _coutRevient = _prixAchat + _frais/(_lotSrc.quantite||1);
+  }
+  const _affAchat   = p.mode_valorisation==="revient" ? _prixAchat   : (p.cout_unitaire||_prixAchat);
+  const _affRevient = p.mode_valorisation==="revient" ? (p.cout_unitaire||_coutRevient) : _coutRevient;
+  const fmt2 = v=>Math.round(v||0).toLocaleString("fr-FR");
 
   showModal(
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
@@ -5897,10 +5984,10 @@ function modalModifierPerte(perteId) {
       +'<label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px;">Valorisation</label>'
       +'<div style="display:flex;gap:var(--sp-2);">'
         +'<label style="flex:1;display:flex;align-items:center;gap:var(--sp-2);background:var(--gray-50);border:1.5px solid var(--gray-150);border-radius:10px;padding:8px 10px;font-size:12px;cursor:pointer;">'
-          +'<input type="radio" name="mp_valMode" value="achat" '+(p.mode_valorisation!=="revient"?"checked":"")+'/> Prix d\'achat ('+fmt(p.cout_unitaire&&p.mode_valorisation!=="revient"?p.cout_unitaire:0)+')'
+          +'<input type="radio" name="mp_valMode" value="achat" '+(p.mode_valorisation!=="revient"?"checked":"")+'/> Prix d\'achat ('+fmt2(_affAchat)+' F/u)'
         +'</label>'
         +'<label style="flex:1;display:flex;align-items:center;gap:var(--sp-2);background:var(--gray-50);border:1.5px solid var(--gray-150);border-radius:10px;padding:8px 10px;font-size:12px;cursor:pointer;">'
-          +'<input type="radio" name="mp_valMode" value="revient" '+(p.mode_valorisation==="revient"?"checked":"")+'/> Coût de revient ('+fmt(p.mode_valorisation==="revient"?p.cout_unitaire:0)+')'
+          +'<input type="radio" name="mp_valMode" value="revient" '+(p.mode_valorisation==="revient"?"checked":"")+'/> Coût de revient ('+fmt2(_affRevient)+' F/u)'
         +'</label>'
       +'</div>'
       +'<div style="font-size:10px;color:var(--gray-420);margin-top:4px;">Le coût unitaire d\'origine est conservé ; seule la quantité et le mode peuvent être ajustés.</div>'
@@ -5936,10 +6023,14 @@ async function enregistrerModifPerte(perteId) {
   if(nouvelleQte<0){ msg.style.cssText="display:block;color:var(--red);"; msg.textContent="Quantité invalide."; return; }
 
   const nouveauMode = modeEl?.value || p.mode_valorisation || "achat";
-  // Le coût unitaire d'origine est conservé tel quel quel que soit le mode choisi,
-  // sauf si l'admin change explicitement de mode (rare) — on garde simplement
-  // le cout_unitaire stocké lors de la constatation initiale.
-  const nouveauCoutUnitaire = p.cout_unitaire;
+  // Utiliser le coût correct selon le mode choisi
+  // Les valeurs calculées depuis le lot source sont dans les hidden inputs
+  const _coutAchatCalc   = +document.getElementById("mp_cout_achat")?.value  || p.cout_unitaire || 0;
+  const _coutRevientCalc = +document.getElementById("mp_cout_revient")?.value || p.cout_unitaire || 0;
+  const _coutCustom      = +document.getElementById("mp_cout_custom")?.value  || 0;
+  // Priorité : custom > calculé selon mode
+  const nouveauCoutUnitaire = _coutCustom > 0 ? _coutCustom
+    : (nouveauMode==="revient" ? _coutRevientCalc : _coutAchatCalc);
   const nouvelleValeur = nouvelleQte * nouveauCoutUnitaire;
 
   const ancienneQte = p.qte_perte;
@@ -6286,6 +6377,13 @@ function renderStock(){
 
   pageEl.innerHTML=html;
 
+  // ── Rentabilité par lot ───────────────────────
+  setTimeout(()=>{
+    let lotDiv = document.getElementById("lotRentabDiv");
+    if(!lotDiv){ lotDiv=document.createElement("div"); lotDiv.id="lotRentabDiv"; lotDiv.style.marginTop="16px"; pageEl.after(lotDiv); }
+    renderSuiviParLot("lotRentabDiv");
+  }, 30);
+
   // ── Performance multi-produits (#4) ──────────
   setTimeout(()=>{
     let pp = document.getElementById('perfProduitsContainer');
@@ -6323,14 +6421,74 @@ function renderDemandes(){
           <div style="font-size:11px;color:var(--green-mid);">${d.created_at?new Date(d.created_at).toLocaleDateString("fr-CI"):""}</div>
         </div>
       </div>
-      <div style="background:var(--gray-150);border:1.5px solid var(--gray-300);border-radius:10px;padding:10px;margin-bottom:8px;font-size:11px;">
-        <div style="color:var(--green-900c);font-weight:700;margin-bottom:4px;">ORIGINAL</div>
-        <div style="color:var(--text);">${orig.produit||""} · ${orig.fournisseur||orig.client||""} · ${orig.quantite||""} ${orig.unite||""} · ${fmt((orig.quantite||0)*(orig.prix_unitaire||orig.prix_vente||0))}</div>
-      </div>
-      ${d.type==="modification"?`<div style="background:var(--green-pale);border:1.5px solid var(--green-bright3);border-radius:10px;padding:10px;margin-bottom:8px;font-size:11px;">
-        <div style="color:var(--green-600);font-weight:700;margin-bottom:4px;">NOUVEAU</div>
-        <div style="color:var(--green-600);font-weight:600;">${nouv.produit||""} · ${nouv.fournisseur||nouv.client||""} · ${nouv.quantite||""} ${nouv.unite||""} · ${fmt((nouv.quantite||0)*(nouv.prix_unitaire||nouv.prix_vente||0))}</div>
-      </div>`:""}
+      ${(()=>{
+        // ── Diff complet champ par champ ──────────────────────────────
+        const LABELS_ACHAT = {
+          produit:'Produit', fournisseur:'Fournisseur', quantite:'Quantité',
+          unite:'Unité', prix_unitaire:'Prix unitaire (F)', avance_paye:'Avance payée (F)',
+          droit_terre:'Droit de terre (F)', transport:'Transport (F)',
+          droit_vente:'Droit de vente (F)', charrette:'Charrette (F)',
+          statut:'Statut', date:'Date', date_reception:'Date réception',
+          transporteur:'Transporteur', vehicule:'Véhicule',
+          lieu_origine:'Lieu origine', notes_transit:'Notes transit',
+        };
+        const LABELS_VENTE = {
+          produit:'Produit', client:'Client', quantite:'Quantité',
+          prix_vente:'Prix vente (F)', mode_paiement:'Paiement', date:'Date', notes:'Notes',
+        };
+        const LABELS = d.table_cible==='achats' ? LABELS_ACHAT : LABELS_VENTE;
+
+        // Champs qui ont changé
+        const allKeys = [...new Set([...Object.keys(orig||{}), ...Object.keys(nouv||{})])];
+        const changed = allKeys.filter(k=> LABELS[k] && String(orig[k]??'') !== String(nouv[k]??''));
+        const unchanged = allKeys.filter(k=> LABELS[k] && String(orig[k]??'') === String(nouv[k]??'') && orig[k]!==undefined);
+
+        const fmtVal = (k,v) => {
+          if(v===undefined||v===null||v==='') return '—';
+          if(['prix_unitaire','prix_vente','avance_paye','droit_terre','transport','droit_vente','charrette'].includes(k))
+            return Math.round(v||0).toLocaleString('fr-FR')+' F';
+          return String(v);
+        };
+
+        let diffHtml = '';
+
+        // Section MODIFIÉS (si diff)
+        if(d.type==='modification' && changed.length>0){
+          diffHtml += '<div style="margin-bottom:8px;">'
+            +'<div style="font-size:10px;font-weight:800;color:var(--text);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">🔄 Champs modifiés ('+changed.length+')</div>';
+          changed.forEach(k=>{
+            diffHtml += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;padding:6px 8px;background:#fff;border:1px solid var(--gray-200);border-radius:var(--r-sm);margin-bottom:4px;font-size:11px;">'
+              +'<div style="color:var(--gray-420);font-weight:700;">'+LABELS[k]+'</div>'
+              +'<div style="color:var(--red);text-decoration:line-through;">'+fmtVal(k,orig[k])+'</div>'
+              +'<div style="color:var(--green-700);font-weight:700;">'+fmtVal(k,nouv[k])+'</div>'
+            +'</div>';
+          });
+          diffHtml += '</div>';
+        }
+
+        // Section INCHANGÉS (résumé compact)
+        if(unchanged.length > 0){
+          diffHtml += '<div style="background:var(--gray-50);border:1px solid var(--gray-150);border-radius:var(--r-sm);padding:8px 10px;font-size:10px;color:var(--gray-420);">'
+            +'<span style="font-weight:700;color:var(--text);">Inchangé : </span>'
+            +unchanged.filter(k=>['produit','fournisseur','client','quantite','prix_unitaire','prix_vente'].includes(k))
+              .map(k=>LABELS[k]+' : <b>'+fmtVal(k,orig[k])+'</b>').join(' · ')
+          +'</div>';
+        }
+
+        // Fallback si aucun champ labelisé trouvé
+        if(!changed.length && !unchanged.length){
+          diffHtml += '<div style="font-size:11px;color:var(--gray-420);">'
+            +(orig.produit||'')+' · '+(orig.fournisseur||orig.client||'')+' · '+(orig.quantite||'')+' '+(orig.unite||'')
+          +'</div>';
+        }
+
+        // Si pas de diff visible pour une modification
+        if(d.type==='modification' && changed.length===0 && unchanged.length>0){
+          diffHtml = '<div style="background:var(--orange-50);border:1px solid var(--orange-100);border-radius:var(--r-sm);padding:8px 10px;font-size:11px;color:var(--orange-dark);margin-bottom:6px;">⚠️ Aucun champ modifiable détecté dans la demande.</div>' + diffHtml;
+        }
+
+        return diffHtml;
+      })()}
       ${d.message_rejet?`<div style="font-size:11px;color:var(--red);margin-bottom:8px;">Motif rejet : ${d.message_rejet}</div>`:""}
       ${isAdmin&&d.statut==="en_attente"?`<div style="display:flex;gap:var(--sp-2);">
         <button class="btn btn-green" style="flex:1;" onclick="accepterDemande('${d.id}')">[+] Accepter</button>
@@ -9717,6 +9875,145 @@ function renderPerformanceProduits(targetId){
 }
 // ──────────────────────────────────────────────────────────────────────────────
 
+
+// ══════════════════════════════════════════════════════════════
+// SUIVI RENTABILITÉ PAR LOT
+// ══════════════════════════════════════════════════════════════
+function renderSuiviParLot(targetId){
+  const el = document.getElementById(targetId);
+  if(!el) return;
+
+  const fmt = v => Math.round(v||0).toLocaleString("fr-FR");
+  const today = new Date().toISOString().slice(0,10);
+
+  // Calculer l'état de chaque lot reçu
+  const lotsRecus = achats.filter(a=>a.statut==="recu")
+    .sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+
+  if(!lotsRecus.length){
+    el.innerHTML='<div style="text-align:center;padding:20px;color:var(--gray-420);">Aucun lot reçu.</div>';
+    return;
+  }
+
+  // Pré-calculer les ventes par lot (via lot_ref ou FIFO)
+  const ventesParLot = {};
+  ventes.forEach(v=>{
+    if(v.lot_ref){
+      if(!ventesParLot[v.lot_ref]) ventesParLot[v.lot_ref] = [];
+      ventesParLot[v.lot_ref].push(v);
+    }
+  });
+
+  // FIFO pour lots sans lot_ref
+  const fifoCache = {};
+  [...new Set(lotsRecus.map(a=>a.produit))].forEach(p=>{
+    fifoCache[p] = calculerFIFO(p);
+  });
+
+  const rows = lotsRecus.map(a=>{
+    const frais   = (a.droit_terre||0)+(a.transport||0)+(a.droit_vente||0)+(a.charrette||0);
+    const coutLot = (a.quantite||0)*(a.prix_unitaire||0) + frais;
+    const coutUnit= a.quantite ? (coutLot/a.quantite) : 0;
+
+    // Ventes liées (via lot_ref en priorité, sinon FIFO)
+    let qteLot=0, caLot=0;
+    const ventesLiees = ventesParLot[a.id]||[];
+    if(ventesLiees.length){
+      qteLot = ventesLiees.reduce((s,v)=>s+(v.quantite||0),0);
+      caLot  = ventesLiees.reduce((s,v)=>s+(v.quantite||0)*(v.prix_vente||0),0);
+    } else {
+      // FIFO : attribuer les ventes selon l'ordre des lots
+      const fifo = fifoCache[a.produit];
+      const lotFifo = fifo?.lotsAvecEtat?.find?.(l=>l.id===a.id);
+      if(lotFifo){
+        qteLot = lotFifo.qteVendueLot||0;
+        caLot  = qteLot * (ventes.filter(v=>v.produit===a.produit).reduce((s,v)=>s+(v.prix_vente||0),0) / Math.max(1,ventes.filter(v=>v.produit===a.produit).length));
+      }
+    }
+
+    // Pertes sur ce lot
+    const pertesLot = pertesLots.filter(p=>p.lot_id===a.id||
+      (p.fournisseur===a.fournisseur&&p.produit===a.produit&&p.date===a.date));
+    const qtePerteLot = pertesLot.reduce((s,p)=>s+(p.qte_perte||0),0);
+    const valPerteLot = pertesLot.reduce((s,p)=>s+(p.valeur_perte||0),0);
+
+    const qteRestante = Math.max(0,(a.quantite||0)-qteLot-qtePerteLot);
+    const margeBrute  = caLot - coutLot;
+    const tauxMarge   = caLot ? Math.round(margeBrute/caLot*100) : 0;
+    const pctEcoule   = a.quantite ? Math.round((qteLot+qtePerteLot)/a.quantite*100) : 0;
+
+    // Statut du lot
+    let statut, statutColor, statutBg;
+    if(qteRestante<=0&&qteLot+qtePerteLot>0){
+      statut="Liquidé"; statutColor="var(--green-700)"; statutBg="var(--green-50)";
+    } else if(qteLot>0){
+      statut="En cours"; statutColor="var(--orange-dark)"; statutBg="var(--orange-50)";
+    } else {
+      statut="En stock"; statutColor="var(--blue-600)"; statutBg="var(--blue-50)";
+    }
+
+    const numLot = a.numero_lot || ("LOT-"+a.id.slice(-4).toUpperCase());
+    const icon   = getProduitIcon?.(a.produit)||"🌿";
+
+    return `
+      <tr style="border-bottom:1px solid var(--gray-100);cursor:pointer;" onclick="voirDetailLot('${a.id}')">
+        <td style="padding:8px 10px;font-weight:800;color:var(--green-mid);font-size:11px;white-space:nowrap;">${numLot}</td>
+        <td style="padding:8px 6px;font-size:11px;">${icon} ${a.produit||""}</td>
+        <td style="padding:8px 6px;font-size:11px;color:var(--gray-500);">${a.fournisseur||""}</td>
+        <td style="padding:8px 6px;font-size:11px;text-align:center;">${a.date||""}</td>
+        <td style="padding:8px 6px;font-size:11px;text-align:center;"><span style="background:${statutBg};color:${statutColor};border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;">${statut}</span></td>
+        <td style="padding:8px 6px;font-size:11px;text-align:right;">${fmt(a.quantite||0)}</td>
+        <td style="padding:8px 6px;font-size:11px;text-align:right;color:var(--green-700);">${fmt(qteLot)}</td>
+        <td style="padding:8px 6px;font-size:11px;text-align:right;color:${qteRestante>0?"var(--blue-600)":"var(--gray-400)"};">${fmt(qteRestante)}</td>
+        <td style="padding:8px 6px;font-size:11px;text-align:right;">${fmt(coutLot)} F</td>
+        <td style="padding:8px 6px;font-size:11px;text-align:right;color:var(--green-700);">${fmt(caLot)} F</td>
+        <td style="padding:8px 6px;font-size:12px;font-weight:800;text-align:right;color:${margeBrute>=0?"var(--green-700)":"var(--red)"};">${margeBrute>=0?"+":""}${fmt(margeBrute)} F</td>
+        <td style="padding:8px 6px;font-size:11px;text-align:right;color:${tauxMarge>=20?"var(--green-700)":tauxMarge>=10?"var(--orange-dark)":"var(--red)"};">${tauxMarge}%</td>
+      </tr>`;
+  });
+
+  // Totaux
+  const totalCout  = lotsRecus.reduce((s,a)=>{
+    const f=(a.droit_terre||0)+(a.transport||0)+(a.droit_vente||0)+(a.charrette||0);
+    return s+(a.quantite||0)*(a.prix_unitaire||0)+f;
+  },0);
+  const totalCA    = ventes.reduce((s,v)=>s+(v.quantite||0)*(v.prix_vente||0),0);
+  const totalMarge = totalCA - totalCout;
+  const tauxGlobal = totalCA ? Math.round(totalMarge/totalCA*100) : 0;
+
+  el.innerHTML =
+    '<div style="font-size:12px;font-weight:800;color:var(--text);margin-bottom:10px;">📊 Rentabilité par lot</div>'
+    +'<div style="background:var(--gray-50);border-radius:var(--r);padding:8px 12px;margin-bottom:10px;display:flex;gap:16px;flex-wrap:wrap;font-size:11px;">'
+      +'<span>Coût total lots : <b>'+fmt(totalCout)+' F</b></span>'
+      +'<span>CA total : <b style="color:var(--green-700)">'+fmt(totalCA)+' F</b></span>'
+      +'<span>Marge globale : <b style="color:'+(totalMarge>=0?"var(--green-700)":"var(--red)")+'">'+fmt(totalMarge)+' F ('+tauxGlobal+'%)</b></span>'
+    +'</div>'
+    +'<div style="overflow-x:auto;">'
+      +'<table style="width:100%;border-collapse:collapse;font-size:11px;">'
+        +'<thead><tr style="background:var(--green-800);color:#fff;">'
+          +'<th style="padding:8px 10px;text-align:left;">N° Lot</th>'
+          +'<th style="padding:8px 6px;text-align:left;">Produit</th>'
+          +'<th style="padding:8px 6px;text-align:left;">Fournisseur</th>'
+          +'<th style="padding:8px 6px;text-align:center;">Date</th>'
+          +'<th style="padding:8px 6px;text-align:center;">Statut</th>'
+          +'<th style="padding:8px 6px;text-align:right;">Qté</th>'
+          +'<th style="padding:8px 6px;text-align:right;">Vendu</th>'
+          +'<th style="padding:8px 6px;text-align:right;">Restant</th>'
+          +'<th style="padding:8px 6px;text-align:right;">Coût lot</th>'
+          +'<th style="padding:8px 6px;text-align:right;">CA lot</th>'
+          +'<th style="padding:8px 6px;text-align:right;">Marge</th>'
+          +'<th style="padding:8px 6px;text-align:right;">%</th>'
+        +'</tr></thead>'
+        +'<tbody>'
+        +rows.join("")
+        +'</tbody>'
+      +'</table>'
+    +'</div>'
+    +'<div style="font-size:9px;color:var(--gray-400);font-style:italic;margin-top:8px;text-align:center;">'
+      +'CA par lot = ventes liées via lot_ref (ventes récentes) ou estimation FIFO (ventes antérieures). Cliquez sur un lot pour le détail.'
+    +'</div>';
+}
+// ──────────────────────────────────────────────────────────────────────────────
 // ── Démarque / Vente invendus ────────────────────────────────────────────────
 function ouvrirDeMarque(lotId){
   const lot = achats.find(a=>a.id===lotId);
@@ -9817,9 +10114,15 @@ async function saveDeMarque(lotId, coutRevient){
     enregistre_par: currentUser?.nom||'',
     lot_ref: lotId
   };
+  // Payload Supabase sans colonnes inexistantes
+  const venteDB = {
+    id: vente.id, date, produit: lot.produit,
+    client, quantite: qte, prix_vente: prix,
+    mode_paiement: mode, notes: vente.notes
+  };
 
   try{
-    await sbInsert('ventes', vente);
+    await sbInsert('ventes', venteDB);
     ventes.push(vente);
     const pnl = qte*prix - qte*coutRevient;
     saveLocal(); closeModal();
@@ -9990,6 +10293,204 @@ async function sauvegarderSoldeInitial(existantId){
 }
 // ──────────────────────────────────────────────────────────────────────────────
 
+
+
+// ══ MARGE PAR LOT ═══════════════════════════════════════════════════════════
+function margeParLot(lot) {
+  const coutLot = (lot.quantite||0)*(lot.prix_unitaire||0)
+    + (lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0);
+
+  // Ventes liées à ce lot (via lot_ref ou FIFO produit/date)
+  const ventesLot = ventes.filter(v =>
+    v.lot_ref === lot.id ||
+    (v.produit === lot.produit && v.date >= (lot.date_reception||lot.date||''))
+  );
+  const caVentesLot = ventesLot.reduce((s,v)=>s+(v.quantite||0)*(v.prix_vente||0), 0);
+  const qteVendueLot = ventesLot.reduce((s,v)=>s+(v.quantite||0), 0);
+
+  const margeVal  = caVentesLot - coutLot;
+  const taux      = caVentesLot ? Math.round(margeVal/caVentesLot*100) : 0;
+  const estVendu  = qteVendueLot >= (lot.quantite||0);
+
+  return { coutLot, caVentesLot, margeVal, taux, qteVendueLot, ventesLot, estVendu };
+}
+// ════════════════════════════════════════════════════════════════════════════
+
+
+// ── Sélecteur de lot dans le formulaire vente ────────────────────────────────
+function updateVenteLots(){
+  const produit = document.getElementById("vf_produit")?.value;
+  const sel     = document.getElementById("vf_lot_ref");
+  if(!sel) return;
+  sel.innerHTML = '<option value="">— Auto (FIFO) —</option>';
+  if(!produit) return;
+
+  // Lots reçus avec stock disponible pour ce produit
+  const lotsDispos = achats.filter(a =>
+    a.produit === produit &&
+    a.statut === "recu" &&
+    stockDisponibleLot(a.id) > 0
+  ).sort((a,b)=>(a.date||"").localeCompare(b.date||"")); // FIFO : plus ancien en premier
+
+  lotsDispos.forEach(lot => {
+    const stockLot = stockDisponibleLot(lot.id);
+    const opt = document.createElement("option");
+    opt.value = lot.id;
+    opt.textContent = (lot.numero_document||lot.id.slice(-6).toUpperCase())
+      + " · " + lot.fournisseur
+      + " · " + stockLot + " dispo"
+      + " · " + Math.round(lot.prix_unitaire||0).toLocaleString("fr-FR") + " F/u";
+    sel.appendChild(opt);
+  });
+
+  // Sélectionner le premier (FIFO) par défaut
+  if(lotsDispos.length > 0) sel.value = lotsDispos[0].id;
+  updateLotInfo();
+}
+
+function updateLotInfo(){
+  const lotId = document.getElementById("vf_lot_ref")?.value;
+  const infoDiv = document.getElementById("vf_lot_info");
+  if(!infoDiv) return;
+  if(!lotId){ infoDiv.style.display="none"; return; }
+  const lot = achats.find(a=>a.id===lotId);
+  if(!lot){ infoDiv.style.display="none"; return; }
+  const stock = stockDisponibleLot(lotId);
+  const cout  = (lot.quantite||0)*(lot.prix_unitaire||0)+(lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0);
+  infoDiv.style.display="block";
+  infoDiv.innerHTML = "<b>" + (lot.numero_document||"Lot") + "</b>"
+    + " · " + lot.fournisseur + " · Reçu " + (lot.date_reception||lot.date||"")
+    + "<br>Stock : <b>" + stock + " " + (lot.unite||"u.") + " disponibles</b>"
+    + " · P.A. : " + Math.round(lot.prix_unitaire||0).toLocaleString("fr-FR") + " F/u"
+    + " · Coût lot : " + Math.round(cout).toLocaleString("fr-FR") + " F";
+}
+
+// Calculer le stock d'un lot spécifique (non consommé par ventes liées)
+function stockDisponibleLot(lotId){
+  const lot = achats.find(a=>a.id===lotId);
+  if(!lot) return 0;
+  const qteAchetee = lot.quantite||0;
+  // Ventes liées à ce lot
+  const qteVendue = ventes.filter(v=>v.lot_ref===lotId).reduce((s,v)=>s+(v.quantite||0),0);
+  // Pertes liées à ce lot
+  const qtePerte  = pertesLots.filter(p=>p.lot_id===lotId).reduce((s,p)=>s+(p.qte_perte||0),0);
+  return Math.max(0, qteAchetee - qteVendue - qtePerte);
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
+
+// ══ RAPPORT JOURNALIER PAR LOT ═══════════════════════════════════════════════
+function renderRapportJournalier(targetId, dateJour){
+  const el = document.getElementById(targetId);
+  if(!el) return;
+  const fmt = v => Math.round(v||0).toLocaleString("fr-FR");
+  const jour = dateJour || new Date().toISOString().slice(0,10);
+  const dateLabel = new Date(jour+"T12:00:00").toLocaleDateString("fr-CI",{weekday:"long",day:"2-digit",month:"long",year:"numeric"});
+
+  // Lots achetés ce jour (date d'achat ou date de réception)
+  const lotsJour = achats.filter(a => (a.date_reception||a.date||"").slice(0,10) === jour);
+
+  // Ventes de ce jour
+  const ventesJour = ventes.filter(v => (v.date||"").slice(0,10) === jour);
+
+  if(!lotsJour.length && !ventesJour.length){
+    el.innerHTML = '<div style="text-align:center;padding:24px;color:var(--gray-420);">Aucun lot ni vente pour le '+dateLabel+'</div>';
+    return;
+  }
+
+  // Cumuls
+  let totalAchats=0, totalCA=0, totalMarge=0;
+
+  // Tableau par lot
+  const rows = lotsJour.map(lot => {
+    const numLot = lot.numero_document || ("L-"+lot.id.slice(-4).toUpperCase());
+    const coutLot = (lot.quantite||0)*(lot.prix_unitaire||0)+(lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0);
+    totalAchats += coutLot;
+
+    // Ventes liées à ce lot
+    const ventesLot = ventes.filter(v => v.lot_ref===lot.id || (v.date?.slice(0,10)===jour && v.produit===lot.produit));
+    const caLot = ventesLot.reduce((s,v)=>s+(v.quantite||0)*(v.prix_vente||0),0);
+    const qteLot = ventesLot.reduce((s,v)=>s+(v.quantite||0),0);
+    const margeLot = caLot - coutLot;
+    totalCA += caLot; totalMarge += margeLot;
+
+    const isVendu = qteLot >= (lot.quantite||0);
+    const pct = coutLot ? Math.round(margeLot/coutLot*100) : 0;
+    const margeColor = margeLot>=0?"var(--green-700)":"var(--red)";
+
+    return '<tr style="border-bottom:1px solid var(--gray-150);">'
+      +'<td style="padding:8px 10px;font-family:monospace;font-weight:700;font-size:11px;color:var(--green-mid);">'+numLot+'</td>'
+      +'<td style="padding:8px 10px;font-size:11px;">'+lot.produit+'</td>'
+      +'<td style="padding:8px 10px;font-size:11px;color:var(--gray-420);">'+lot.fournisseur+'</td>'
+      +'<td style="padding:8px 10px;text-align:right;font-size:11px;">'+fmt(lot.quantite)+'</td>'
+      +'<td style="padding:8px 10px;text-align:right;font-size:11px;color:var(--red);">'+fmt(coutLot)+' F</td>'
+      +'<td style="padding:8px 10px;text-align:right;font-size:11px;color:var(--blue-600);">'+fmt(caLot)+' F</td>'
+      +'<td style="padding:8px 10px;text-align:right;font-size:11px;font-weight:800;color:'+margeColor+';">'+(margeLot>=0?"+":"")+fmt(margeLot)+' F</td>'
+      +'<td style="padding:8px 10px;text-align:right;font-size:10px;color:'+margeColor+';">'+pct+'%</td>'
+      +'<td style="padding:8px 10px;text-align:center;">'
+        +'<span style="background:'+(isVendu?"var(--green-50)":caLot>0?"var(--orange-50)":"var(--gray-100)")+';color:'+(isVendu?"var(--green-700)":caLot>0?"var(--orange-dark)":"var(--gray-420)")+';border-radius:20px;padding:2px 8px;font-size:9px;font-weight:700;">'+(isVendu?"✅ Vendu":caLot>0?"⚡ Partiel":"⏳ En stock")+'</span>'
+      +'</td>'
+    +'</tr>';
+  });
+
+  // Ventes sans lot_ref (ventes manuelles sans lot attribué)
+  const ventesOrphelines = ventesJour.filter(v => !v.lot_ref && !lotsJour.find(l=>l.produit===v.produit));
+  if(ventesOrphelines.length){
+    const caOrph = ventesOrphelines.reduce((s,v)=>s+(v.quantite||0)*(v.prix_vente||0),0);
+    totalCA += caOrph; totalMarge += caOrph;
+  }
+
+  const totalPct = totalAchats ? Math.round(totalMarge/totalAchats*100) : 0;
+  const totalColor = totalMarge>=0?"var(--green-700)":"var(--red)";
+
+  el.innerHTML =
+    '<div style="font-size:13px;font-weight:800;color:var(--text);margin-bottom:12px;">📋 Rapport du '+dateLabel+'</div>'
+
+    // KPI cards résumé
+    +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px;">'
+      +'<div style="background:var(--red-50);border:1.5px solid var(--red-200);border-radius:var(--r);padding:12px;text-align:center;">'
+        +'<div style="font-size:9px;font-weight:700;color:var(--red);text-transform:uppercase;margin-bottom:4px;">Total Achats</div>'
+        +'<div style="font-size:18px;font-weight:900;color:var(--red);">'+fmt(totalAchats)+'</div>'
+        +'<div style="font-size:9px;color:var(--gray-420);">'+lotsJour.length+' lot(s)</div>'
+      +'</div>'
+      +'<div style="background:var(--blue-50);border:1.5px solid var(--blue-100);border-radius:var(--r);padding:12px;text-align:center;">'
+        +'<div style="font-size:9px;font-weight:700;color:var(--blue-600);text-transform:uppercase;margin-bottom:4px;">CA Ventes</div>'
+        +'<div style="font-size:18px;font-weight:900;color:var(--blue-600);">'+fmt(totalCA)+'</div>'
+        +'<div style="font-size:9px;color:var(--gray-420);">'+ventesJour.length+' vente(s)</div>'
+      +'</div>'
+      +'<div style="background:'+(totalMarge>=0?"var(--green-50)":"var(--red-50)")+';border:1.5px solid '+(totalMarge>=0?"var(--green-bright3)":"var(--red-200)")+';border-radius:var(--r);padding:12px;text-align:center;">'
+        +'<div style="font-size:9px;font-weight:700;color:'+totalColor+';text-transform:uppercase;margin-bottom:4px;">Résultat Journée</div>'
+        +'<div style="font-size:18px;font-weight:900;color:'+totalColor+';">'+(totalMarge>=0?"+":"")+fmt(totalMarge)+'</div>'
+        +'<div style="font-size:9px;color:'+totalColor+';">'+totalPct+'% marge</div>'
+      +'</div>'
+    +'</div>'
+
+    // Tableau par lot
+    +'<div style="overflow-x:auto;">'
+    +'<table style="width:100%;border-collapse:collapse;font-size:11px;">'
+      +'<thead><tr style="background:var(--green-800);">'
+        +'<th style="padding:8px 10px;text-align:left;color:#fff;font-weight:700;">N° Lot</th>'
+        +'<th style="padding:8px 10px;text-align:left;color:#fff;">Produit</th>'
+        +'<th style="padding:8px 10px;text-align:left;color:#fff;">Fournisseur</th>'
+        +'<th style="padding:8px 10px;text-align:right;color:#fff;">Qté</th>'
+        +'<th style="padding:8px 10px;text-align:right;color:#fff;">Coût</th>'
+        +'<th style="padding:8px 10px;text-align:right;color:#fff;">CA</th>'
+        +'<th style="padding:8px 10px;text-align:right;color:#fff;">Marge</th>'
+        +'<th style="padding:8px 10px;text-align:right;color:#fff;">%</th>'
+        +'<th style="padding:8px 10px;text-align:center;color:#fff;">Statut</th>'
+      +'</tr></thead>'
+      +'<tbody>'+rows.join("")+'</tbody>'
+      +'<tfoot><tr style="background:var(--green-800);">'
+        +'<td colspan="4" style="padding:8px 10px;color:#fff;font-weight:800;">TOTAL JOURNÉE</td>'
+        +'<td style="padding:8px 10px;text-align:right;color:#FF9999;font-weight:900;">'+fmt(totalAchats)+' F</td>'
+        +'<td style="padding:8px 10px;text-align:right;color:#90EE90;font-weight:900;">'+fmt(totalCA)+' F</td>'
+        +'<td style="padding:8px 10px;text-align:right;font-weight:900;color:'+(totalMarge>=0?"#90EE90":"#FF9999")+'">'+(totalMarge>=0?"+":"")+fmt(totalMarge)+' F</td>'
+        +'<td style="padding:8px 10px;text-align:right;color:'+(totalMarge>=0?"#90EE90":"#FF9999")+';font-weight:800;">'+totalPct+'%</td>'
+        +'<td></td>'
+      +'</tr></tfoot>'
+    +'</table></div>';
+}
+// ════════════════════════════════════════════════════════════════════════════
 
 // ── Fonctions Wave CI ──────────────────────────────────────────────────────────
 function sauvegarderWaveConfig(){
@@ -10221,11 +10722,12 @@ function renderSuiviColis(){
   const nbArrive  = achats.filter(a=>(getStatutLivraison(a)==="arrive")||(a.statut==="recu"&&!getStatutLivraison(a))).length;
   const nbVendu   = achats.filter(a=>getStatutLivraison(a)==="vendu").length;
 
-  // Colis en retard : ETA dépassée et pas encore arrivé
+  // Colis en retard : ETA strictement AVANT aujourd'hui (pas le même jour)
+  const todayDateOnly = maintenant.toISOString().slice(0,10);
   const retards = achats.filter(a =>
     getStatutLivraison(a)==="en_transit" &&
     a.date_arrivee_prevue &&
-    new Date(a.date_arrivee_prevue) < maintenant
+    a.date_arrivee_prevue < todayDateOnly  // "2026-07-14" < "2026-07-14" → false ✅
   );
 
   let html = `
@@ -10415,9 +10917,13 @@ async function marquerVenduColis(id){
   showModal(`
     <div class="form-block">
       <div class="form-block-title">🛒 Vente depuis colis — ${lot.produit}</div>
-      <div style="background:var(--green-50);border:1px solid var(--green-bright3);border-radius:var(--r-sm);padding:10px;margin-bottom:12px;font-size:12px;color:var(--green-mid);">
-        Lot : <b>${lot.fournisseur}</b> · ${lot.quantite} ${lot.unite||"u."} reçus<br>
-        Stock disponible : <b>${qteMax} ${lot.unite||"u."}</b>
+      <div style="background:var(--green-50);border:1.5px solid var(--green-bright3);border-radius:var(--r-sm);padding:10px;margin-bottom:12px;font-size:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span style="color:var(--green-mid);font-weight:800;">${lot.numero_document||"Lot sans numéro"}</span>
+          <span style="background:var(--green-800);color:#fff;border-radius:20px;padding:2px 10px;font-size:10px;font-weight:700;">📦 ${qteMax} disponibles</span>
+        </div>
+        <div style="color:var(--gray-500);font-size:11px;">${lot.produit} · Fournisseur : ${lot.fournisseur} · Reçu le ${lot.date_reception||lot.date||""}</div>
+        <div style="color:var(--gray-420);font-size:10px;margin-top:2px;">Prix achat : ${fmt(lot.prix_unitaire)} F/u · Coût total lot : ${fmt((lot.quantite||0)*(lot.prix_unitaire||0)+(lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0))} F</div>
       </div>
       <div class="form-grid">
         <div>
@@ -10489,18 +10995,26 @@ async function saveVenteColis(achatId){
   if(!qte||qte<=0){ showToast('Quantité requise','error'); return; }
   if(!lot){ showToast('Lot introuvable','error'); return; }
 
+  // Objet local complet (avec métadonnées)
   const vente = {
     id: genId(), date, produit: lot.produit,
     client, quantite: qte, prix_vente: prix,
     mode_paiement: mode, notes,
     enregistre_par: currentUser?.nom||'',
-    lot_ref: achatId  // lien vers le colis d'origine
+    lot_ref: achatId
+  };
+  // Payload Supabase (uniquement les colonnes qui existent dans la table ventes)
+  const venteDB = {
+    id: vente.id, date, produit: lot.produit,
+    client, quantite: qte, prix_vente: prix,
+    mode_paiement: mode, notes,
+    lot_ref: achatId   // lien vers le lot source
   };
 
   try{
     // 1. Enregistrer la vente
     ventes.push(vente);
-    await sbInsert('ventes', vente);
+    await sbInsert('ventes', venteDB);
 
     // 2. Marquer le colis vendu si tout le stock de ce lot est écoulé
     const stockRestant = stockDisponibleProduit(lot.produit) - qte;

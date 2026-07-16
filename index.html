@@ -1336,6 +1336,17 @@ const today=()=>new Date().toISOString().slice(0,10);
 // Évite qu'un lot enregistré sous "Salifou" ne soit pas reconnu pour le compte "SALIFOU".
 const normNom=(s)=>(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim().toLowerCase();
 const sameName=(a,b)=>normNom(a)===normNom(b);
+// Normalisation "floue" pour regrouper des noms de clients/lieux qui ne
+// diffèrent que par un article ou une contraction française (ex: "Marché
+// Adjamé" vs "Marche D'Adjame") — au-delà de ce que fait normNom() (accents,
+// casse). Utilisée uniquement pour du regroupement/affichage (Top clients),
+// jamais pour l'identification stricte d'un compte ou d'un rôle.
+const normNomFuzzy=(s)=>normNom(s)
+  .replace(/['']/g," ")
+  .replace(/[-_]/g," ")
+  .replace(/\b(d|l|de|du|des|le|la|les)\b/g," ")
+  .replace(/\s+/g," ")
+  .trim();
 
 // ─── SEMAINE ISO 8601 (lundi → dimanche) ─────────────────────────────────────
 // Le lundi est le 1er jour ; la semaine appartient à l'année de son jeudi.
@@ -3627,8 +3638,13 @@ async function synchroniserJournalComptable(capitalOuverture){
       aInserer.push(nv); // nouvelle pièce, version 1 (déjà posé par ecriture())
     } else if(Math.abs(act.montant - nv.montant) > 0.5
               || act.compte_debit !== nv.compte_debit
-              || act.compte_credit !== nv.compte_credit){
-      // Pièce modifiée depuis sa dernière version connue : contre-passation + nouvelle version
+              || act.compte_credit !== nv.compte_credit
+              || act.date !== nv.date){
+      // Pièce modifiée depuis sa dernière version connue (montant, comptes OU date) :
+      // contre-passation + nouvelle version. La date compte aussi : une saisie
+      // re-datée (ex: vente déplacée à sa vraie date) doit être corrigée dans le
+      // journal, pas seulement dans la table source — sinon le Grand Livre garde
+      // silencieusement l'ancienne date.
       aInserer.push({
         id: genId(), cle_piece: act.cle_piece, version: act.version||1,
         est_annulation: true, annule_ref: act.id,
@@ -8040,6 +8056,42 @@ document.addEventListener("click", function(e) {
   }
 });
 
+/**
+ * Résultat Net réel — SOURCE UNIQUE, utilisée partout où "Résultat Net" est
+ * affiché (Compte de Résultat, Vue Direction...). Ne jamais recalculer une
+ * marge nette ou un résultat "à côté" : toujours appeler cette fonction.
+ * = Marge nette commerciale − Pertes − Commissions − Charges fixes réelles
+ *   (Grand Livre : 622 loyer, 661+664 salaires/charges sociales, 646 impôts,
+ *   6288 charges diverses) + Produits divers (758).
+ */
+function calculerResultatNetReel(){
+  const mn = margenette();
+  const totalPertesV = totalPertesValeur();
+  const totalCommiss = totalCommissionsPayees();
+  const resultatExploitation = mn - totalPertesV - totalCommiss;
+
+  const gl = genererGrandLivre();
+  const soldeCompte = c => {
+    if(!gl[c]) return 0;
+    const D=gl[c].mvts.reduce((s,m)=>s+m.debit,0);
+    const C=gl[c].mvts.reduce((s,m)=>s+m.credit,0);
+    return D-C;
+  };
+  const cfLoyer          = Math.max(0, soldeCompte("622"));
+  const cfSalaires       = Math.max(0, soldeCompte("661") + soldeCompte("664"));
+  const cfPatente        = Math.max(0, soldeCompte("646"));
+  const cfDivers         = Math.max(0, soldeCompte("6288"));
+  const cfProduitsDivers = Math.max(0, -soldeCompte("758"));
+  const totalChargesFixesReelles = cfLoyer+cfSalaires+cfPatente+cfDivers;
+  const resultatNet = resultatExploitation - totalChargesFixesReelles + cfProduitsDivers;
+
+  return {
+    resultatExploitation, resultatNet,
+    cfLoyer, cfSalaires, cfPatente, cfDivers, cfProduitsDivers, totalChargesFixesReelles,
+    totalPertesV, totalCommiss,
+  };
+}
+
 function bilanFinancier(onglet, inline) {
   if(!isAdmin){ showToast("Accès réservé à l'administrateur","error"); return; }
   if(onglet) bilanOnglet = onglet;
@@ -8210,25 +8262,18 @@ function bilanFinancier(onglet, inline) {
     const margeBrute  = margeB;                   // CA - CMV
     const fraisAcc    = frais;                    // frais accessoires (transport, droit de terre, charrette)
     const margeNetteCommerciale = margeN;         // CA - (CMV + frais)
-    const totalPertesV = totalPertesValeur();
-    const totalCommiss = totalCommissionsPayees(); // commissions payées uniquement
-    const resultatExploitation = margeNetteCommerciale - totalPertesV - totalCommiss;
 
-    // Charges fixes réelles, dérivées du Grand Livre (comptes 622/661/664/646/6288/758) —
-    // source unique, cohérente avec le Bilan. Remplace l'ancienne saisie manuelle séparée.
-    const glCF = genererGrandLivre();
-    const soldeCompteCF = c => {
-      if(!glCF[c]) return 0;
-      const D=glCF[c].mvts.reduce((s,m)=>s+m.debit,0);
-      const C=glCF[c].mvts.reduce((s,m)=>s+m.credit,0);
-      return D-C;
-    };
-    const cfLoyer         = Math.max(0, soldeCompteCF("622"));
-    const cfSalaires      = Math.max(0, soldeCompteCF("661") + soldeCompteCF("664"));
-    const cfPatente       = Math.max(0, soldeCompteCF("646"));
-    const cfDivers        = Math.max(0, soldeCompteCF("6288"));
-    const cfProduitsDivers= Math.max(0, -soldeCompteCF("758"));
-    const totalChargesFixesReelles = cfLoyer+cfSalaires+cfPatente+cfDivers;
+    // Résultat Net réel : source unique, cf. calculerResultatNetReel()
+    const rnr = calculerResultatNetReel();
+    const totalPertesV = rnr.totalPertesV;
+    const totalCommiss = rnr.totalCommiss;
+    const resultatExploitation = rnr.resultatExploitation;
+    const cfLoyer          = rnr.cfLoyer;
+    const cfSalaires       = rnr.cfSalaires;
+    const cfPatente        = rnr.cfPatente;
+    const cfDivers         = rnr.cfDivers;
+    const cfProduitsDivers = rnr.cfProduitsDivers;
+    const totalChargesFixesReelles = rnr.totalChargesFixesReelles;
 
     const tauxB  = ca ? Math.round(margeBrute/ca*100) : 0;
     const tauxN  = ca ? Math.round(margeNetteCommerciale/ca*100) : 0;
@@ -11987,19 +12032,21 @@ async function renderDashboardDirection(){
   const tousFlux = tousMouvementsCaisse();
   const ca = totalVentes(), mb = margebrute(), mn = margenette();
   const treso = soldeCaisse(tousFlux);
+  const resultatNetReel = calculerResultatNetReel().resultatNet;
   const pertesArr = typeof pertesLots !== "undefined" ? pertesLots : (typeof pertes_lots !== "undefined" ? pertes_lots : []);
   const pertesVal = (pertesArr||[]).reduce((s,p)=>s+(p.valeur_perte||0),0);
   const nbTransit = achats.filter(a=>(getStatutLivraison(a)==="en_transit")||(a.statut==="en_cours"&&!getStatutLivraison(a))).length;
   const nbArrive  = achats.filter(a=>(getStatutLivraison(a)==="arrive")||(a.statut==="recu"&&!getStatutLivraison(a))).length;
   const taux_mb = ca ? Math.round(mb/ca*100) : 0;
-  const taux_mn = ca ? Math.round(mn/ca*100) : 0;
+  const taux_rn = ca ? Math.round(resultatNetReel/ca*100) : 0;
 
   // Top 3 clients
-  // Top clients — dédoublonnage insensible à la casse
+  // Top clients — dédoublonnage insensible à la casse, aux accents ET aux
+  // articles/contractions français (ex: "Marché Adjamé" = "Marche D'Adjame")
   const _dcCanon={};
   const topClients = [...ventes].reduce((acc,v)=>{
     if(!v.client) return acc;
-    const nn=normNom(v.client);
+    const nn=normNomFuzzy(v.client);
     if(!_dcCanon[nn]) _dcCanon[nn]=v.client;
     const k=_dcCanon[nn];
     acc[k]=(acc[k]||0)+(v.quantite||0)*(v.prix_vente||0); return acc;
@@ -12027,8 +12074,8 @@ async function renderDashboardDirection(){
       </div>
       <div style="background:var(--orange);color:#fff;border-radius:var(--r-lg);padding:14px;">
         <div style="font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.06em;">Résultat Net</div>
-        <div style="font-size:22px;font-weight:900;margin-top:4px;">${fmt(mn)} F</div>
-        <div style="font-size:11px;opacity:.7;">Marge nette ${taux_mn}%</div>
+        <div style="font-size:22px;font-weight:900;margin-top:4px;">${fmt(resultatNetReel)} F</div>
+        <div style="font-size:11px;opacity:.7;">Après charges, commissions et pertes · ${taux_rn}%</div>
       </div>
       <div class="kpi-light" style="text-align:center;">
         <div class="kl-label">Trésorerie</div>

@@ -213,6 +213,10 @@ select option{background:var(--white);color:var(--text);}
 
 /* ── CARDS ── */
 .card{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r-lg);padding:16px;margin-bottom:12px;box-shadow:var(--shadow);}
+.tiers-suggestions{position:absolute;top:100%;left:0;right:0;z-index:9999;background:#fff;border:1.5px solid var(--gray-200);border-top:none;border-radius:0 0 var(--r-sm) var(--r-sm);max-height:180px;overflow-y:auto;box-shadow:0 4px 10px rgba(0,0,0,.08);}
+.tiers-suggestion-item{padding:10px 12px;font-size:13px;cursor:pointer;border-bottom:1px solid var(--gray-100);}
+.tiers-suggestion-item:last-child{border-bottom:none;}
+.tiers-suggestion-item:hover,.tiers-suggestion-item:active{background:var(--green-50);}
 @media(min-width:768px){.card{padding:20px;}}
 
 /* ── KPI CARDS ── */
@@ -577,6 +581,13 @@ const SESSION_KEY = "va_session"; // { token, exp, user:{id,nom,role} }
 
 let currentUser = null; // {id, nom, role}
 let isAdmin = false;     // synchronisé avec isAdminLevel() — conservé pour compat
+// Répartition entre associés — pourcentages fixes. Déclarés ici (tout en haut)
+// et non près de leur usage, car ils sont référencés dans renderDashboard(),
+// qui peut être appelée tôt par demarrerApp() — une constante déclarée plus
+// bas dans le fichier provoquerait une erreur d'accès avant initialisation
+// (même famille de bug que "_glCache", déjà rencontrée sur ce projet).
+const PART_MAG_PCT = 49;
+const PART_PRINCESSE_PCT = 51;
 let usersCache = [];
 let loginSelectedUser = null;
 
@@ -895,10 +906,17 @@ const ICONES_DISPO=["🍅","🫛","🍆","🫑","🧅","🌶️","🥕","🥬","
 // ─── STATE ───────────────────────────────────────────────────────────────────
 let achats=JSON.parse(localStorage.getItem("va_achats")||"[]");
 let ventes=JSON.parse(localStorage.getItem("va_ventes")||"[]");
-let pertes=JSON.parse(localStorage.getItem("va_pertes")||"{}");
+// (Ancien compteur global "pertes[produit]" retiré — code mort jamais appelé
+// depuis aucune UI. Source unique des pertes : pertesLots, cf. calculerFIFO().)
 let demandes=JSON.parse(localStorage.getItem("va_demandes")||"[]");
 let notifications=JSON.parse(localStorage.getItem("va_notifs")||"[]");
 let produits=JSON.parse(localStorage.getItem("va_produits")||"[]");
+// Listes de tiers (fournisseurs/clients) — vocabulaire contrôlé pour éviter les
+// doublons de saisie (ex: "Marché Adjamé" vs "MARCHE D'ADJAME") au lieu de
+// laisser du texte libre sans aucune liste de référence.
+let fournisseursListe = JSON.parse(localStorage.getItem("va_fournisseurs")||"[]");
+let clientsListe = JSON.parse(localStorage.getItem("va_clients")||"[]");
+let repartitionAssociesListe = JSON.parse(localStorage.getItem("va_repartition_associes")||"[]");
 // isAdmin et currentUser sont déclarés dans auth.js (Module 2)
 let filterAchats="tous";
 // Priorité moyenne — état
@@ -1004,10 +1022,103 @@ function montantAchat(a){ return (a.quantite||0)*(a.prix_unitaire||0); }
 function fraisAchat(a){ return (a.droit_terre||0)+(a.transport||0)+(a.droit_vente||0)+(a.charrette||0); }
 
 /** Coût total d'un achat (marchandise + frais) */
-function coutTotalAchat(a){ return montantAchat(a)+fraisAchat(a); }
 
 /** Montant d'une vente */
 function montantVente(v){ return (v.quantite||0)*(v.prix_vente||0); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ███ MODULE COMPTABILITÉ ███
+// ═══════════════════════════════════════════════════════════════════════════
+// Réorganisation logique du 21/07/2026 (audit IT — risque "fichier monolithique").
+//
+// Cette app reste un seul fichier HTML déployé tel quel (pas de système de
+// build) : les fonctions ci-dessous restent physiquement à leur place dans le
+// fichier, sous leur nom global habituel — RIEN n'a été déplacé ni renommé,
+// pour ne prendre aucun risque de casser un appel existant. Ce qui change :
+// cet index sert de carte du module comptable, et l'objet `Comptabilite`
+// ci-dessous donne un point d'entrée unique et découvrable pour tout code
+// FUTUR qui a besoin d'appeler explicitement "la comptabilité" — sans qu'on
+// ait besoin de se souvenir des ~30 noms de fonctions éparpillés dans le fichier.
+//
+// RÈGLE DE MODIFICATION : toute fonction listée ci-dessous fait partie du
+// périmètre comptable. Une modification ici a un impact potentiel sur le
+// Journal, le Grand Livre, le Bilan, le Compte de Résultat, la Trésorerie et
+// le Cockpit IA — TOUJOURS relancer la suite de tests (tests/run_tests.sh)
+// avant de livrer un correctif qui touche l'une de ces fonctions.
+//
+// ── Écritures (partie double) ────────────────────────────────────────────
+//   ecriture()                    — construit une écriture élémentaire (débit/crédit/montant)
+//   ecrituresAchat()               — achat → 601/6011/401/571
+//   ecrituresVente()               — vente → 571/521/411 selon mode de paiement / 701
+//   ecrituresPerte()                — perte → 658/311
+//   ecrituresCommission()          — commission agent → 641/421/571
+//   ecrituresMouvementCaisse()     — mouvement de trésorerie manuel → compte selon catégorie
+//   ecritureOuvertureCapital()     — apport initial → 571/101
+//   ecritureVariationStock()       — snapshot FIFO du stock → 311/603
+//
+// ── Synchronisation du journal ───────────────────────────────────────────
+//   synchroniserJournalComptable() — point d'entrée public (verrou anti-concurrence)
+//   _synchroniserJournalComptableInterne() — logique réelle (diff + contre-passation)
+//   genererGrandLivre()            — agrège journalComptable par compte (mis en cache)
+//
+// ── Période comptable ────────────────────────────────────────────────────
+//   periodeDe(), verifierPeriodeOuverte(), cloturerPeriode()
+//
+// ── Rentabilité / stock (source unique depuis la fusion du 18/07/2026) ──
+//   calculerFIFO()      — moteur FIFO unique : quantités, statut, CA, marge par lot
+//   margeParLot()        — lecteur fin (wrapper) de calculerFIFO()
+//   pertesQteProduit(), stockDisponibleProduit(), stockDisponibleLot(), getStockNet()
+//
+// ── Résultats consolidés (source unique depuis la fusion du 20/07/2026) ──
+//   calculerResultatNetReel() — Résultat Net réel (après commissions/pertes/charges fixes)
+//   getSIGData()               — Soldes Intermédiaires de Gestion, basé sur ce qui précède
+//   margebrute(), margenette(), totalVentes(), totalAchats(), totalAvances()
+//   totalPertesValeur(), totalCommissionsDues(), totalCommissionsPayees()
+//
+// ── Trésorerie ────────────────────────────────────────────────────────────
+//   soldeCaisse(), entreesSortiesCaisseTotal() — dérivées du Grand Livre (compte 571)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Point d'entrée unique et découvrable du module comptable — un simple alias
+ * vers les fonctions globales existantes (aucune n'est redéfinie ni déplacée).
+ * Exemple d'usage pour du code futur : Comptabilite.synchroniser(0) au lieu
+ * de se souvenir du nom exact synchroniserJournalComptable. Les anciens
+ * appels directs (ex: onclick="synchroniserJournalComptable()") continuent
+ * de fonctionner exactement comme avant — cet objet n'est qu'une couche de
+ * lisibilité en plus, jamais un remplacement.
+ */
+const Comptabilite = {
+  // Écritures
+  ecriture: (...a) => ecriture(...a),
+  ecrituresAchat: (...a) => ecrituresAchat(...a),
+  ecrituresVente: (...a) => ecrituresVente(...a),
+  ecrituresPerte: (...a) => ecrituresPerte(...a),
+  ecrituresCommission: (...a) => ecrituresCommission(...a),
+  ecrituresMouvementCaisse: (...a) => ecrituresMouvementCaisse(...a),
+  ecritureOuvertureCapital: (...a) => ecritureOuvertureCapital(...a),
+  ecritureVariationStock: (...a) => ecritureVariationStock(...a),
+  // Synchronisation
+  synchroniser: (...a) => synchroniserJournalComptable(...a),
+  grandLivre: (...a) => genererGrandLivre(...a),
+  // Période
+  periodeDe: (...a) => periodeDe(...a),
+  periodeOuverte: (...a) => verifierPeriodeOuverte(...a),
+  cloturerPeriode: (...a) => cloturerPeriode(...a),
+  // Rentabilité / stock — calculerFIFO() est la source unique
+  fifo: (...a) => calculerFIFO(...a),
+  margeParLot: (...a) => margeParLot(...a),
+  stockDisponible: (...a) => stockDisponibleProduit(...a),
+  stockNet: (...a) => getStockNet(...a),
+  // Résultats consolidés — calculerResultatNetReel() est la source unique
+  resultatNetReel: (...a) => calculerResultatNetReel(...a),
+  sigData: (...a) => getSIGData(...a),
+  margeBrute: (...a) => margebrute(...a),
+  margeNette: (...a) => margenette(...a),
+  // Trésorerie
+  soldeCaisse: (...a) => soldeCaisse(...a),
+};
+// ═══════════════════════════════════════════════════════════════════════════
 
 /** Somme des montants d'un tableau d'achats */
 function totalAchats(arr){ return (arr||achats).reduce((s,a)=>s+montantAchat(a),0); }
@@ -1022,10 +1133,8 @@ function totalFrais(arr){ return (arr||achats).reduce((s,a)=>s+fraisAchat(a),0);
 function totalVentes(arr){ return (arr||ventes).reduce((s,v)=>s+montantVente(v),0); }
 
 /** Taux de marge brute FIFO en % */
-function tauxMarge(ventesArr){ const ca=totalVentes(ventesArr); return ca?Math.round(margebrute(ventesArr)/ca*100):0; }
 
 /** Solde = ventes − achats */
-function solde(ventesArr, achatsArr){ return totalVentes(ventesArr)-totalAchats(achatsArr); }
 
 // ════════════════════════════════════════════════════════════════════════════
 // MOTEUR DE MARGE FIFO
@@ -1047,55 +1156,6 @@ function solde(ventesArr, achatsArr){ return totalVentes(ventesArr)-totalAchats(
  *  - coutMarchandise : prix d'achat pur (sans frais)
  *  - coutAvecFrais   : prix d'achat + frais terrain proportionnels
  */
-function coutFIFOVente(produit, qteVendue, dateVente, ventesAvant) {
-  const lots = achats
-    .filter(a => a.produit === produit && a.statut === "recu"
-              && (a.date_reception||a.date) <= dateVente)
-    .sort((a,b) => new Date(a.date_reception||a.date) - new Date(b.date_reception||b.date));
-
-  if(!lots.length) return 0;
-
-  const qteDejaVendue = (ventesAvant||[])
-    .filter(v => v.produit === produit)
-    .reduce((s,v) => s+v.quantite, 0);
-
-  let aConsommer = qteDejaVendue;
-  const lotsRestants = lots.map(lot => {
-    const consomme = Math.min(aConsommer, lot.quantite);
-    aConsommer = Math.max(0, aConsommer - lot.quantite);
-    const fraisTotaux = (lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0);
-    return {
-      ...lot,
-      qteRestante: lot.quantite - consomme,
-      prixAchatUnitaire: lot.prix_unitaire,                          // prix pur
-      fraisUnitaires: lot.quantite ? fraisTotaux/lot.quantite : 0,   // frais ramenés à l'unité
-      coutRevientUnitaire: lot.quantite
-        ? (lot.quantite*lot.prix_unitaire + fraisTotaux) / lot.quantite
-        : lot.prix_unitaire
-    };
-  }).filter(l => l.qteRestante > 0);
-
-  let coutMarchandise = 0; // prix d'achat pur (pour marge BRUTE)
-  let coutAvecFrais   = 0; // prix + frais (pour marge NETTE)
-  let aVendre = qteVendue;
-
-  for(const lot of lotsRestants) {
-    if(aVendre <= 0) break;
-    const pris = Math.min(aVendre, lot.qteRestante);
-    coutMarchandise += pris * lot.prixAchatUnitaire;
-    coutAvecFrais   += pris * lot.coutRevientUnitaire;
-    aVendre -= pris;
-  }
-
-  // Fallback si stock insuffisant
-  if(aVendre > 0 && lotsRestants.length) {
-    const dernier = lotsRestants[lotsRestants.length-1];
-    coutMarchandise += aVendre * dernier.prixAchatUnitaire;
-    coutAvecFrais   += aVendre * dernier.coutRevientUnitaire;
-  }
-
-  return coutAvecFrais; // retourne le coût complet (prix + frais)
-}
 
 /**
  * Version décomposée : retourne séparément coût marchandise et frais.
@@ -1270,14 +1330,16 @@ function totalCommissionsDues(){
 
 // ── Commissions réellement payées (depuis commissions_paiements) ──────────────
 function totalCommissionsPayees(){
-  // Retourne les commissions effectivement versées aux agents
-  return commissionsPaiements ? commissionsPaiements.reduce((s,p)=>s+(p.montant||0),0) : 0;
+  // Retourne les commissions effectivement versées aux agents — UNIQUEMENT
+  // celles au statut "paye". Avant ce correctif (22/07/2026), la fonction
+  // sommait TOUTES les lignes de commissions_paiements sans vérifier leur
+  // statut, comptant à tort une commission "non_paye" comme si elle avait
+  // été réellement décaissée — ça fausse le Résultat Net (et donc tout
+  // partage de bénéfices basé dessus) dès qu'une commission est enregistrée
+  // mais pas encore payée.
+  return commissionsPaiements ? commissionsPaiements.filter(p=>p.statut==="paye").reduce((s,p)=>s+(p.montant||0),0) : 0;
 }
 
-function totalCommissionsProvision(){
-  // Commissions dues mais non encore payées = provision à payer
-  return Math.max(0, totalCommissionsDues() - totalCommissionsPayees());
-}
 // ────────────────────────────────────────────────────────────────────────────
 
 
@@ -1313,10 +1375,6 @@ function getEl(id){ return document.getElementById(id); }
  * Modifie une propriété d'un élément si celui-ci existe.
  * Évite les "Cannot set properties of null"
  */
-function setElProp(id, prop, val){
-  const el = document.getElementById(id);
-  if(el) el[prop] = val;
-}
 
 // ─── UTILS ───────────────────────────────────────────────────────────────────
 const genId=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
@@ -1387,7 +1445,6 @@ function libelleSemaine(dateStr){
 const saveLocal=()=>{
   localStorage.setItem("va_achats",JSON.stringify(achats));
   localStorage.setItem("va_ventes",JSON.stringify(ventes));
-  localStorage.setItem("va_pertes",JSON.stringify(pertes));
   localStorage.setItem("va_demandes",JSON.stringify(demandes));
   localStorage.setItem("va_notifs",JSON.stringify(notifications));
   localStorage.setItem("va_produits",JSON.stringify(produits));
@@ -1412,12 +1469,14 @@ function showToast(msg,type="ok"){
 // ── Générateur numéro de lot ─────────────────────────────────────────────────
 function genNumeroLot(){
   const annee = new Date().getFullYear();
-  const existing = achats.filter(a=>a.numero_lot).map(a=>{
-    const m = (a.numero_lot||"").match(/LOT-(\d{4})-(\d+)/);
-    return m ? parseInt(m[2]) : 0;
-  });
-  const next = existing.length ? Math.max(...existing)+1 : 1;
-  return "LOT-"+annee+"-"+String(next).padStart(3,"0");
+  // L'ancien calcul se basait sur le champ "numero_lot", jamais réellement
+  // enregistré sur aucun achat (colonne inexistante en base, remplacée depuis
+  // par numero_document) — le compteur restait donc bloqué à 1 indéfiniment.
+  // Corrigé : on compte les achats RÉELS de l'année en cours. Ceci reste un
+  // aperçu ("Auto-généré") ; le vrai numéro séquentiel définitif est attribué
+  // à l'enregistrement via numero_document (RPC prochain_numero_document).
+  const nbCetteAnnee = achats.filter(a => (a.date||"").slice(0,4) === String(annee)).length;
+  return "LOT-"+annee+"-"+String(nbCetteAnnee+1).padStart(3,"0");
 }
 // ────────────────────────────────────────────────────────────────────────────
 // ── Helper universel statut livraison ──────────────────────────────────────
@@ -1472,10 +1531,6 @@ async function sbDelete(table,id){
   const r=await sbFetch(`/rest/v1/${table}?id=eq.${id}`,{method:"DELETE"});
   if(!r.ok) throw new Error(await r.text());
 }
-async function sbUpsert(table,data){
-  const r=await sbFetch(`/rest/v1/${table}`,{method:"POST",headers:{"Prefer":"resolution=merge-duplicates,return=representation"},body:JSON.stringify(data)});
-  if(!r.ok) throw new Error(await r.text());
-}
 
 async function syncAll(silent=false){
   const btn = getEl("syncBtn");
@@ -1485,53 +1540,49 @@ async function syncAll(silent=false){
     btn.style.opacity=".6";
   }
   try{
-    const [a,v,d,p,cp,jc,bm,mc,inv,emp,empr]=await Promise.all([
+    // Toutes les requêtes de synchronisation en UNE SEULE vague parallèle.
+    // Avant : 11 requêtes en parallèle, PUIS 5 requêtes en série l'une après
+    // l'autre (dont une commissions_paiements en double, pur gaspillage) —
+    // chaque requête série ajoutait un aller-retour réseau complet avant que
+    // la suivante démarre. Sur une connexion lente, ça se sentait fortement.
+    // Maintenant : tout part en même temps, le temps total ≈ la requête la
+    // plus lente, pas la somme de toutes.
+    const [a,v,d,p,cp,jc,bm,mc,inv,emp,empr,reg,pl,ss,cf,fo,cl,ra]=await Promise.all([
       sbGet("achats"),sbGet("ventes"),sbGet("demandes"),
       sbFetch(`/rest/v1/produits?order=nom.asc`).then(r=>r.json()),
-      sbFetch(`/rest/v1/commissions_paiements?order=created_at.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
+      sbFetch(`/rest/v1/commissions_paiements?order=date.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
       sbFetch(`/rest/v1/journal_comptable?order=date.asc`).then(r=>r.ok?r.json():null).catch(()=>null),
       sbFetch(`/rest/v1/budgets_mensuels?order=annee.desc,mois.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
       sbFetch(`/rest/v1/mouvements_caisse?order=date.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
       sbFetch(`/rest/v1/investissements?order=date_acquisition.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
       sbFetch(`/rest/v1/emprunts?order=date_debut.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
-      sbFetch(`/rest/v1/emprunts_remboursements?order=date.desc`).then(r=>r.ok?r.json():[]).catch(()=>[])
+      sbFetch(`/rest/v1/emprunts_remboursements?order=date.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
+      sbFetch(`/rest/v1/reglements_fournisseurs?order=date.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
+      sbFetch(`/rest/v1/pertes_lots?order=date.desc`).then(r=>r.ok?r.json():null).catch(()=>null),
+      sbFetch(`/rest/v1/seuils_stock`).then(r=>r.ok?r.json():[]).catch(()=>[]),
+      sbFetch(`/rest/v1/cloture_periodes?select=periode`).then(r=>r.ok?r.json():null).catch(()=>null),
+      sbFetch(`/rest/v1/fournisseurs?order=nom.asc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
+      sbFetch(`/rest/v1/clients?order=nom.asc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
+      sbFetch(`/rest/v1/repartition_associes?order=date.desc`).then(r=>r.ok?r.json():[]).catch(()=>[]),
     ]);
     achats=a||[]; localStorage.setItem("va_achats",JSON.stringify(achats));
     ventes=v||[]; localStorage.setItem("va_ventes",JSON.stringify(ventes));
-    // Charger les règlements fournisseurs
-    try{
-      const reg = await sbFetch('/rest/v1/reglements_fournisseurs?order=date.desc').then(r=>r.ok?r.json():[]);
-      reglements = reg || [];
-      localStorage.setItem('va_reglements', JSON.stringify(reglements));
-    }catch(e){}
 
-    // Charger les paiements de commissions
-    try{
-      const cp = await sbFetch('/rest/v1/commissions_paiements?order=date.desc').then(r=>r.ok?r.json():[]);
-      commissionsPaiements = cp || [];
-      localStorage.setItem('va_commissions_paiements', JSON.stringify(commissionsPaiements));
-    }catch(e){}
+    reglements = reg || [];
+    localStorage.setItem('va_reglements', JSON.stringify(reglements));
 
     // ── PERTES LOTS — DB = source de vérité ─────────────────────────────
-    try{
-      const pl = await sbFetch('/rest/v1/pertes_lots?order=date.desc').then(r=>r.ok?r.json():null);
-      if(pl !== null){
-        pertesLots = pl || [];
-        localStorage.setItem('va_pertes_lots', JSON.stringify(pertesLots));
-      }
-    }catch(e){
-      console.warn('[VerdApp] pertes_lots:', e.message);
+    if(pl !== null){
+      pertesLots = pl || [];
+      localStorage.setItem('va_pertes_lots', JSON.stringify(pertesLots));
     }
 
     // ── SEUILS STOCK ──────────────────────────────────────────────────────────
-    try{
-      const ss = await sbFetch('/rest/v1/seuils_stock').then(r=>r.ok?r.json():[]);
-      if(ss && ss.length){
-        seuilsStock = {};
-        ss.forEach(s=>{ seuilsStock[s.produit] = s.seuil_min; });
-        localStorage.setItem('va_seuils', JSON.stringify(seuilsStock));
-      }
-    }catch(e){}
+    if(ss && ss.length){
+      seuilsStock = {};
+      ss.forEach(s=>{ seuilsStock[s.produit] = s.seuil_min; });
+      localStorage.setItem('va_seuils', JSON.stringify(seuilsStock));
+    }
     demandes=d||[]; localStorage.setItem("va_demandes",JSON.stringify(demandes));
     if(p&&p.length){produits=p; localStorage.setItem("va_produits",JSON.stringify(p));}
     commissionsPaiements=cp||[]; localStorage.setItem("va_commissions_paiements",JSON.stringify(commissionsPaiements));
@@ -1545,7 +1596,15 @@ async function syncAll(silent=false){
     investissements=inv||[]; saveInvestissements();
     emprunts=emp||[]; saveEmprunts();
     empruntsRemboursements=empr||[]; saveEmpruntsRemboursements();
-    try{ await chargerPeriodesFermees(); }catch(e){}
+    // Périodes fermées : déjà récupérées dans la vague parallèle ci-dessus (cf).
+    // cf===null → échec réseau, on garde le cache local ; cf===[] → à jour, même vide.
+    if(cf!==null){
+      periodesFermees = new Set(cf.map(x=>x.periode));
+      localStorage.setItem("va_periodes_fermees", JSON.stringify([...periodesFermees]));
+    }
+    fournisseursListe = fo||[]; localStorage.setItem("va_fournisseurs", JSON.stringify(fournisseursListe));
+    clientsListe = cl||[]; localStorage.setItem("va_clients", JSON.stringify(clientsListe));
+    repartitionAssociesListe = ra||[]; localStorage.setItem("va_repartition_associes", JSON.stringify(repartitionAssociesListe));
     updateDemandesBadge();
     render();
     if(!silent) showToast("✅ Synchronisé");
@@ -1666,7 +1725,12 @@ function buildAchatForm(data, onSubmit, submitLabel){
       </div>
       <div class="form-grid">
         <div><label class="label" for="af_date">Date *</label><input type="date" id="af_date" value="${data.date||today()}" required/></div>
-        <div><label class="label" for="af_fourn">Fournisseur *</label><input type="text" id="af_fourn" value="${data.fournisseur||''}" placeholder="Kouassi Amara" required/></div>
+        <div style="position:relative;"><label class="label" for="af_fourn">Fournisseur *</label>
+          <input type="text" id="af_fourn" value="${data.fournisseur||''}" placeholder="Kouassi Amara" autocomplete="off"
+            oninput="_afficherSuggestionsTiers('af_fourn','af_fourn_sugg',fournisseursListe)"
+            onfocus="_afficherSuggestionsTiers('af_fourn','af_fourn_sugg',fournisseursListe)" required/>
+          <div id="af_fourn_sugg" class="tiers-suggestions" style="display:none;"></div>
+        </div>
         <div><label class="label" for="af_lieu">Lieu</label><input type="text" id="af_lieu" value="${data.lieu||''}" placeholder="Tiébissou..."/></div>
         <div><label class="label" for="af_produit">Produit</label><select id="af_produit">${getProduitNoms().map(l=>`<option value="${l}" ${data.produit===l?"selected":""}>${l}</option>`).join("")}</select></div>
         <div><label class="label" for="af_unite">Unité</label><select id="af_unite">${UNITES.map(u=>`<option value="${u}" ${data.unite===u?"selected":""}>${u}</option>`).join("")}</select></div>
@@ -1719,7 +1783,12 @@ function buildVenteForm(data, onSubmit, submitLabel){
       <div class="form-block-title">1. Client et produit</div>
       <div class="form-grid">
         <div><label class="label" for="vf_date">Date *</label><input type="date" id="vf_date" value="${data.date||today()}" required/></div>
-        <div><label class="label" for="vf_client">Client *</label><input type="text" id="vf_client" value="${data.client||''}" placeholder="Marché Adjamé..." required/></div>
+        <div style="position:relative;"><label class="label" for="vf_client">Client *</label>
+          <input type="text" id="vf_client" value="${data.client||''}" placeholder="Marché Adjamé..." autocomplete="off"
+            oninput="_afficherSuggestionsTiers('vf_client','vf_client_sugg',clientsListe)"
+            onfocus="_afficherSuggestionsTiers('vf_client','vf_client_sugg',clientsListe)" required/>
+          <div id="vf_client_sugg" class="tiers-suggestions" style="display:none;"></div>
+        </div>
         <div><label class="label" for="vf_produit">Produit</label><select id="vf_produit">${getProduitNoms().map(l=>`<option value="${l}" ${data.produit===l?"selected":""}>${l}</option>`).join("")}</select></div>
         <div><label class="label" for="vf_unite">Unité</label><select id="vf_unite">${UNITES.map(u=>`<option value="${u}" ${data.unite===u?"selected":""}>${u}</option>`).join("")}</select></div>
       </div>
@@ -1764,7 +1833,6 @@ async function soumettreModifAchat(id){
     date:document.getElementById("af_date").value, fournisseur:fourn,
     lieu:document.getElementById("af_lieu").value,
     produit:document.getElementById("af_produit").value,
-    numero_lot:document.getElementById("af_numero_lot")?.value||genNumeroLot(),
     unite:document.getElementById("af_unite").value,
     quantite:+qte, prix_unitaire:+prix,
     avance_paye:+document.getElementById("af_avance").value||0,
@@ -1920,6 +1988,67 @@ function showAchatForm(){
   `);
 }
 
+/**
+ * Suggestions d'autocomplétion pour un champ tiers (fournisseur/client) —
+ * remplace le <datalist> natif, peu fiable sur les navigateurs mobiles
+ * (ne se déroule pas de façon cohérente selon le téléphone/navigateur).
+ * Composant JS simple : filtre la liste en direct, insensible aux
+ * accents/casse, clic pour remplir le champ.
+ */
+function _afficherSuggestionsTiers(inputId, boxId, liste){
+  const input = document.getElementById(inputId);
+  const box = document.getElementById(boxId);
+  if(!input || !box) return;
+  const saisie = normNom(input.value||"");
+  const matches = (liste||[])
+    .filter(x => !saisie || normNom(x.nom).includes(saisie))
+    .slice(0, 8);
+  if(!matches.length){
+    // Toujours donner un retour visible — y compris quand la liste est vide
+    // (aide à diagnostiquer : liste réellement vide vs simple souci d'affichage).
+    box.innerHTML = '<div class="tiers-suggestion-item" style="color:var(--gray-420);font-style:italic;cursor:default;">'
+      + (liste && liste.length ? 'Aucune correspondance — ce sera enregistré comme nouveau' : 'Aucune fiche enregistrée pour l\'instant — ce sera créé automatiquement')
+      + '</div>';
+    box.style.display = "block";
+    return;
+  }
+  box.innerHTML = matches.map(x=>
+    '<div class="tiers-suggestion-item" onmousedown="event.preventDefault();document.getElementById(\''+inputId+'\').value='+JSON.stringify(x.nom)+';document.getElementById(\''+boxId+'\').style.display=\'none\';">'
+      + x.nom.replace(/</g,'&lt;')
+    + '</div>'
+  ).join('');
+  box.style.display = "block";
+}
+// Ferme les suggestions ouvertes si on clique ailleurs sur la page.
+// (Le clic sur une suggestion se fait via onmousedown, qui s'exécute avant ce
+// gestionnaire — donc la sélection fonctionne malgré cette fermeture globale.)
+document.addEventListener && document.addEventListener('click', function(){
+  document.querySelectorAll('.tiers-suggestions').forEach(box=>{ box.style.display = 'none'; });
+}, true);
+
+/**
+ * Résout un nom de tiers (fournisseur/client) saisi vers son nom CANONIQUE
+ * (celui déjà connu, même si retapé avec une casse/accent différents), ou
+ * crée automatiquement une nouvelle fiche si c'est un tiers réellement inédit.
+ * Remplace le texte libre sans aucune liste de référence — cause racine des
+ * doublons type "Marché Adjamé" / "MARCHE D'ADJAME" (5 variantes trouvées à la
+ * migration du 20/07/2026, unifiées en 1 seule fiche client).
+ */
+async function resoudreTiers(nomSaisi, liste, table){
+  const nom = (nomSaisi||"").trim();
+  if(!nom) return nom;
+  const nn = normNomFuzzy(nom);
+  const existant = liste.find(x=>normNomFuzzy(x.nom)===nn);
+  if(existant) return existant.nom; // déjà connu : on renvoie le nom canonique, même si retapé différemment
+  // Tiers réellement inédit : on le crée dans la liste contrôlée pour la prochaine fois
+  const nouveau = {id:genId(), nom};
+  try{ await sbInsert(table, nouveau); }
+  catch(e){ console.warn("Création "+table+" échouée (gardé en local) :", e.message); }
+  liste.push(nouveau);
+  localStorage.setItem(table==="fournisseurs"?"va_fournisseurs":"va_clients", JSON.stringify(liste));
+  return nom;
+}
+
 async function saveAchatModal(){
   const fourn=document.getElementById("af_fourn").value.trim();
   const qte=document.getElementById("af_qte").value;
@@ -1933,9 +2062,10 @@ async function saveAchatModal(){
   if(avanceVal > (+qte * +prix)) return showToast("L'avance versée dépasse le montant total de l'achat","error");
   const dateAchat = document.getElementById("af_date").value;
   if(!verifierPeriodeOuverte(dateAchat)) return;
+  const fournResolu = await resoudreTiers(fourn, fournisseursListe, "fournisseurs");
   const payload={
     id:genId(), date:dateAchat,
-    fournisseur:fourn, lieu:document.getElementById("af_lieu").value,
+    fournisseur:fournResolu, lieu:document.getElementById("af_lieu").value,
     produit:document.getElementById("af_produit").value,
     unite:document.getElementById("af_unite").value,
     quantite:+qte, prix_unitaire:+prix,
@@ -1958,8 +2088,9 @@ async function saveAchatModal(){
     statut_livraison: "en_transit"
   };
   try{
-    await sbInsert("achats",payload);
-    achats.unshift(payload); saveLocal(); closeModal();
+    const payloadSafe = sanitizeObj(payload);
+    await sbInsert("achats",payloadSafe);
+    achats.unshift(payloadSafe); saveLocal(); closeModal();
     showToast("✓ Achat enregistré"); render();
   }catch(e){showToast("Erreur : "+e.message,"error");}
 }
@@ -1984,14 +2115,16 @@ async function saveVenteModal(){
   if(+qte>stock) return showToast("Stock insuffisant : "+stock+" disponible(s)","error");
   const date=document.getElementById("vf_date").value;
   if(!verifierPeriodeOuverte(date)) return;
-  const payload={
-    id:genId(), date, client,
+  const clientResolu = await resoudreTiers(client, clientsListe, "clients");
+  const payload=sanitizeObj({
+    id:genId(), date, client:clientResolu,
     produit,
     unite:document.getElementById("vf_unite").value,
     quantite:+qte, prix_vente:+prix,
     mode_paiement:document.getElementById("vf_mode").value,
-    notes:document.getElementById("vf_notes").value
-  };
+    notes:document.getElementById("vf_notes").value,
+    lot_ref: document.getElementById("vf_lot_ref")?.value || null,
+  });
   // Numérotation séquentielle de la facture (FAC-AAAA-NNNN), avant insertion
   const numeroFacture = await obtenirNumeroDocument("FAC", date);
   if(numeroFacture) payload.numero_document = numeroFacture;
@@ -2027,13 +2160,12 @@ async function marquerRecu(id){
   }catch(e){showToast("Erreur : "+e.message,"error");}
 }
 
-async function updatePerte(produit,val){
-  const q=+val||0;
-  try{
-    await sbUpsert("pertes",{produit,quantite:q});
-    pertes[produit]=q; saveLocal();
-  }catch(e){showToast("Erreur sync pertes","error");}
-}
+// updatePerte() supprimée : écrivait vers l'ancienne table "pertes" (compteur
+// global par produit, jamais journalisée en comptabilité). N'était plus
+// appelée depuis aucune UI — code mort qui aurait pu être ré-invoqué par
+// erreur lors d'une future modification et créer une perte invisible du
+// Compte de Résultat. Le seul flux valide est pertes_lots (Suivi Colis →
+// déclarer une perte → enregistrerPerteLot()).
 
 // ─── NAVIGATION ──────────────────────────────────────────────────────────────
 // ════════════════════════════════════════════════════════════════════════════
@@ -2078,6 +2210,7 @@ const FINANCE_SUBTABS = [
   {id:"emprunts",    label:"Emprunts",             icon:"▤"},
   {id:"budget",      label:"Budget",               icon:"◫"},
   {id:"commissions", label:"Commissions",          icon:"％"},
+  {id:"associes",    label:"Répartition Associés", icon:"🤝", isNew:true},
   {id:"journal",     label:"Journal comptable",    icon:"≣"},
   {id:"pertes",      label:"Pertes",               icon:"▽"},
   {id:"direction",   label:"Direction",   icon:"👑", isNew:true},
@@ -2144,7 +2277,7 @@ function renderFinanceSubnav(){
   const grps = [
     {label:"Performance", ids:["sig","budget","direction"]},
     {label:"Flux",        ids:["tresorerie","couts","previsions"]},
-    {label:"Partenaires", ids:["tiers","commissions","agents"]},
+    {label:"Partenaires", ids:["tiers","commissions","agents","associes"]},
     {label:"Capital",     ids:["investissements","emprunts","pertes"]},
     {label:"Comptabilité",ids:["journal"]},
   ];
@@ -2173,10 +2306,6 @@ function renderFinanceSubnav(){
   document.getElementById("financeSubnav").innerHTML = html;
 }
 
-function toggleFinanceNav(){
-  financeNavOuvert = !financeNavOuvert;
-  renderFinanceSubnav();
-}
 
 function switchFinanceSub(sub){
   financeSubTab = sub;
@@ -2196,6 +2325,7 @@ function renderFinanceContent(){
   if(financeSubTab==="cockpit"){ el.innerHTML = '<div id="cockpitInline" style="padding:4px 0"></div>'; renderCockpitFinancier(); }
   else if(financeSubTab==="direction"){ el.innerHTML = '<div id="directionInline"></div>'; renderDashboardDirection(); }
   else if(financeSubTab==="agents"){ el.innerHTML = '<div id="agentsInline"></div>'; renderPerformanceAgents(); }
+  else if(financeSubTab==="associes"){ el.innerHTML = '<div id="associesInline"></div>'; renderRepartitionAssocies(); }
   else if(financeSubTab==="previsions"){ el.innerHTML = '<div id="previsionsInline"></div><div id="alertesInlineDiv" style="padding:16px 0;"></div>'; renderPrevisions(); }
   else if(financeSubTab==="alertes"){ el.innerHTML = '<div id="alertesPanel" style="padding:4px 0;"></div>'; renderAlertesIntelligentes("alertesPanel"); }
   else if(financeSubTab==="banque"){ renderRapprochementBancaire(); }
@@ -2465,78 +2595,6 @@ function showDetailMargeJour(j) {
  * Commission = 10% de la marge nette de chaque lot vendu.
  * Un lot = un achat marqué "reçu" enregistré par cet utilisateur.
  */
-function calculerCommission(nomUtilisateur) {
-  // Lots enregistrés par cet utilisateur
-  const lotsUser = achats.filter(a =>
-    a.statut === "recu" &&
-    (sameName(a.enregistre_par, nomUtilisateur) || sameName(a.auteur, nomUtilisateur))
-  );
-
-  if(!lotsUser.length) return {lots:[], totalCommission:0, totalMargeNette:0};
-
-  const resultats = lotsUser.map(lot => {
-    // Ventes de ce produit depuis ce lot (FIFO)
-    const fifo = calculerFIFO(lot.produit);
-    const lotFifo = fifo.lots.find(l=>l.id===lot.id);
-    if(!lotFifo) return {lot, qteVendue:0, margeNette:0, commission:0};
-
-    const qteVendue = lotFifo.qteConsommee;
-    if(!qteVendue) return {lot, qteVendue:0, margeNette:0, commission:0};
-
-    // Marge nette de ce lot = (prix_vente_moy - coût_revient) × qte_vendue
-    // On utilise les ventes réelles filtrées par ordre FIFO
-    const ventesLot = [];
-    let aConsommer = 0;
-    // Calculer combien de ventes correspondent à ce lot
-    const lotsAvant = fifo.lots.filter(l=>fifo.lots.indexOf(l) < fifo.lots.indexOf(lotFifo));
-    const qteAvant = lotsAvant.reduce((s,l)=>s+l.qteInitiale, 0);
-    const ventesTriees = ventes
-      .filter(v=>v.produit===lot.produit)
-      .sort((a,b)=>new Date(a.date)-new Date(b.date));
-
-    let aSkip = qteAvant;
-    let aPrendre = qteVendue;
-    const ventesImputees = [];
-    for(const v of ventesTriees) {
-      if(aPrendre <= 0) break;
-      if(aSkip >= v.quantite) { aSkip -= v.quantite; continue; }
-      const skip = aSkip;
-      aSkip = 0;
-      const pris = Math.min(aPrendre, v.quantite - skip);
-      aPrendre -= pris;
-      // Créer une vente virtuelle pour la portion imputée à ce lot
-      ventesImputees.push({...v, quantite: pris});
-    }
-
-    // ── Marge nette du lot = CA proportionnel des ventes imputées
-    //    − coût d'achat réel du lot (qteConsommee × prix unitaire)
-    //    − frais accessoires réels du lot (qteConsommee × frais unitaires)
-    // (Même correction que dans voirCommissionAdmin : évite le recalcul
-    //  via margenette(ventesImputees), incohérent avec l'historique réel.)
-    const caImpute = ventesImputees.reduce((s,v)=>s+v.quantite*v.prix_vente, 0);
-    const fraisTotauxLot = (lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0);
-    const fraisUnitairesLot = lot.quantite ? fraisTotauxLot/lot.quantite : 0;
-    const coutLot = qteVendue * (lot.prix_unitaire + fraisUnitairesLot);
-    const margeNetteL = caImpute - coutLot;
-    const commission = Math.max(0, margeNetteL * 0.10);
-
-    return {
-      lot,
-      produit: lot.produit,
-      fournisseur: lot.fournisseur,
-      date: lot.date_reception||lot.date,
-      qteInitiale: lot.quantite,
-      qteVendue,
-      margeNette: margeNetteL,
-      commission
-    };
-  });
-
-  const totalMargeNette = resultats.reduce((s,r)=>s+r.margeNette, 0);
-  const totalCommission = resultats.reduce((s,r)=>s+r.commission, 0);
-
-  return {lots: resultats, totalMargeNette, totalCommission};
-}
 
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2849,7 +2907,7 @@ function voirCommissionAdmin() {
 /**
  * Modal de saisie d'un paiement de commission pour un utilisateur.
  * Permet à l'admin de renseigner manuellement le montant versé,
- * indépendamment du montant dû (calculerCommission), avec calcul
+ * indépendamment du montant dû, avec calcul
  * automatique du statut (payé / partiel / non payé) et de l'écart.
  */
 function modalPayerCommission(nom, montantDu, dejaPaye) {
@@ -2979,7 +3037,7 @@ async function enregistrerPaiementCommission(nom, montantDu) {
   const totalApres = dejaPaye + montant;
   const statut = totalApres >= montantDu ? "paye" : (totalApres>0 ? "partiel" : "non_paye");
 
-  const payload = {
+  const payload = sanitizeObj({
     id: genId(),
     utilisateur: nom,
     utilisateur_id: u?.id || null,
@@ -2991,7 +3049,7 @@ async function enregistrerPaiementCommission(nom, montantDu) {
     date: dateEl?.value || new Date().toISOString().slice(0,10),
     semaine,
     enregistre_par: currentUser?.nom || "Admin"
-  };
+  });
 
   msg.style.cssText="display:block;color:var(--green-700);"; msg.textContent="Enregistrement…";
 
@@ -3264,15 +3322,6 @@ let empruntsRemboursements = JSON.parse(localStorage.getItem("va_emprunts_rembou
 // période nécessite une intervention directe en base, hors de l'app.
 let periodesFermees = new Set(JSON.parse(localStorage.getItem("va_periodes_fermees")||"[]"));
 
-async function chargerPeriodesFermees(){
-  try{
-    const r = await sbFetch("/rest/v1/cloture_periodes?select=periode");
-    if(!r.ok) return;
-    const rows = await r.json();
-    periodesFermees = new Set(rows.map(x=>x.periode));
-    localStorage.setItem("va_periodes_fermees", JSON.stringify([...periodesFermees]));
-  }catch(e){ /* on garde le cache local si hors-ligne */ }
-}
 
 // Retourne la période "YYYY-MM" d'une date, ou null si la date est invalide/absente
 function periodeDe(date){
@@ -3552,6 +3601,14 @@ function ecritureVariationStock(date){
   // écriture doit donc compenser le cumul des pertes déjà comptabilisées,
   // pas seulement injecter la valeur FIFO brute — sinon 311 devient
   // artificiellement négatif dès qu'il y a eu la moindre perte.
+  //
+  // (Le 21/07/2026, j'avais retiré cette compensation par erreur, pensant
+  // qu'elle faisait double emploi avec la déduction par lot dans
+  // calculerFIFO() — ce sont deux choses différentes : calculerFIFO() donne
+  // la valeur RESTANTE correcte, mais 311 a quand même besoin de cette
+  // compensation car il n'a jamais été débité pour le stock en premier lieu.
+  // Réintégrée après diagnostic du vrai bug : une écriture fantôme laissée
+  // par l'incident de synchronisation concurrente du même jour.)
   const valeurFIFO = [...new Set(achats.map(a=>a.produit))].reduce((s,p)=>s+(calculerFIFO(p).coutFIFO||0),0);
   const valeur = Math.round(valeurFIFO + (typeof totalPertesValeur==="function"?totalPertesValeur():0));
   if(valeur<=0) return [];
@@ -3582,7 +3639,29 @@ function ecritureVariationStock(date){
  * DELETE ni UPDATE — cohérent avec les policies RLS de journal_comptable
  * (INSERT/SELECT uniquement).
  */
+// Protection anti-double-synchronisation : empêche deux appels concurrents de
+// synchroniserJournalComptable() de tourner en même temps (ex: double-clic sur
+// "Sync", ou déclenchement automatique qui chevauche un clic manuel). Sans
+// cette protection, les deux appels lisent le même état serveur avant que l'un
+// ou l'autre n'ait inséré quoi que ce soit, et insèrent chacun les mêmes
+// écritures — doublon exact constaté le 21/07/2026 (ventes comptabilisées deux
+// fois, ~413 650F de caisse fantôme, corrigé manuellement en base ce jour-là).
+let _syncJournalEnCours = false;
 async function synchroniserJournalComptable(capitalOuverture){
+  if(_syncJournalEnCours){
+    console.warn("Synchronisation déjà en cours — appel ignoré pour éviter un doublon.");
+    showToast && showToast("⏳ Synchronisation déjà en cours, patiente…", "error");
+    return 0;
+  }
+  _syncJournalEnCours = true;
+  try{
+    return await _synchroniserJournalComptableInterne(capitalOuverture);
+  } finally {
+    _syncJournalEnCours = false;
+  }
+}
+
+async function _synchroniserJournalComptableInterne(capitalOuverture){
   // 1) État serveur actuel = source de vérité (pas le cache local, qui peut être périmé)
   let existantes = [];
   try{
@@ -3609,23 +3688,43 @@ async function synchroniserJournalComptable(capitalOuverture){
   if(capitalOuverture>0 && !aDejaSoldeInitialCaisse){
     attendues.push(...ecritureOuvertureCapital(capitalOuverture, dateOuverture));
   }
-  achats.filter(a=>a.statut==="recu").forEach(a=> attendues.push(...ecrituresAchat(a)) );
+  // Décision du 20/07/2026 : le paiement (avance versée) est comptabilisé DÈS
+  // l'achat, sans attendre la confirmation de réception — l'argent sort
+  // réellement de la caisse au moment du paiement, pas au moment où la
+  // marchandise arrive. Avant ce correctif, un achat "en_cours" (marchandise
+  // en transit, 1-2 jours en moyenne) n'impactait ni la caisse ni les charges,
+  // alors que l'avance était déjà réellement payée — la caisse comptable
+  // paraissait donc plus élevée que la caisse réelle pendant le transit.
+  // Le statut de réception continue de gouverner uniquement le STOCK PHYSIQUE
+  // (calculerFIFO() ne compte que les achats "reçus" dans le stock FIFO) —
+  // c'est une question distincte de la reconnaissance comptable du paiement.
+  achats.forEach(a=> attendues.push(...ecrituresAchat(a)) );
   ventes.forEach(v=> attendues.push(...ecrituresVente(v)) );
   pertesLots.forEach(p=> attendues.push(...ecrituresPerte(p)) );
   commissionsPaiements.forEach(c=> attendues.push(...ecrituresCommission(c)) );
   mouvementsCaisse.forEach(m=> attendues.push(...ecrituresMouvementCaisse(m)) );
   attendues.push(...ecritureVariationStock(new Date().toISOString().slice(0,10)));
 
-  // 3) Dernière version active (non annulée) par cle_piece, côté serveur
+  // 3) Dernière version active (non annulée) par cle_piece, côté serveur.
+  //
+  // Robustesse ajoutée le 21/07/2026 : si un cle_piece a ÉTÉ EN DOUBLE par le
+  // passé (ex: doublon de synchronisation concurrente), il peut exister deux
+  // écritures avec la MÊME version, dont une seule annulée. L'ancien code
+  // gardait arbitrairement le premier exemplaire rencontré dans l'ordre de
+  // lecture (non garanti pour des dates identiques) — si ce "premier" exemplaire
+  // gardé était justement celui qui avait été annulé, le cle_piece entier
+  // semblait "annulé" alors qu'un exemplaire valide existait toujours,
+  // provoquant une RÉINSERTION en double (3e copie constatée ce jour).
+  // Correction : on exclut d'abord tout exemplaire précis déjà annulé (par son
+  // propre id), quel que soit l'ordre de lecture, puis on choisit parmi les
+  // survivants — plus aucune ambiguïté possible.
+  const idsAnnules = new Set(existantes.filter(e=>e.est_annulation && e.annule_ref).map(e=>e.annule_ref));
   const actives = {};
   existantes.forEach(e=>{
     if(e.est_annulation) return;
+    if(idsAnnules.has(e.id)) return; // cet exemplaire précis a déjà été annulé — ignorer, peu importe l'ordre
     const prev = actives[e.cle_piece];
     if(!prev || (e.version||1) > (prev.version||1)) actives[e.cle_piece] = e;
-  });
-  Object.keys(actives).forEach(cp=>{
-    const id = actives[cp].id;
-    if(existantes.some(e=>e.est_annulation && e.annule_ref===id)) delete actives[cp];
   });
 
   const aInserer = [];
@@ -3703,9 +3802,6 @@ async function synchroniserJournalComptable(capitalOuverture){
 }
 
 // Alias conservé pour compatibilité : ancien nom, nouveau comportement (append-only).
-async function regenererJournalComptable(capitalOuverture){
-  return synchroniserJournalComptable(capitalOuverture);
-}
 
 /**
  * Écran Journal comptable (modal) : liste chronologique, filtrable par compte,
@@ -3964,7 +4060,7 @@ async function enregistrerMouvementCaisse(sens){
     msg.style.cssText="display:block;color:var(--red);"; msg.textContent="Période clôturée pour cette date."; return;
   }
 
-  const payload = {
+  const payload = sanitizeObj({
     id: genId(),
     date: dateMvt,
     sens,
@@ -3973,7 +4069,7 @@ async function enregistrerMouvementCaisse(sens){
     mode_paiement: document.getElementById("mc_mode")?.value || "Espèces",
     note: document.getElementById("mc_note")?.value.trim() || "",
     enregistre_par: currentUser?.nom || "Admin",
-  };
+  });
 
   msg.style.cssText="display:block;color:var(--green-700);"; msg.textContent="Enregistrement…";
   try {
@@ -4232,7 +4328,10 @@ function renderTiers(){
   }).join('');
 
   target.innerHTML =
-    '<div style="font-size:11px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">👥 Clients</div>'
+    '<div style="background:var(--green-50);border:1px solid var(--green-bright3);border-radius:var(--r);padding:8px 12px;margin-bottom:12px;font-size:11px;color:var(--green-700);">'
+      +'📇 Fiches officielles enregistrées : <b>'+(fournisseursListe||[]).length+' fournisseur(s)</b>, <b>'+(clientsListe||[]).length+' client(s)</b> — utilisées pour l\'auto-complétion des formulaires achat/vente.'
+    +'</div>'
+    +'<div style="font-size:11px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">👥 Clients</div>'
     +'<div style="background:#fff;border:1.5px solid var(--gray-150);border-radius:var(--r);padding:14px;margin-bottom:14px;">'
       +'<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--gray-420);margin-bottom:10px;"><span>'+clients.length+' client'+(clients.length>1?'s':'')+'</span><span>CA total : '+fmt(caTotal)+'</span></div>'
       +(clients.length?clientsHtml:'<div style="text-align:center;padding:14px;color:var(--gray-420);font-size:12px;">Aucune vente enregistrée.</div>')
@@ -4338,102 +4437,6 @@ function genererFactureClient(venteId){
   `);
 }
 
-function imprimerFacture(venteId){
-  const v = ventes.find(x=>x.id===venteId);
-  if(!v) return;
-
-  // Générer PDF via jsPDF
-  if(typeof jspdf === 'undefined' && typeof window.jspdf === 'undefined'){
-    showToast('⚠ jsPDF non disponible — impression navigateur utilisée','error');
-    window.print();
-    return;
-  }
-
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({unit:'mm', format:'a5', orientation:'portrait'});
-  const fmt  = n => {
-    const s = String(Math.round(n||0));
-    return s.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-  };
-  const montant = (v.quantite||0)*(v.prix_vente||0);
-  const numDoc  = v.numero_document || ('VT-'+(v.id||'').slice(-6).toUpperCase());
-  const dateStr = v.date ? new Date(v.date).toLocaleDateString('fr-CI',{day:'2-digit',month:'long',year:'numeric'}) : '';
-  const W = 148, PAGE_H = 210;
-
-  // ── Header vert ──
-  doc.setFillColor(13, 61, 26);
-  doc.rect(0, 0, W, 28, 'F');
-  doc.setTextColor(255,255,255);
-  doc.setFontSize(18); doc.setFont('helvetica','bold');
-  doc.text('VerdApp CI', W/2, 13, {align:'center'});
-  doc.setFontSize(9); doc.setFont('helvetica','normal');
-  doc.text('Recu de vente', W/2, 20, {align:'center'});
-  doc.setFontSize(8);
-  doc.text('Grossiste en legumes - Marche Adjame, Abidjan', W/2, 25, {align:'center'});
-
-  // ── N° reçu + Date ──
-  doc.setTextColor(30,30,30);
-  doc.setFontSize(9); doc.setFont('helvetica','bold');
-  doc.text('N Recu : '+numDoc, 14, 36);
-  doc.text('Date : '+dateStr, W-14, 36, {align:'right'});
-
-  // ── Séparateur ──
-  doc.setDrawColor(200,200,200);
-  doc.setLineDash([2,2]);
-  doc.line(14, 40, W-14, 40);
-
-  // ── Client ──
-  doc.setLineDash([]);
-  doc.setFontSize(8); doc.setFont('helvetica','normal');
-  doc.setTextColor(120,120,120);
-  doc.text('CLIENT', 14, 48);
-  doc.setFontSize(12); doc.setFont('helvetica','bold');
-  doc.setTextColor(13, 61, 26);
-  doc.text(v.client||'Non specifie', 14, 55);
-
-  // ── Tableau produit ──
-  doc.setFontSize(8); doc.setFont('helvetica','bold');
-  doc.setTextColor(120,120,120);
-  doc.text('PRODUIT', 14, 66);
-  doc.text('QTE', 92, 66, {align:'center'});
-  doc.text('PU (F)', 118, 66, {align:'center'});
-  doc.text('TOTAL (F)', W-12, 66, {align:'right'});
-
-  doc.setDrawColor(200,200,200);
-  doc.setLineDash([1,1]);
-  doc.line(14, 68, W-14, 68);
-  doc.setLineDash([]);
-
-  doc.setFontSize(11); doc.setFont('helvetica','bold');
-  doc.setTextColor(30,30,30);
-  doc.text(v.produit||'', 14, 76);
-  doc.setFontSize(10);
-  doc.text(String(v.quantite||0), 92, 76, {align:'center'});
-  doc.text(fmt(v.prix_vente), 118, 76, {align:'center'});
-  doc.setTextColor(13, 100, 26);
-  doc.text(fmt(montant), W-12, 76, {align:'right'});
-
-  // ── Total ──
-  doc.setFillColor(232, 244, 232);
-  doc.roundedRect(14, 84, W-28, 20, 3, 3, 'F');
-  doc.setTextColor(13, 61, 26);
-  doc.setFontSize(10); doc.setFont('helvetica','bold');
-  doc.text('TOTAL ENCAISSE', 22, 93);
-  doc.setFontSize(8); doc.setFont('helvetica','normal');
-  doc.text(v.mode_paiement||'Especes', 22, 99);
-  doc.setFontSize(18); doc.setFont('helvetica','bold');
-  doc.text(fmt(montant)+' F', W-12, 97, {align:'right'});
-
-  // ── Enregistré par ──
-  doc.setFontSize(7); doc.setFont('helvetica','normal');
-  doc.setTextColor(150,150,150);
-  doc.line(14, 110, W-14, 110);
-  doc.text('Enregistre par : '+(v.enregistre_par||''), 14, 116);
-  doc.text('VerdApp CI - Systeme de gestion', W-14, 116, {align:'right'});
-
-  doc.save('Recu_'+numDoc+'_'+v.client+'.pdf');
-  showToast('✅ Reçu généré — '+numDoc);
-}
 // ──────────────────────────────────────────────────────────────────────────────
 
 function genererRapportFinancierPDF(){
@@ -5539,6 +5542,39 @@ function renderDashboard(){
           <span>Ventes du jour</span><span style="font-weight:700;">${ventes.filter(v=>v.date===new Date().toISOString().slice(0,10)).length}</span>
         </div>
       </div>
+      ${(()=>{
+        // Répartition Associés — visible ici car le reste de l'onglet Finance
+        // (où vit l'écran complet) est réservé au super-administrateur.
+        const rnr = calculerResultatNetReel();
+        const resultatNet = rnr.resultatNet;
+        const partMag = Math.round(resultatNet * PART_MAG_PCT/100);
+        const partPrincesse = Math.round(resultatNet * PART_PRINCESSE_PCT/100);
+        const historique = (repartitionAssociesListe||[]).slice().sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,5);
+        return `
+      <div class="card">
+        <div style="font-weight:800;font-size:13px;margin-bottom:10px;">🤝 Répartition Associés</div>
+        <div style="font-size:10px;color:var(--gray-420);text-transform:uppercase;letter-spacing:.04em;">Résultat net réel — à date</div>
+        <div style="font-size:20px;font-weight:900;margin:2px 0 10px;">${fmt(resultatNet)} F</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:${historique.length?'12px':'0'};">
+          <div style="background:var(--green-50);border-radius:var(--r-sm);padding:8px;text-align:center;">
+            <div style="font-size:10px;color:var(--gray-420);">Mon Ange Gardien (${PART_MAG_PCT}%)</div>
+            <div style="font-size:15px;font-weight:800;color:var(--green-700);">${fmt(partMag)} F</div>
+          </div>
+          <div style="background:var(--green-50);border-radius:var(--r-sm);padding:8px;text-align:center;">
+            <div style="font-size:10px;color:var(--gray-420);">Princesse (${PART_PRINCESSE_PCT}%)</div>
+            <div style="font-size:15px;font-weight:800;color:var(--green-700);">${fmt(partPrincesse)} F</div>
+          </div>
+        </div>
+        ${historique.length ? `
+        <div style="font-size:10px;color:var(--gray-420);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Évolution récente</div>
+        ${historique.map(h=>`
+          <div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0;border-bottom:1px solid var(--gray-100);">
+            <span>${h.date}</span>
+            <span style="font-weight:700;">${fmt(h.resultat_net)} F</span>
+          </div>
+        `).join('')}` : ''}
+      </div>`;
+      })()}
     `;
     return; // ne pas exécuter le reste du dashboard super_admin
   }
@@ -6010,7 +6046,6 @@ function renderAchats(){
             <span style="font-size:18px;">${getProduitIcon(a.produit)||"🌿"}</span>
             <span style="font-weight:800;color:var(--text);font-size:14px;">${a.produit}</span>
             <span class="badge ${a.statut==="recu"?"b-lime":"b-amber"}">${a.statut==="recu"?"[+] Reçu":"⏳ Transit"}</span>
-            ${(()=>{const ml=margeParLot(a);return ml.estVendu?'<span class="badge b-green" style="font-size:10px;">✅ Vendu</span>':ml.qteVendueLot>0?'<span class="badge b-amber" style="font-size:10px;">⚡ Partiel</span>':'';})()}
             <span class="badge b-stone">${a.unite}</span>
             ${a.numero_document?`<span class="badge b-stone" style="font-family:monospace;cursor:pointer;" onclick='genererDocumentPDF("achat",${JSON.stringify(a).replace(/'/g,"&#39;")})' title="Imprimer le bon de réception">🖨 ${a.numero_document}</span>`:""}
             ${hasPending?`<span class="badge b-orange">⏳ En révision</span>`:""}
@@ -6025,7 +6060,6 @@ function renderAchats(){
         </div>
         <div style="display:flex;flex-direction:column;gap:var(--sp-2);">
           ${a.statut==="en_cours" && currentUser?`<button onclick="marquerRecu('${a.id}')" class="icon-btn-green" title="Accuser réception">[+] Reçu</button>`:""}
-          ${a.statut==="recu" && !margeParLot(a).estVendu?`<button onclick="marquerVenduColis('${a.id}')" class="icon-btn-green" style="background:var(--green-700);font-size:11px;" title="Vendre ce lot">💰 Vendre</button>`:""}
           ${isAdmin&&!hasPending?`<button onclick="demandeModifAchat('${a.id}')" class="icon-btn-orange" title="Modifier">✏️</button>`:""}
           ${isAdmin&&!hasPending?`<button onclick="demandeSupprAchat('${a.id}')" class="icon-btn" title="Supprimer">🗑</button>`:""}
         </div>
@@ -6141,9 +6175,35 @@ function calculerFIFO(produit) {
   // de consommation des plus vieux lots, comme l'ancien comportement).
   qteAVendre += pertesOrphelines;
 
+  // ── Rentabilité — SOURCE UNIQUE (fusion calculerFIFO / margeParLot / renderSuiviParLot) ──
+  // Allocation des ventes à chaque lot, en deux passes :
+  //  1) Ventes explicitement liées (lot_ref) → attribuées directement, précises
+  //     (date, prix, quantité exacts pour CE lot).
+  //  2) Ventes "Auto FIFO" (sans lot_ref) → réparties sur la capacité RESTANTE
+  //     de chaque lot, dans l'ordre chronologique FIFO, comme le fait le flux
+  //     de quantités ci-dessus. Chaque allocation garde sa date et son prix
+  //     réels pour permettre des sous-totaux par date de vente.
+  const ventesAvecRef = ventes.filter(v => v.produit === produit && v.lot_ref);
+  const ventesSansRef = ventes.filter(v => v.produit === produit && !v.lot_ref)
+    .sort((a,b) => (a.date||"").localeCompare(b.date||""));
+  const ventesAllouePar = {}; // lotId -> [{date, qte, prix_vente, ca}]
+  lots.forEach(l => ventesAllouePar[l.id] = []);
+  ventesAvecRef.forEach(v => {
+    if(!ventesAllouePar[v.lot_ref]) return; // vente liée à un lot d'un autre produit/inexistant
+    ventesAllouePar[v.lot_ref].push({date:v.date, qte:v.quantite||0, prix_vente:v.prix_vente||0, ca:(v.quantite||0)*(v.prix_vente||0)});
+  });
+
   // Appliquer le FIFO lot par lot
+  let curseurVentesSansRef = 0; // index dans ventesSansRef, pour répartir séquentiellement
+  let resteVenteCourante = ventesSansRef[0]?.quantite || 0;
+
   const lotsAvecEtat = lots.map(lot => {
-    const qteInitiale = lot.quantite;
+    // Quantité réellement disponible pour ce lot : la quantité effectivement
+    // arrivée si elle a été renseignée (confirmation de réception), sinon la
+    // quantité commandée par défaut (avant confirmation). Sans ce correctif,
+    // une perte en transit restait invisible : le stock affiché comptait la
+    // quantité commandée, jamais la quantité réellement reçue.
+    const qteInitiale = (lot.quantite_arrivee != null ? lot.quantite_arrivee : lot.quantite);
     // 1) Perte propre à ce lot (retirée en premier, traçabilité exacte)
     const pertesLot = Math.min(pertesParLot[lot.id]||0, qteInitiale);
     // 2) Disponible pour la vente après déduction de la perte du lot
@@ -6152,12 +6212,50 @@ function calculerFIFO(produit) {
     const vendue = Math.min(qteAVendre, dispoApresPerte);
     qteAVendre = Math.max(0, qteAVendre - dispoApresPerte);
     const consommee = pertesLot + vendue; // total sorti du lot
+
+    // 3bis) Répartir la capacité "vendue" de ce lot entre ventes liées (déjà
+    // connues) et ventes "Auto" (à piocher séquentiellement dans le pool trié).
+    const dejaAlloueRef = ventesAllouePar[lot.id].reduce((s,v)=>s+v.qte, 0);
+    let capaciteAutoRestante = Math.max(0, vendue - dejaAlloueRef);
+    while(capaciteAutoRestante > 0.001 && curseurVentesSansRef < ventesSansRef.length){
+      const v = ventesSansRef[curseurVentesSansRef];
+      if(resteVenteCourante <= 0){ curseurVentesSansRef++; resteVenteCourante = ventesSansRef[curseurVentesSansRef]?.quantite||0; continue; }
+      const pris = Math.min(capaciteAutoRestante, resteVenteCourante);
+      if(pris > 0){
+        ventesAllouePar[lot.id].push({date:v.date, qte:pris, prix_vente:v.prix_vente||0, ca:pris*(v.prix_vente||0)});
+        capaciteAutoRestante -= pris;
+        resteVenteCourante -= pris;
+      }
+      if(resteVenteCourante <= 0.001){ curseurVentesSansRef++; resteVenteCourante = ventesSansRef[curseurVentesSansRef]?.quantite||0; }
+    }
+
     const restante = qteInitiale - consommee;
 
     let statut;
     if(restante <= 0)          statut = "epuise";
     else if(consommee > 0)     statut = "partiel";
     else                       statut = "intact";
+
+    const fraisUnitaires = ((lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0)) / qteInitiale;
+    const coutRevientUnitaire = lot.prix_unitaire + fraisUnitaires;
+    const ventesAllouees = ventesAllouePar[lot.id];
+    const caLot = ventesAllouees.reduce((s,v)=>s+v.ca, 0);
+    const coutVenduLot = ventesAllouees.reduce((s,v)=>s+v.qte, 0) * coutRevientUnitaire;
+    const margeLot = caLot - coutVenduLot;
+    const tauxMargeLot = caLot ? Math.round(margeLot/caLot*100) : 0;
+
+    // Sous-totaux par date de vente (un lot peut être écoulé en plusieurs fois)
+    const parDateMap = {};
+    ventesAllouees.forEach(v=>{
+      const d = v.date || "?";
+      if(!parDateMap[d]) parDateMap[d] = {date:d, qte:0, ca:0, cout:0};
+      parDateMap[d].qte += v.qte;
+      parDateMap[d].ca  += v.ca;
+      parDateMap[d].cout+= v.qte*coutRevientUnitaire;
+    });
+    const parDate = Object.values(parDateMap)
+      .map(x=>({...x, marge:x.ca-x.cout, taux:x.ca?Math.round((x.ca-x.cout)/x.ca*100):0}))
+      .sort((a,b)=>(a.date||"").localeCompare(b.date||""));
 
     return {
       ...lot,
@@ -6168,8 +6266,11 @@ function calculerFIFO(produit) {
       qteRestante: Math.max(0, restante),
       statut,
       coutUnitaire: lot.prix_unitaire,
-      fraisUnitaires: ((lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0)) / qteInitiale,
-      coutRevient: lot.prix_unitaire + ((lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0)) / qteInitiale
+      fraisUnitaires,
+      coutRevient: coutRevientUnitaire,
+      // Rentabilité — désormais calculée ici uniquement
+      caLot, coutVenduLot, margeLot, tauxMargeLot, parDate,
+      estVendu: restante <= 0 && consommee > 0,
     };
   });
 
@@ -6203,11 +6304,6 @@ function calculerFIFO(produit) {
  * Remplace coutMoyen() pour la marge avec la méthode FIFO.
  * Retourne le coût unitaire FIFO du prochain lot à vendre.
  */
-function coutFIFOUnitaire(produit) {
-  const fifo = calculerFIFO(produit);
-  if(!fifo.prochainLot) return coutMoyen(produit); // fallback
-  return fifo.prochainLot.coutRevient;
-}
 
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -6353,7 +6449,7 @@ async function enregistrerPerteLot(lotId, produit, fournisseur, qteRestante, cou
 
   try {
     // Enregistrer dans pertes_lots (Supabase)
-    const payload = {
+    const payload = sanitizeObj({
       id: genId(),
       lot_id: lotId,
       produit,
@@ -6365,7 +6461,7 @@ async function enregistrerPerteLot(lotId, produit, fournisseur, qteRestante, cou
       note,
       date,
       constate_par: currentUser?.nom || "Admin"
-    };
+    });
 
     // Essayer d'enregistrer dans Supabase (table pertes_lots)
     try {
@@ -6795,6 +6891,16 @@ function renderStock(){
     const seuil=seuilsStock[p]||0;
     const enAlerte=seuil>0&&fifo.qteDispo<=seuil;
     const pct=fifo.qteTotal?Math.max(0,Math.round(fifo.qteDispo/fifo.qteTotal*100)):0;
+    // Calcul ventes et dispo réels (séparés des pertes) — déplacé AVANT le début
+    // de la chaîne de concaténation html+=... : ces déclarations const, quand
+    // elles étaient insérées AU MILIEU de la chaîne, coupaient silencieusement
+    // la construction du HTML à cet endroit (l'insertion automatique de points-
+    // virgules par JS transformait chaque ligne suivante '+...' en instruction
+    // "unary plus" isolée, sans effet sur html) — la carte s'arrêtait donc net
+    // juste après l'en-tête, sans erreur visible. Bug corrigé le 21/07/2026.
+    const qteVentuesProduit = ventes.filter(v=>v.produit===p).reduce((s,v)=>s+(v.quantite||0),0);
+    const qtePerteProduit   = pertesQteProduit(p);
+    const qteDispoReel      = Math.max(0, fifo.qteTotal - qteVentuesProduit - qtePerteProduit);
 
     html+='<div class="card" style="margin-bottom:12px;'+(enAlerte?"border-color:var(--red-200);":"")+'">'
 
@@ -6813,11 +6919,6 @@ function renderStock(){
           +'<button onclick="setSeuil(\''+p+'\','+seuil+')" style="background:var(--gray-50);border:1.5px solid var(--gray-200);border-radius:var(--r-sm);padding:4px 8px;cursor:pointer;font-size:11px;font-weight:700;color:var(--green-mid);font-family:inherit;">'+(seuil>0?"🔔 "+seuil:"🔔 Seuil")+'</button>'
         +'</div>'
       +'</div>'
-
-      // Calcul ventes et dispo réels (séparés des pertes)
-      const qteVentuesProduit = ventes.filter(v=>v.produit===p).reduce((s,v)=>s+(v.quantite||0),0);
-      const qtePerteProduit   = pertesQteProduit(p);
-      const qteDispoReel      = Math.max(0, fifo.qteTotal - qteVentuesProduit - qtePerteProduit);
 
       // KPI 4 cases
       +'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:var(--sp-2);text-align:center;margin-bottom:12px;">'
@@ -6894,6 +6995,8 @@ function renderStock(){
                     +' style="background:var(--red-50);border:1.5px solid var(--red-200);color:var(--red);border-radius:var(--r-sm);padding:5px 12px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;">⚠ Constater une perte</button>'
                   +'</div>'
                 : '')
+              // Rentabilité : affichée une seule fois dans l'app, dans la table
+              // "📊 Rentabilité par lot" plus bas (fusion du 18/07/2026) — pas ici.
             +'</div>';
           }).join("")
         +'</div>'
@@ -7581,7 +7684,7 @@ async function envoyerMessage() {
       imageUrl = await uploadChatImage(chatImageFile);
       clearChatImg();
     }
-    const payload = {
+    const payload = sanitizeObj({
       id: genId(),
       auteur: chatAuteur,
       contenu: texte || null,
@@ -7589,7 +7692,7 @@ async function envoyerMessage() {
       reply_to: chatReplyTo ? chatReplyTo.id : null,
       reactions: null,
       created_at: new Date().toISOString()
-    };
+    });
     const res = await sbSendMessage(payload);
     const msg = Array.isArray(res) ? res[0] : res;
     if (msg) chatMessages.push(msg);
@@ -8666,16 +8769,6 @@ function exportBilanCSV(){
   showToast("[+] Bilan exporté");
 }
 
-function partagerBilanWA(j,totalA,totalV,margeB,nbA,nbV){
-  const taux=totalA>0?Math.round((margeB/totalA)*100):0;
-  const waLink=localStorage.getItem("va_wa_link")||"";
-  const msg=`📊 *Bilan VerdApp CI — ${j}*\n`
-    +`🛒 Achats : *${fmt(totalA)}* (${nbA} lot${nbA>1?"s":""})\n`
-    +`💰 Ventes : *${fmt(totalV)}* (${nbV} vente${nbV>1?"s":""})\n`
-    +`${margeB>=0?"✅":"⚠️"} Marge brute : *${margeB>=0?"+":""}${fmt(margeB)}* (${taux}%)`;
-  const url=waLink.startsWith("http")?waLink:"https://wa.me/?text="+encodeURIComponent(msg);
-  window.open(url,"_blank");
-}
 
 
 
@@ -10179,7 +10272,16 @@ const PLAN_COMPTES_ETENDU = {
 };
 
 // ── Grand Livre ───────────────────────────────────────────────────────────────
+// Cache mémoïsé : plusieurs écrans (Bilan, Compte de Résultat, Trésorerie,
+// Vue Direction...) appellent tous genererGrandLivre() indépendamment sur le
+// même rendu. Sans cache, le journal entier (qui grandit avec les
+// contre-passations) est reparcouru à chaque appel — visible sur la lenteur
+// ressentie lors de la synchronisation/affichage. Le cache est invalidé dès
+// que le nombre d'écritures change (après une synchronisation notamment).
+var _glCache = null, _glCacheLen = -1;
 function genererGrandLivre(){
+  if(_glCache && _glCacheLen === journalComptable.length) return _glCache;
+
   const lignes = journalComptable.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||""));
   const gl = {}; // compte → [{date, libelle, debit, credit}]
 
@@ -10191,6 +10293,7 @@ function genererGrandLivre(){
     gl[e.compte_credit].mvts.push({date:e.date,libelle:e.libelle,debit:0,credit:e.montant,ref:e.type_operation});
   });
 
+  _glCache = gl; _glCacheLen = journalComptable.length;
   return gl;
 }
 
@@ -10506,7 +10609,7 @@ function renderPerformanceProduits(targetId){
     const ca        = ventesP.reduce((s,v)=>s+(v.quantite||0)*(v.prix_vente||0),0);
     const qteVendue = ventesP.reduce((s,v)=>s+(v.quantite||0),0);
     const qteAchetee= achatsP.reduce((s,a)=>s+(a.quantite||0),0);
-    const qtePerte  = pertesP.reduce((s,p)=>s+(p.quantite_perdue||0),0);
+    const qtePerte  = pertesP.reduce((s,p)=>s+(p.qte_perte||0),0);
     const stockDispo= stockDisponibleProduit(produit);
     const mb        = margebrute(ventesP);
     const tauxMB    = ca ? Math.round(mb/ca*100) : 0;
@@ -10516,10 +10619,17 @@ function renderPerformanceProduits(targetId){
     const colorMB   = tauxMB>=20?'var(--green-700)':tauxMB>=10?'var(--orange)':'var(--red)';
     const stockBar  = qteAchetee>0 ? Math.round(qteVendue/qteAchetee*100) : 0;
 
-    // Lots anciens avec stock restant (>3 jours) → candidats démarque
+    // Lots anciens avec stock restant (>3 jours) → candidats démarque.
+    // Vérifie le stock RESTANT DE CE LOT PRÉCIS (via calculerFIFO), pas le
+    // stock global du produit — sinon dès qu'il reste une seule unité du
+    // produit quelque part, TOUS les vieux lots (même épuisés) étaient comptés
+    // à tort comme "ayant du stock restant".
+    const fifoProduit = calculerFIFO(produit);
     const lotsAnciensAvecStock = achatsP.filter(a=>{
       const age = (new Date(today)-new Date(a.date_reception||a.date))/(1000*3600*24);
-      return age>3 && stockDisponibleProduit(a.produit)>0;
+      if(age<=3) return false;
+      const lotFifo = fifoProduit.lots.find(l=>l.id===a.id);
+      return lotFifo && lotFifo.qteRestante>0;
     });
 
     return `
@@ -10596,142 +10706,59 @@ function renderSuiviParLot(targetId){
   if(!el) return;
 
   const fmt = v => Math.round(v||0).toLocaleString("fr-FR");
-  const today = new Date().toISOString().slice(0,10);
 
-  // Calculer l'état de chaque lot reçu
-  const lotsRecus = achats.filter(a=>a.statut==="recu")
-    .sort((a,b)=>(b.date||"").localeCompare(a.date||""));
-
-  if(!lotsRecus.length){
+  // SOURCE UNIQUE : calculerFIFO() par produit — fusion du 18/07/2026.
+  // Cette fonction ne recalcule plus rien elle-même (ni allocation FIFO, ni
+  // pertes, ni marge) : elle affiche uniquement ce que calculerFIFO() a déjà
+  // calculé, exactement comme le Stock FIFO et le Colis.
+  const produitsRecus = [...new Set(achats.filter(a=>a.statut==="recu").map(a=>a.produit))];
+  if(!produitsRecus.length){
     el.innerHTML='<div style="text-align:center;padding:20px;color:var(--gray-420);">Aucun lot reçu.</div>';
     return;
   }
 
-  // Pré-calculer les ventes par lot (via lot_ref ou FIFO)
-  const ventesParLot = {};
-  ventes.forEach(v=>{
-    if(v.lot_ref){
-      if(!ventesParLot[v.lot_ref]) ventesParLot[v.lot_ref] = [];
-      ventesParLot[v.lot_ref].push(v);
-    }
-  });
-
-  // ── Allocation FIFO réelle ────────────────────────────────────────────────
-  // Pour chaque produit, distribuer les ventes aux lots dans l'ordre chronologique
-  const allocationFIFO = {};  // lotId → {qteVendue, ca}
-
-  [...new Set(lotsRecus.map(a=>a.produit))].forEach(produit => {
-    // Lots triés FIFO (plus ancien en premier)
-    const lotsP = lotsRecus
-      .filter(a=>a.produit===produit)
-      .sort((a,b)=>(a.date||"").localeCompare(b.date||""));
-
-    // Stock disponible par lot (capacité)
-    const stockLot = {};
-    lotsP.forEach(a=>{ stockLot[a.id] = a.quantite||0; });
-
-    // Déduire les pertes
-    pertesLots.filter(p=>p.produit===produit).forEach(p=>{
-      if(p.lot_id && stockLot[p.lot_id]!==undefined)
-        stockLot[p.lot_id] = Math.max(0, stockLot[p.lot_id]-(p.qte_perte||0));
-    });
-
-    // Initialiser l'allocation
-    lotsP.forEach(a=>{ allocationFIFO[a.id]={qteVendue:0,ca:0}; });
-
-    // Ventes avec lot_ref explicite → attribuer directement
-    const ventesAvecRef  = ventes.filter(v=>v.produit===produit && v.lot_ref);
-    const venterSansRef  = ventes.filter(v=>v.produit===produit && !v.lot_ref)
-      .sort((a,b)=>(a.date||"").localeCompare(b.date||""));
-
-    ventesAvecRef.forEach(v=>{
-      if(allocationFIFO[v.lot_ref]!==undefined){
-        allocationFIFO[v.lot_ref].qteVendue += (v.quantite||0);
-        allocationFIFO[v.lot_ref].ca        += (v.quantite||0)*(v.prix_vente||0);
-      }
-    });
-
-    // Ventes sans lot_ref → FIFO (remplir le plus ancien d'abord)
-    const stockRestant = {};
-    lotsP.forEach(a=>{ stockRestant[a.id] = stockLot[a.id]; });
-
-    venterSansRef.forEach(v=>{
-      let qteAAllouer = v.quantite||0;
-      for(const lot of lotsP){
-        if(qteAAllouer<=0) break;
-        const dispo = Math.max(0, stockRestant[lot.id] - (allocationFIFO[lot.id].qteVendue||0));
-        const qteAllouee = Math.min(qteAAllouer, dispo);
-        if(qteAllouee>0){
-          allocationFIFO[lot.id].qteVendue += qteAllouee;
-          allocationFIFO[lot.id].ca        += qteAllouee*(v.prix_vente||0);
-          qteAAllouer -= qteAllouee;
-        }
-      }
+  let lignesLots = [];
+  let totalCout=0, totalCA=0;
+  produitsRecus.forEach(produit=>{
+    const fifo = calculerFIFO(produit);
+    fifo.lots.forEach(l=>{
+      const coutLot = l.qteInitiale * l.coutRevient;
+      totalCout += coutLot;
+      totalCA += l.caLot;
+      lignesLots.push({...l, coutLot});
     });
   });
+  lignesLots.sort((a,b)=>(b.date||"").localeCompare(a.date||""));
 
-  const rows = lotsRecus.map(a=>{
-    const frais   = (a.droit_terre||0)+(a.transport||0)+(a.droit_vente||0)+(a.charrette||0);
-    const coutLot = (a.quantite||0)*(a.prix_unitaire||0) + frais;
-    const coutUnit= a.quantite ? (coutLot/a.quantite) : 0;
-
-    // Utiliser l'allocation FIFO calculée
-    const alloc  = allocationFIFO[a.id]||{qteVendue:0,ca:0};
-    const qteLot = alloc.qteVendue;
-    const caLot  = alloc.ca;
-
-    // Pertes sur ce lot
-    const pertesLot = pertesLots.filter(p=>p.lot_id===a.id||
-      (p.fournisseur===a.fournisseur&&p.produit===a.produit&&p.date===a.date));
-    const qtePerteLot = pertesLot.reduce((s,p)=>s+(p.qte_perte||0),0);
-    const valPerteLot = pertesLot.reduce((s,p)=>s+(p.valeur_perte||0),0);
-
-    const qteRestante = Math.max(0,(a.quantite||0)-qteLot-qtePerteLot);
-    const margeBrute  = caLot - coutLot;
-    const tauxMarge   = caLot ? Math.round(margeBrute/caLot*100) : 0;
-    const pctEcoule   = a.quantite ? Math.round((qteLot+qtePerteLot)/a.quantite*100) : 0;
-
-    // Statut du lot
-    let statut, statutColor, statutBg;
-    if(qteRestante<=0&&qteLot+qtePerteLot>0){
-      statut="Liquidé"; statutColor="var(--green-700)"; statutBg="var(--green-50)";
-    } else if(qteLot>0){
-      statut="En cours"; statutColor="var(--orange-dark)"; statutBg="var(--orange-50)";
-    } else {
-      statut="En stock"; statutColor="var(--blue-600)"; statutBg="var(--blue-50)";
-    }
-
-    const numLot = a.numero_lot || ("LOT-"+a.id.slice(-4).toUpperCase());
-    const icon   = getProduitIcon?.(a.produit)||"🌿";
-
+  const rows = lignesLots.map(l=>{
+    const numLot = "LOT-"+l.id.slice(-4).toUpperCase();
+    const icon   = getProduitIcon?.(l.produit)||"🌿";
+    const statutLabel = {epuise:"Liquidé", partiel:"En cours", intact:"En stock"}[l.statut];
+    const statutColor = {epuise:"var(--green-700)", partiel:"var(--orange-dark)", intact:"var(--blue-600)"}[l.statut];
+    const statutBg    = {epuise:"var(--green-50)", partiel:"var(--orange-50)", intact:"var(--blue-50)"}[l.statut];
     return `
-      <tr style="border-bottom:1px solid var(--gray-100);cursor:pointer;" onclick="voirDetailLot('${a.id}')">
+      <tr style="border-bottom:1px solid var(--gray-100);">
         <td style="padding:8px 10px;font-weight:800;color:var(--green-mid);font-size:11px;white-space:nowrap;">${numLot}</td>
-        <td style="padding:8px 6px;font-size:11px;">${icon} ${a.produit||""}</td>
-        <td style="padding:8px 6px;font-size:11px;color:var(--gray-500);">${a.fournisseur||""}</td>
-        <td style="padding:8px 6px;font-size:11px;text-align:center;">${a.date||""}</td>
-        <td style="padding:8px 6px;font-size:11px;text-align:center;"><span style="background:${statutBg};color:${statutColor};border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;">${statut}</span></td>
-        <td style="padding:8px 6px;font-size:11px;text-align:right;">${fmt(a.quantite||0)}</td>
-        <td style="padding:8px 6px;font-size:11px;text-align:right;color:var(--green-700);">${fmt(qteLot)}</td>
-        <td style="padding:8px 6px;font-size:11px;text-align:right;color:${qteRestante>0?"var(--blue-600)":"var(--gray-400)"};">${fmt(qteRestante)}</td>
-        <td style="padding:8px 6px;font-size:11px;text-align:right;">${fmt(coutLot)} F</td>
-        <td style="padding:8px 6px;font-size:11px;text-align:right;color:var(--green-700);">${fmt(caLot)} F</td>
-        <td style="padding:8px 6px;font-size:12px;font-weight:800;text-align:right;color:${margeBrute>=0?"var(--green-700)":"var(--red)"};">${margeBrute>=0?"+":""}${fmt(margeBrute)} F</td>
-        <td style="padding:8px 6px;font-size:11px;text-align:right;color:${tauxMarge>=20?"var(--green-700)":tauxMarge>=10?"var(--orange-dark)":"var(--red)"};">${tauxMarge}%</td>
+        <td style="padding:8px 6px;font-size:11px;">${icon} ${l.produit||""}</td>
+        <td style="padding:8px 6px;font-size:11px;color:var(--gray-500);">${l.fournisseur||""}</td>
+        <td style="padding:8px 6px;font-size:11px;text-align:center;">${l.date||""}</td>
+        <td style="padding:8px 6px;font-size:11px;text-align:center;"><span style="background:${statutBg};color:${statutColor};border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;">${statutLabel}</span></td>
+        <td style="padding:8px 6px;font-size:11px;text-align:right;">${fmt(l.qteInitiale||0)}</td>
+        <td style="padding:8px 6px;font-size:11px;text-align:right;color:var(--green-700);">${fmt(l.qteVendueLot)}</td>
+        <td style="padding:8px 6px;font-size:11px;text-align:right;color:${l.qteRestante>0?"var(--blue-600)":"var(--gray-400)"};">${fmt(l.qteRestante)}</td>
+        <td style="padding:8px 6px;font-size:11px;text-align:right;">${fmt(l.coutLot)} F</td>
+        <td style="padding:8px 6px;font-size:11px;text-align:right;color:var(--green-700);">${fmt(l.caLot)} F</td>
+        <td style="padding:8px 6px;font-size:12px;font-weight:800;text-align:right;color:${l.margeLot>=0?"var(--green-700)":"var(--red)"};">${l.margeLot>=0?"+":""}${fmt(l.margeLot)} F</td>
+        <td style="padding:8px 6px;font-size:11px;text-align:right;color:${l.tauxMargeLot>=20?"var(--green-700)":l.tauxMargeLot>=10?"var(--orange-dark)":"var(--red)"};">${l.tauxMargeLot}%</td>
       </tr>`;
   });
 
-  // Totaux
-  const totalCout  = lotsRecus.reduce((s,a)=>{
-    const f=(a.droit_terre||0)+(a.transport||0)+(a.droit_vente||0)+(a.charrette||0);
-    return s+(a.quantite||0)*(a.prix_unitaire||0)+f;
-  },0);
-  const totalCA    = ventes.reduce((s,v)=>s+(v.quantite||0)*(v.prix_vente||0),0);
   const totalMarge = totalCA - totalCout;
   const tauxGlobal = totalCA ? Math.round(totalMarge/totalCA*100) : 0;
 
   el.innerHTML =
-    '<button onclick="document.getElementById(\'rentab-table\').style.display=document.getElementById(\'rentab-table\').style.display===\'none\'?\'\':\'none\'" style="width:100%;padding:10px;background:var(--green-50);border:1.5px solid var(--green-bright3);border-radius:var(--r);font-weight:700;font-size:12px;color:var(--green-700);cursor:pointer;font-family:inherit;margin-bottom:8px;">📊 Rentabilité par lot — Cliquer pour afficher/masquer</button>'    +'<div id="rentab-table" style="display:none;">'
+    '<button onclick="document.getElementById(\'rentab-table\').style.display=document.getElementById(\'rentab-table\').style.display===\'none\'?\'\':\'none\'" style="width:100%;padding:10px;background:var(--green-50);border:1.5px solid var(--green-bright3);border-radius:var(--r);font-weight:700;font-size:12px;color:var(--green-700);cursor:pointer;font-family:inherit;margin-bottom:8px;">📊 Rentabilité par lot — Cliquer pour afficher/masquer</button>'
+    +'<div id="rentab-table" style="display:none;">'
     +'<div style="background:var(--gray-50);border-radius:var(--r);padding:8px 12px;margin-bottom:10px;display:flex;gap:16px;flex-wrap:wrap;font-size:11px;">'
       +'<span>Coût total lots : <b>'+fmt(totalCout)+' F</b></span>'
       +'<span>CA total : <b style="color:var(--green-700)">'+fmt(totalCA)+' F</b></span>'
@@ -10759,7 +10786,8 @@ function renderSuiviParLot(targetId){
       +'</table>'
     +'</div>'
     +'<div style="font-size:9px;color:var(--gray-400);font-style:italic;margin-top:8px;text-align:center;">'
-      +'CA par lot = ventes liées via lot_ref (ventes récentes) ou estimation FIFO (ventes antérieures). Cliquez sur un lot pour le détail.'
+      +'Rentabilité calculée par calculerFIFO() — même source que le Stock FIFO et le suivi Colis.'
+    +'</div>'
     +'</div>';
 }
 // ──────────────────────────────────────────────────────────────────────────────
@@ -10959,20 +10987,8 @@ function supprimerDepot(i){
 }
 
 // Filtre dépôt dans les listes (si un dépôt est actif, filtrer par champ depot)
-function achatsParDepot(arr){
-  if(currentDepot==='tous') return arr||achats;
-  return (arr||achats).filter(a=>(a.depot||'adjame')===currentDepot);
-}
-function ventesParDepot(arr){
-  if(currentDepot==='tous') return arr||ventes;
-  return (arr||ventes).filter(v=>(v.depot||'adjame')===currentDepot);
-}
 
 // Ajouter le sélecteur de dépôt dans le champ achat (depuis buildAchatForm)
-function getDepotOptions(selected){
-  const depots = getDepots().filter(d=>d.actif);
-  return depots.map(d=>`<option value="${d.id}" ${d.id===(selected||currentDepot)?'selected':''}>${d.nom}</option>`).join('');
-}
 // ────────────────────────────────────────────────────────────────────────────
 
 // ── Solde initial de trésorerie ──────────────────────────────────────────────
@@ -11045,23 +11061,27 @@ async function sauvegarderSoldeInitial(existantId){
 
 
 // ══ MARGE PAR LOT ═══════════════════════════════════════════════════════════
+// Simple lecteur de calculerFIFO() — SOURCE UNIQUE pour la rentabilité par lot
+// depuis la fusion du 18/07/2026 (calculerFIFO / margeParLot / renderSuiviParLot
+// faisaient chacun leur propre calcul, avec des résultats parfois divergents).
 function margeParLot(lot) {
-  const coutLot = (lot.quantite||0)*(lot.prix_unitaire||0)
-    + (lot.droit_terre||0)+(lot.transport||0)+(lot.droit_vente||0)+(lot.charrette||0);
-
-  // Ventes liées à ce lot (via lot_ref ou FIFO produit/date)
-  const ventesLot = ventes.filter(v =>
-    v.lot_ref === lot.id ||
-    (v.produit === lot.produit && v.date >= (lot.date_reception||lot.date||''))
-  );
-  const caVentesLot = ventesLot.reduce((s,v)=>s+(v.quantite||0)*(v.prix_vente||0), 0);
-  const qteVendueLot = ventesLot.reduce((s,v)=>s+(v.quantite||0), 0);
-
-  const margeVal  = caVentesLot - coutLot;
-  const taux      = caVentesLot ? Math.round(margeVal/caVentesLot*100) : 0;
-  const estVendu  = qteVendueLot >= (lot.quantite||0);
-
-  return { coutLot, caVentesLot, margeVal, taux, qteVendueLot, ventesLot, estVendu };
+  const fifo = calculerFIFO(lot.produit);
+  const l = fifo.lots.find(x => x.id === lot.id);
+  if(!l){
+    // Lot pas encore "reçu" ou produit introuvable : valeurs neutres
+    return { coutLot:0, coutUnitaire:0, caVentesLot:0, margeVal:0, taux:0, qteVendueLot:0, ventesLot:[], estVendu:false, parDate:[] };
+  }
+  return {
+    coutLot: l.qteInitiale * l.coutRevient,
+    coutUnitaire: l.coutRevient,
+    caVentesLot: l.caLot,
+    margeVal: l.margeLot,
+    taux: l.tauxMargeLot,
+    qteVendueLot: l.qteVendueLot,
+    ventesLot: [], // conservé pour compatibilité de forme ; utiliser l.parDate pour le détail
+    estVendu: l.estVendu,
+    parDate: l.parDate,
+  };
 }
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -11247,22 +11267,26 @@ function renderRapportJournalier(targetId, dateJour){
 function getSIGData(){
   const ca          = totalVentes();
   const margeB      = margebrute();         // CA - CMV FIFO (marchandise pure)
-  const margeNette  = margenette();         // CA - CMV - frais terrain
+  const margeNette  = margenette();         // CA - CMV - frais terrain (marge COMMERCIALE, pas le résultat final)
   const fraisTerrain = margeB - margeNette;
-  // Commissions = UNIQUEMENT les montants réellement payés aux agents terrain
-  // Les lots des admins (Princesse, Mon Ange Gardien) ne génèrent PAS de commission
-  // → ces montants restent dans le résultat net de l'entreprise
-  const commissions = typeof totalCommissionsPayees === "function" ? totalCommissionsPayees() : 0;
-  const pertesVal   = totalPertesValeur  ? totalPertesValeur()   : 0;
-  const margeCom    = margeNette - pertesVal - commissions; // résultat net (commissions payées seulement)
+  // Résultat net réel — SOURCE UNIQUE (calculerResultatNetReel), incluant
+  // commissions, pertes ET charges fixes (loyer/salaires/impôts/divers) +
+  // produits divers. margeCom est conservé pour compatibilité mais ne doit
+  // plus être affiché comme "résultat" nulle part — utiliser resultatNet.
+  const rnr         = calculerResultatNetReel();
+  const commissions = rnr.totalCommiss;
+  const pertesVal   = rnr.totalPertesV;
+  const margeCom    = rnr.resultatExploitation; // = margeNette - pertes - commissions (avant charges fixes)
+  const resultatNet = rnr.resultatNet;          // = margeCom - charges fixes réelles + produits divers
   const totalA      = totalAchats();
   const totalAv     = totalAvances();
   const duFourn     = Math.max(0, totalA - totalAv - reglements.reduce((s,r)=>s+(r.montant||0),0));
   const tauxB       = ca ? Math.round(margeB/ca*100)    : 0;
   const tauxN       = ca ? Math.round(margeNette/ca*100) : 0;
   const tauxC       = ca ? Math.round(margeCom/ca*100)  : 0;
+  const tauxResultatNet = ca ? Math.round(resultatNet/ca*100) : 0;
   return {ca, margeB, margeNette, fraisTerrain, commissions, pertesVal,
-          margeCom, totalA, totalAv, duFourn, tauxB, tauxN, tauxC};
+          margeCom, resultatNet, tauxResultatNet, totalA, totalAv, duFourn, tauxB, tauxN, tauxC};
 }
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -11284,12 +11308,6 @@ function getStockNet(produit){
   return achete - vendu - perdu;
 }
 
-function getStockTransit(produit){
-  // Lots en cours de transport (pas encore reçus)
-  const filtre = produit ? (a=>a.produit===produit) : (()=>true);
-  return achats.filter(a=>a.statut==="en_cours"&&filtre(a))
-    .reduce((s,a)=>s+(a.quantite||0),0);
-}
 
 function getAllProduitsStats(){
   // Statistiques par produit : toutes sections confondues
@@ -11334,23 +11352,6 @@ function getAllProduitsStats(){
 }
 
 // Totaux globaux depuis getAllProduitsStats()
-function getKPIsGlobaux(){
-  const stats    = getAllProduitsStats();
-  const sigData  = getSIGData();
-  const caTotal  = sigData.ca;
-  const margeB   = sigData.margeB;
-  const margeN   = sigData.margeNette;
-  const stockVal = stats.reduce((s,p)=>s+p.valeurStock,0);
-  const stockQte = stats.reduce((s,p)=>s+Math.max(0,p.stockNet),0);
-  const transit  = stats.reduce((s,p)=>s+p.qteTransit,0);
-  const nbIncoh  = stats.filter(p=>!p.estCoherent).length;
-  return {
-    ...sigData,
-    caTotal, margeB, margeN,
-    stockVal, stockQte, transit, nbIncoh,
-    stats,
-  };
-}
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ── Fonctions Wave CI ──────────────────────────────────────────────────────────
@@ -11483,19 +11484,7 @@ async function syncOfflineQueue(){
   if(fail>0) showToast('⚠️ '+fail+' échec(s) de synchronisation','error');
 }
 
-function queueOrInsert(table, data){
-  if(isOnline) return sbInsert(table, data);
-  offlineQueue.push({type:'INSERT', table, data, ts: Date.now()});
-  localStorage.setItem('verdapp_offline_queue', JSON.stringify(offlineQueue));
-  return Promise.resolve(data); // simuler un succès local
-}
 
-function queueOrUpdate(table, id, data){
-  if(isOnline) return sbUpdate(table, id, data);
-  offlineQueue.push({type:'UPDATE', table, id, data, ts: Date.now()});
-  localStorage.setItem('verdapp_offline_queue', JSON.stringify(offlineQueue));
-  return Promise.resolve(data);
-}
 
 // Indicateur offline dans le header
 function updateOnlineStatus(){
@@ -11551,8 +11540,8 @@ function renderCockpitFinancier(){
   if(!el) return;
   const fmt = v => Math.round(v||0).toLocaleString("fr-FR");
 
-  // ── Calculs clés — SOURCE UNIQUE getSIGData() ────────────────────────────
-  const {ca, margeB, margeNette:margeN, duFourn, tauxB, tauxN, pertesVal:pertes_val} = getSIGData();
+  // ── Calculs clés — SOURCE UNIQUE getSIGData() (elle-même basée sur calculerResultatNetReel) ──
+  const {ca, margeB, margeNette:margeN, duFourn, tauxB, tauxN, resultatNet, tauxResultatNet, pertesVal:pertes_val} = getSIGData();
   const nbLots   = achats.filter(a=>a.statut==="recu").length;
   const nbVentes = ventes.length;
   const nbPertes = pertesLots.length;
@@ -11582,8 +11571,8 @@ function renderCockpitFinancier(){
           <div style="font-size:9px;opacity:.6;text-transform:uppercase;">Chiffre d'affaires</div>
         </div>
         <div style="background:rgba(255,255,255,.08);border-radius:var(--r-sm);padding:10px;text-align:center;">
-          <div style="font-size:18px;font-weight:900;color:${tauxN>=20?"#86efac":"#fca5a5"};">${tauxN}%</div>
-          <div style="font-size:9px;opacity:.6;text-transform:uppercase;">Marge nette</div>
+          <div style="font-size:18px;font-weight:900;color:${tauxResultatNet>=20?"#86efac":"#fca5a5"};">${tauxResultatNet}%</div>
+          <div style="font-size:9px;opacity:.6;text-transform:uppercase;">Résultat net</div>
         </div>
       </div>
     </div>`
@@ -11592,7 +11581,7 @@ function renderCockpitFinancier(){
     +`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
       ${[
         {label:"Marge brute",   val:fmt(margeB)+" F",   sub:"Taux : "+tauxB+"%", jauge:tauxB, col:"var(--green-700)"},
-        {label:"Marge nette",   val:fmt(margeN)+" F",   sub:"Après frais terrain", jauge:tauxN, col:couleur(tauxN)},
+        {label:"Résultat net",  val:fmt(resultatNet)+" F", sub:"Après commissions, pertes, charges fixes", jauge:tauxResultatNet, col:couleur(tauxResultatNet)},
         {label:"Pertes stocks", val:fmt(pertes_val)+" F",sub:nbPertes+" déclaration(s)", col:"var(--red)"},
         {label:"Dû fournisseurs",val:fmt(Math.max(0,duFourn))+" F",sub:nbLots+" lots reçus", col:duFourn>0?"var(--orange-dark)":"var(--green-700)"},
       ].map(k=>`<div style="background:#fff;border:1.5px solid var(--gray-150);border-radius:var(--r);padding:12px;">
@@ -11633,8 +11622,13 @@ function lancerAnalyseCockpit(){
   const el = document.getElementById("cockpit-ia-content");
   if(!el) return;
   // Analyse locale — sans API Anthropic, toujours disponible hors ligne
-  const ca=totalVentes(),margeB=margebrute(),margeN=margenette();
-  const tauxB=ca?Math.round(margeB/ca*100):0, tauxN=ca?Math.round(margeN/ca*100):0;
+  // SOURCE UNIQUE : getSIGData() (elle-même basée sur calculerResultatNetReel) —
+  // ne recalcule plus sa propre "marge nette" indépendamment (bug corrigé le
+  // 18/07/2026 : l'analyse traitait la marge commerciale CA-CMV-frais comme
+  // si c'était le résultat net final, sans jamais soustraire commissions,
+  // pertes ni charges fixes).
+  const {ca, margeB, tauxB, resultatNet, tauxResultatNet:tauxN} = getSIGData();
+  const margeN = resultatNet;
   const pertes=typeof totalPertesValeur==="function"?totalPertesValeur():0;
   const duFourn=Math.max(0,totalAchats()-totalAvances()-reglements.reduce((s,r)=>s+(r.montant||0),0));
   const totalA=totalAchats(), nbLots=achats.filter(a=>a.statut==="recu").length;
@@ -11643,20 +11637,20 @@ function lancerAnalyseCockpit(){
   const ins=[];
 
   // Constat performance
-  if(tauxN>=25) ins.push({ico:"🟢",t:"Excellente rentabilité",d:`${tauxN}% de marge nette dépasse la moyenne du négoce de légumes à Adjamé (15-20%). Continue sur cette lancée.`});
-  else if(tauxN>=15) ins.push({ico:"🟡",t:"Bonne performance",d:`${tauxN}% de marge nette est dans la norme du grossiste ivoirien. Un gain sur les frais terrain peut vous amener à 25%.`});
+  if(tauxN>=25) ins.push({ico:"🟢",t:"Excellente rentabilité",d:`${tauxN}% de résultat net dépasse la moyenne du négoce de légumes à Adjamé (15-20%). Continue sur cette lancée.`});
+  else if(tauxN>=15) ins.push({ico:"🟡",t:"Bonne performance",d:`${tauxN}% de résultat net est dans la norme du grossiste ivoirien. Un gain sur les frais terrain peut vous amener à 25%.`});
   else ins.push({ico:"🟠",t:"Marge sous pression",d:`${tauxN}% est insuffisant pour couvrir les imprévus. Revoyez les prix de vente ou réduisez les frais de transport.`});
 
   // Point d'attention
   if(pertes>ca*0.05) ins.push({ico:"⚠️",t:`Pertes élevées — ${tauxPerte}% du CA`,d:`${fmt(pertes)} F de pertes. Examinez la conservation entre champ et marché Adjamé.`});
   else if(duFourn>totalA*0.15) ins.push({ico:"⚠️",t:"Dettes fournisseurs",d:`${fmt(duFourn)} F dus (${Math.round(duFourn/totalA*100)}% des achats). Réglez rapidement pour maintenir la confiance.`});
-  else if(tauxB-tauxN>15) ins.push({ico:"⚠️",t:"Frais terrain importants",d:`Écart brut→net de ${tauxB-tauxN} pts = ${fmt(margeB-margeN)} F de frais terrain. Négociez transport avec BALE/YACOUB.`});
+  else if(tauxB-tauxN>15) ins.push({ico:"⚠️",t:"Frais terrain et charges importants",d:`Écart brut→net de ${tauxB-tauxN} pts = ${fmt(margeB-margeN)} F (frais terrain, commissions, pertes et charges fixes cumulés). Vérifiez chaque poste dans le Compte de Résultat.`});
   else ins.push({ico:"✅",t:"Risques maîtrisés",d:`Dettes et pertes sous contrôle. Votre gestion opérationnelle est solide.`});
 
   // Recommandation
-  if(tauxN<20&&tauxB>=25) ins.push({ico:"💡",t:"Optimiser les frais terrain",d:`Marge brute ${tauxB}% mais nette ${tauxN}%. -10% sur le transport = +2-3 pts de marge nette.`});
+  if(tauxN<20&&tauxB>=25) ins.push({ico:"💡",t:"Optimiser les frais terrain",d:`Marge brute ${tauxB}% mais résultat net ${tauxN}%. -10% sur le transport = +2-3 pts de résultat net.`});
   else if(ca<totalA*1.3) ins.push({ico:"💡",t:"Réviser les prix de vente",d:`CA/achats à ${Math.round(ca/totalA*100)}%. Testez +50 F/kg sur les prochains lots pour améliorer la marge.`});
-  else ins.push({ico:"💡",t:"Consolider la trésorerie",d:`Avec ${fmt(margeN)} F de marge nette, mettez 30% de côté pour financer les cycles sans avance fournisseur.`});
+  else ins.push({ico:"💡",t:"Consolider la trésorerie",d:`Avec ${fmt(margeN)} F de résultat net, mettez 30% de côté pour financer les cycles sans avance fournisseur.`});
 
   const heure=new Date().toLocaleTimeString("fr-CI",{hour:"2-digit",minute:"2-digit"});
   el.innerHTML=ins.map(i=>`<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--gray-100);">
@@ -11786,14 +11780,25 @@ function renderListeColis(filtre){
     return;
   }
 
+  const _fifoCacheParProduit = {}; // évite de recalculer calculerFIFO() pour chaque lot du même produit
+
   el.innerHTML = lots.map(a=>{
     const sl = getStatutLivraison(a) || (a.statut==="recu"?"arrive":"en_transit");
     const isTransit = sl==="en_transit";
     const isArrive  = sl==="arrive";
-    // Vérifier si vendu via statut_livraison OU via ventes liées (lot_ref ou FIFO)
+    // Statut "vendu" : DEUX signaux combinés, ni l'un ni l'autre seul ne suffit —
+    //  1) margeLot (via lot_ref) : précis pour les ventes explicitement liées à ce
+    //     lot (ex: "Marquer vendu" depuis Colis), donne aussi la marge/CA exacts.
+    //  2) le statut FIFO global du produit (calculerFIFO) : couvre les ventes
+    //     "Auto (FIFO)" faites depuis le formulaire classique, qui n'ont pas de
+    //     lot_ref renseigné mais consomment bien ce lot dans l'ordre FIFO.
+    // Se fier uniquement à (1) faisait à tort apparaître "non vendu" des lots
+    // réellement écoulés via une vente Auto — régression corrigée le 18/07/2026.
     const margeLot   = margeParLot(a);
-    const isVendu    = sl==="vendu" || margeLot.estVendu;
-    const isPartiel  = !isVendu && margeLot.qteVendueLot > 0;
+    const fifoInfoProduit = _fifoCacheParProduit[a.produit] || (_fifoCacheParProduit[a.produit] = calculerFIFO(a.produit));
+    const fifoLot    = fifoInfoProduit.lots.find(l=>l.id===a.id);
+    const isVendu    = sl==="vendu" || margeLot.estVendu || (fifoLot && fifoLot.statut==="epuise");
+    const isPartiel  = !isVendu && (margeLot.qteVendueLot > 0 || (fifoLot && fifoLot.qteConsommee > 0));
     const estRetard  = isTransit && a.date_arrivee_prevue && new Date(a.date_arrivee_prevue.slice(0,10)) < new Date(new Date().toISOString().slice(0,10));
 
     const stepColor = isVendu?"var(--green-800)":isPartiel?"var(--blue-600)":isArrive?"var(--green-700)":"var(--orange)";
@@ -11861,33 +11866,119 @@ function renderListeColis(filtre){
   }).join("");
 }
 
-async function marquerArriveColis(id){
+function marquerArriveColis(id){
   const a = achats.find(x=>x.id===id);
   if(!a) return;
-  // Demander la quantité arrivée
-  const qteArriv = prompt(`Quantité reçue à Adjamé (sur ${a.quantite} ${a.unite||""} envoyés) :`, a.quantite);
-  if(qteArriv === null) return; // annulé
-  const qte = +qteArriv || a.quantite;
+  const defautDate = new Date().toISOString().slice(0,10);
+  showModal(
+    '<div style="font-size:16px;font-weight:800;color:var(--text);margin-bottom:4px;">📦 Confirmer l\'arrivée</div>'
+    +'<div style="background:var(--gray-50);border-radius:var(--r);padding:10px 12px;margin-bottom:14px;font-size:12px;">'
+      +'<div style="font-weight:800;">'+a.produit+' — '+a.quantite+' '+(a.unite||'')+' commandés</div>'
+      +'<div style="color:var(--gray-500);">'+a.fournisseur+' · '+(a.transporteur||'transporteur non renseigné')+' · commandé le '+a.date+'</div>'
+    +'</div>'
+    +'<div style="margin-bottom:14px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px;">Quantité réellement reçue</label>'
+      +'<input type="number" id="ac_qte" min="0" step="0.1" value="'+a.quantite+'" oninput="_verifQteArrivee('+a.quantite+')" '
+        +'style="width:100%;padding:12px;border:1.5px solid var(--gray-150);border-radius:var(--r);font-size:16px;text-align:center;font-family:inherit;font-weight:700;"/>'
+      +'<div id="ac_qte_warn" style="display:none;margin-top:6px;padding:8px 10px;background:var(--orange-50);border:1px solid var(--orange-100);border-radius:var(--r-sm);font-size:11px;color:var(--orange-dark);"></div>'
+    +'</div>'
+    +'<div style="margin-bottom:16px;">'
+      +'<label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px;">Date réelle d\'arrivée</label>'
+      +'<input type="date" id="ac_date" value="'+defautDate+'" max="'+defautDate+'" '
+        +'style="width:100%;padding:12px;border:1.5px solid var(--gray-150);border-radius:var(--r);font-size:14px;font-family:inherit;"/>'
+      +'<div style="font-size:10px;color:var(--gray-420);margin-top:4px;">Laisse aujourd\'hui si tu confirmes le jour même du transport. Sinon, indique la vraie date d\'arrivée — sinon les statistiques transporteur mesurent ton délai de saisie, pas sa ponctualité.</div>'
+    +'</div>'
+    +'<div id="ac_msg" style="display:none;margin-bottom:10px;font-size:12px;font-weight:700;text-align:center;"></div>'
+    +'<div style="display:flex;gap:var(--sp-3);">'
+      +'<button onclick="confirmerArriveeColis(\''+id+'\')" style="flex:1;padding:13px;background:var(--green-800);color:#fff;border:none;border-radius:var(--r);font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;">Confirmer l\'arrivée</button>'
+      +'<button onclick="closeModal()" style="padding:13px 18px;background:var(--gray-150);border:none;border-radius:var(--r);cursor:pointer;font-family:inherit;font-weight:600;color:var(--green-mid);">Annuler</button>'
+    +'</div>'
+  );
+}
+
+// Alerte en direct si la quantité saisie dépasse la commande — c'est exactement
+// le type d'erreur constaté avec le lot "bale" (quantités mélangées entre lots
+// similaires saisis à la suite). N'empêche pas la saisie (parfois légitime,
+// ex. correction d'une commande initialement sous-estimée) mais impossible à
+// manquer avant de valider.
+function _verifQteArrivee(qteCommandee){
+  const qte = +document.getElementById("ac_qte")?.value || 0;
+  const warn = document.getElementById("ac_qte_warn");
+  if(!warn) return;
+  if(qte > qteCommandee){
+    warn.style.display = "block";
+    warn.textContent = "⚠️ Cette quantité dépasse la commande ("+qteCommandee+"). Vérifie que tu n'as pas confondu avec un autre lot avant de confirmer.";
+  } else {
+    warn.style.display = "none";
+  }
+}
+
+async function confirmerArriveeColis(id){
+  const a = achats.find(x=>x.id===id);
+  if(!a) return;
+  const msg = document.getElementById("ac_msg");
+  const qteVal = document.getElementById("ac_qte")?.value;
+  const qte = qteVal===""||qteVal==null ? a.quantite : +qteVal;
+  if(qte < 0){ msg.style.cssText="display:block;color:var(--red);"; msg.textContent="La quantité ne peut pas être négative."; return; }
+
+  const dateArrivee = document.getElementById("ac_date")?.value || new Date().toISOString().slice(0,10);
+  if(!verifierPeriodeOuverte(dateArrivee)) return;
+
+  // Confirmation supplémentaire si la quantité dépasse la commande — l'anomalie
+  // exacte qui a créé des pertes en transit "négatives" impossibles par le passé.
+  if(qte > a.quantite){
+    if(!confirm("Quantité reçue ("+qte+") supérieure à la commande ("+a.quantite+") pour "+a.produit+" — "+a.fournisseur+".\n\nConfirmer quand même ?")) return;
+  }
+
+  msg.style.cssText="display:block;color:var(--green-700);"; msg.textContent="Enregistrement…";
+
   const payload = {
     statut:"recu",
     statut_livraison:"arrive",
-    date_arrivee_reelle: new Date().toISOString(),
+    date_arrivee_reelle: dateArrivee+"T"+new Date().toISOString().slice(11),
     quantite_arrivee: qte,
   };
-  // Numéro bon de réception
   const numeroBR = await obtenirNumeroDocument("BR", a.date || new Date().toISOString().slice(0,10));
   if(numeroBR) payload.numero_document = numeroBR;
   try{
     await sbUpdate("achats", id, payload);
     achats = achats.map(x=>x.id===id?{...x,...payload}:x);
-    saveLocal(); render();
+    saveLocal(); render(); closeModal();
     const perte = a.quantite - qte;
-    const msg = numeroBR
-      ? `[+] Arrivée confirmée — ${numeroBR}${perte>0?" — ⚠️ "+perte+" unités manquantes":""}`
-      : `[+] Arrivée confirmée${perte>0?" — ⚠️ "+perte+" unités manquantes":""}`;
-    showToast(msg, perte>0?"warning":"success");
+
+    // Perte en transit constatée à la réception : enregistrée comme une
+    // vraie perte (pertes_lots), avec la même traçabilité et le même
+    // traitement comptable (658/311 via ecrituresPerte) que toute autre
+    // perte — sinon elle reste invisible dans le Compte de Résultat et le Bilan.
+    if(perte > 0){
+      const fraisTotal = (a.droit_terre||0)+(a.transport||0)+(a.droit_vente||0)+(a.charrette||0);
+      const coutUnitaire = (a.prix_unitaire||0) + (a.quantite ? fraisTotal/a.quantite : 0);
+      const pertePayload = {
+        id: genId(),
+        lot_id: a.id,
+        produit: a.produit,
+        fournisseur: a.fournisseur,
+        qte_perte: perte,
+        cout_unitaire: coutUnitaire,
+        valeur_perte: Math.round(perte*coutUnitaire),
+        mode_valorisation: "revient",
+        note: "Perte en transit — constatée à la réception ("+qte+"/"+a.quantite+" reçus)",
+        date: dateArrivee,
+        constate_par: currentUser?.nom || "Admin"
+      };
+      try{ await sbInsert("pertes_lots", pertePayload); }
+      catch(e){ console.warn("Table pertes_lots inexistante, stockage local:", e.message); }
+      pertesLots.unshift(pertePayload);
+      savePertesLots();
+      logAdminAction("PERTE_TRANSIT", a.produit+" · "+perte+"u · "+fmt(pertePayload.valeur_perte)+"F (lot:"+a.id+")");
+    }
+
+    const msgFinal = numeroBR
+      ? `[+] Arrivée confirmée — ${numeroBR}${perte>0?" — ⚠️ "+perte+" unités manquantes (perte enregistrée)":""}`
+      : `[+] Arrivée confirmée${perte>0?" — ⚠️ "+perte+" unités manquantes (perte enregistrée)":""}`;
+    showToast(msgFinal, perte>0?"warning":"success");
     renderSuiviColis();
-  }catch(e){ showToast("Erreur : "+e.message,"error"); }
+  }catch(e){ msg.style.cssText="display:block;color:var(--red);"; msg.textContent="Erreur : "+e.message; }
 }
 
 async function marquerVenduColis(id){
@@ -11982,20 +12073,20 @@ async function saveVenteColis(achatId){
   if(!lot){ showToast('Lot introuvable','error'); return; }
 
   // Objet local complet (avec métadonnées)
-  const vente = {
+  const vente = sanitizeObj({
     id: genId(), date, produit: lot.produit,
     client, quantite: qte, prix_vente: prix,
     mode_paiement: mode, notes,
     enregistre_par: currentUser?.nom||'',
     lot_ref: achatId
-  };
+  });
   // Payload Supabase (uniquement les colonnes qui existent dans la table ventes)
-  const venteDB = {
+  const venteDB = sanitizeObj({
     id: vente.id, date, produit: lot.produit,
     client, quantite: qte, prix_vente: prix,
     mode_paiement: mode, notes,
     lot_ref: achatId   // lien vers le lot source
-  };
+  });
 
   try{
     // 1. Enregistrer la vente
@@ -12247,13 +12338,17 @@ async function renderPerformanceAgents(){
   const agentStats = {};
   achats.filter(a=>a.enregistre_par && a.statut==="recu").forEach(a=>{
     const ag = a.enregistre_par;
-    if(!agentStats[ag]) agentStats[ag] = {nb:0, qte:0, montant:0, pertes:0, pertes_transit:0, retards:0};
+    if(!agentStats[ag]) agentStats[ag] = {nb:0, qte:0, montant:0, retards:0};
     agentStats[ag].nb++;
     agentStats[ag].qte += a.quantite||0;
     agentStats[ag].montant += (a.quantite||0)*(a.prix_unitaire||0);
-    agentStats[ag].pertes_transit += a.perte_transit||0;
+    // Comparaison en DATE SEULE (AAAA-MM-JJ), jamais l'horodatage complet —
+    // comparer une date d'arrivée réelle horodatée (ex: 2026-07-16T18:00) à
+    // une ETA sans heure (2026-07-16) classait à tort en "retard" quasiment
+    // toute confirmation faite après minuit pile, càd la quasi-totalité des
+    // achats. Bug corrigé le 20/07/2026.
     if(a.date_arrivee_prevue && a.date_arrivee_reelle &&
-       new Date(a.date_arrivee_reelle) > new Date(a.date_arrivee_prevue)) {
+       String(a.date_arrivee_reelle).slice(0,10) > String(a.date_arrivee_prevue).slice(0,10)) {
       agentStats[ag].retards++;
     }
   });
@@ -12274,7 +12369,6 @@ async function renderPerformanceAgents(){
       const pertesAgent = (pertesLots||[])
         .filter(p=>p.enregistre_par===nom||p.constate_par===nom)
         .reduce((sum,p)=>sum+(p.valeur_perte||0),0);
-      const tauxPerte = s.qte ? (s.pertes_transit/s.qte*100).toFixed(1) : 0;
       const score = Math.max(0, 100 - (pertesAgent>5000?10:pertesAgent>0?5:0) - (s.retards*10));
       const couleur = score>=80?"var(--green-700)":score>=60?"var(--orange)":"var(--red)";
       return `<div class="card" style="margin-bottom:10px;">
@@ -12333,6 +12427,96 @@ async function renderPerformanceAgents(){
       if(el2) el2.value = r.seuil_min;
     });
   } catch(e) {}
+}
+
+/**
+ * Répartition entre associés — pourcentages fixes (PART_MAG_PCT/PART_PRINCESSE_PCT,
+ * déclarés tout en haut du fichier pour éviter tout risque d'accès avant
+ * initialisation), calculés sur le Résultat Net réel (calculerResultatNetReel,
+ * la même source unique que le Compte de Résultat, la Vue Direction et le
+ * Cockpit IA). Toujours à jour ; l'historique se construit en enregistrant
+ * un instantané quand on le souhaite, pour suivre son évolution dans le temps.
+ */
+function renderRepartitionAssocies(){
+  const el = document.getElementById("associesInline");
+  if(!el) return;
+  const fmt = v => Math.round(v||0).toLocaleString("fr-FR");
+
+  const rnr = calculerResultatNetReel();
+  const resultatNet = rnr.resultatNet;
+  const partMag = Math.round(resultatNet * PART_MAG_PCT/100);
+  const partPrincesse = Math.round(resultatNet * PART_PRINCESSE_PCT/100);
+
+  const historique = (repartitionAssociesListe||[]).slice().sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+
+  el.innerHTML =
+    '<div style="background:linear-gradient(135deg,var(--green-800),var(--green-700));border-radius:var(--r-lg);padding:16px;color:#fff;margin-bottom:12px;">'
+      +'<div style="font-size:11px;opacity:.7;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">Résultat net réel — à date</div>'
+      +'<div style="font-size:26px;font-weight:900;">'+fmt(resultatNet)+' F</div>'
+    +'</div>'
+
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">'
+      +'<div style="background:#fff;border:1.5px solid var(--gray-150);border-radius:var(--r);padding:14px;text-align:center;">'
+        +'<div style="font-size:11px;color:var(--gray-420);font-weight:700;text-transform:uppercase;">Mon Ange Gardien</div>'
+        +'<div style="font-size:20px;font-weight:900;color:var(--green-700);margin:4px 0;">'+fmt(partMag)+' F</div>'
+        +'<div style="font-size:11px;color:var(--gray-420);">'+PART_MAG_PCT+'%</div>'
+      +'</div>'
+      +'<div style="background:#fff;border:1.5px solid var(--gray-150);border-radius:var(--r);padding:14px;text-align:center;">'
+        +'<div style="font-size:11px;color:var(--gray-420);font-weight:700;text-transform:uppercase;">Princesse</div>'
+        +'<div style="font-size:20px;font-weight:900;color:var(--green-700);margin:4px 0;">'+fmt(partPrincesse)+' F</div>'
+        +'<div style="font-size:11px;color:var(--gray-420);">'+PART_PRINCESSE_PCT+'%</div>'
+      +'</div>'
+    +'</div>'
+
+    +(isAdmin ? '<button onclick="enregistrerRepartitionAssocies()" style="width:100%;padding:12px;background:var(--green-800);color:#fff;border:none;border-radius:var(--r);font-weight:800;font-size:13px;cursor:pointer;font-family:inherit;margin-bottom:16px;">📸 Enregistrer un instantané (suivi de l\'évolution)</button>' : '')
+
+    +'<div style="font-size:11px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">📈 Évolution</div>'
+    +(historique.length===0
+      ? '<div style="text-align:center;padding:20px;color:var(--gray-420);font-size:12px;">Aucun instantané enregistré pour l\'instant.</div>'
+      : '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">'
+        +'<thead><tr style="background:var(--green-800);color:#fff;">'
+          +'<th style="padding:6px 8px;text-align:left;">Date</th>'
+          +'<th style="padding:6px 8px;text-align:right;">Résultat net</th>'
+          +'<th style="padding:6px 8px;text-align:right;">Mon Ange Gardien</th>'
+          +'<th style="padding:6px 8px;text-align:right;">Princesse</th>'
+        +'</tr></thead><tbody>'
+        +historique.map((h,i)=>{
+          const prec = historique[i+1];
+          const delta = prec ? h.resultat_net - prec.resultat_net : null;
+          return '<tr style="border-bottom:1px solid var(--gray-100);">'
+            +'<td style="padding:6px 8px;">'+h.date+'</td>'
+            +'<td style="padding:6px 8px;text-align:right;font-weight:700;">'+fmt(h.resultat_net)+' F'
+              +(delta!==null?' <span style="color:'+(delta>=0?"var(--green-700)":"var(--red)")+';font-size:10px;">('+(delta>=0?"+":"")+fmt(delta)+')</span>':'')
+            +'</td>'
+            +'<td style="padding:6px 8px;text-align:right;">'+fmt(h.part_mag_montant)+' F</td>'
+            +'<td style="padding:6px 8px;text-align:right;">'+fmt(h.part_princesse_montant)+' F</td>'
+          +'</tr>';
+        }).join('')
+        +'</tbody></table></div>')
+    +'<div style="font-size:9px;color:var(--gray-400);font-style:italic;margin-top:10px;text-align:center;">Répartition fixe 49%/51% sur le Résultat Net réel (calculerResultatNetReel) — même source que le Compte de Résultat.</div>';
+}
+
+async function enregistrerRepartitionAssocies(){
+  const rnr = calculerResultatNetReel();
+  const resultatNet = rnr.resultatNet;
+  const today = new Date().toISOString().slice(0,10);
+  const payload = sanitizeObj({
+    id: genId(),
+    date: today,
+    resultat_net: resultatNet,
+    part_mag_pct: PART_MAG_PCT,
+    part_princesse_pct: PART_PRINCESSE_PCT,
+    part_mag_montant: Math.round(resultatNet*PART_MAG_PCT/100),
+    part_princesse_montant: Math.round(resultatNet*PART_PRINCESSE_PCT/100),
+    enregistre_par: currentUser?.nom || "Admin",
+  });
+  try{
+    await sbInsert("repartition_associes", payload);
+    repartitionAssociesListe.unshift(payload);
+    localStorage.setItem("va_repartition_associes", JSON.stringify(repartitionAssociesListe));
+    showToast("📸 Instantané enregistré");
+    renderRepartitionAssocies();
+  }catch(e){ showToast("Erreur : "+e.message, "error"); }
 }
 
 async function sauvegarderSeuilStock(produit, valeur){

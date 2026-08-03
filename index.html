@@ -420,6 +420,7 @@ if('serviceWorker' in navigator && location.protocol === 'https:'){
   <button class="nav-item" id="nav-commercial" onclick="switchTab('commercial')" data-role="all" aria-label="Opérations achat vente et stock"><span class="nav-icon" aria-hidden="true">🛒</span>Opérations<span id="demandesDotSide" class="notif-dot" style="display:none;"></span></button>
   <button class="nav-item" id="nav-chat" onclick="switchTab('chat')" data-role="all"><span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>Chat équipe<span id="chatDotSide" class="notif-dot" style="display:none;"></span></button>
   <button class="nav-item" id="nav-finance" onclick="switchTab('finance')" data-role="super_admin" aria-label="Finance et gestion"><span class="nav-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>Finance</button>
+  <button class="nav-item" id="nav-siteweb" onclick="switchTab('siteweb')" data-role="admin" aria-label="Site web"><span class="nav-icon" aria-hidden="true">🌐</span>Site web</button>
   <button class="nav-item" id="nav-params" onclick="switchTab('params')" data-role="super_admin"><span class="nav-icon">⚙</span>Paramètres</button>
 </div>
 
@@ -429,6 +430,7 @@ if('serviceWorker' in navigator && location.protocol === 'https:'){
   <button class="bnav-item" id="bnav-commercial" onclick="switchTab('commercial')" data-role="all" aria-label="Opérations"><span class="bnav-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg></span>Ops<span id="demandesDot" class="notif-dot" style="display:none;"></span></button>
   <button class="bnav-item" id="bnav-chat" onclick="switchTab('chat')" data-role="all"><span class="bnav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>Chat<span id="chatDot" class="notif-dot" style="display:none;"></span></button>
   <button class="bnav-item" id="bnav-finance" onclick="switchTab('finance')" data-role="super_admin"><span class="bnav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>Finance</button>
+  <button class="bnav-item" id="bnav-siteweb" onclick="switchTab('siteweb')" data-role="admin" aria-label="Site web"><span class="bnav-icon" aria-hidden="true">🌐</span>Site web</button>
   <button class="bnav-item" id="bnav-params" onclick="switchTab('params')" data-role="super_admin"><span class="bnav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>Params</button>
 </div>
 
@@ -499,6 +501,8 @@ if('serviceWorker' in navigator && location.protocol === 'https:'){
     <div id="financeSubnav" style="margin-bottom:14px;"></div>
     <div id="page-financeContent"></div>
   </div>
+
+  <div id="page-siteweb" style="display:none;"></div>
 
   <div id="page-params" style="display:none;"></div>
 </div>
@@ -2174,7 +2178,7 @@ async function marquerRecu(id){
 // Utilisateur → Achats terrain + Accusé de réception + Chat uniquement
 // ════════════════════════════════════════════════════════════════════════════
 function tabsAutorisés(){
-  if(isAdminLevel()) return ["dashboard","commercial","chat","finance","params"];
+  if(isAdminLevel()) return ["dashboard","commercial","chat","finance","siteweb","params"];
   // Pour les utilisateurs: filtrer selon leurs permissions
   const onglets = ["dashboard","commercial","chat"];
   if(typeof peutAcceder==="function"){
@@ -2403,7 +2407,7 @@ function switchTab(tab){
     tab="commercial";
   }
   currentTab=tab;
-  ["dashboard","commercial","chat","finance","params"].forEach(t=>{
+  ["dashboard","commercial","chat","finance","siteweb","params"].forEach(t=>{
     const page=document.getElementById("page-"+t);
     if(page) page.style.display=t===tab?"block":"none";
     const nav=document.getElementById("nav-"+t);
@@ -2414,6 +2418,7 @@ function switchTab(tab){
   if(tab==="chat") initChat();
   if(tab==="commercial"){ renderCommercialSubnav(); switchCommercialSub(commercialSubTab); }
   if(tab==="finance"){ renderFinanceSubnav(); renderFinanceContent(); }
+  if(tab==="siteweb") renderSiteWeb();
   render();
   window.scrollTo(0,0);
 }
@@ -2822,6 +2827,152 @@ function renderCatalogue(){
     </div>
     <div id="listeProduits"></div>`;
   renderListeProduits();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE SITE WEB — Publication du catalogue public (e-verdapp.netlify.app)
+// ════════════════════════════════════════════════════════════════════════════
+// Les champs site_* sur `produits` sont INDÉPENDANTS des prix de vente réels
+// (ventes.prix_vente). Rien ici n'écrit jamais dans achats/ventes/journal_comptable.
+// La publication pousse vers le projet Supabase séparé du site (mptzyshvhvglcivdhihx)
+// via l'Edge Function "publier-catalogue-site" (clé service_role côté serveur only).
+const SITE_CATEGORIES = ["legumes","fruits","feuilles","tubercules"];
+
+function renderSiteWeb(){
+  const el = document.getElementById("page-siteweb");
+  if(!el) return;
+
+  const nbPublies = produits.filter(p=>p.site_publie).length;
+  const derniere = produits.filter(p=>p.site_derniere_publication)
+    .map(p=>p.site_derniere_publication).sort().slice(-1)[0];
+  const derniereLabel = derniere
+    ? new Date(derniere).toLocaleString("fr-CI",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})
+    : "jamais";
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+      <div class="label" style="margin-bottom:0;">🌐 Site web — Catalogue public</div>
+    </div>
+    <div style="background:linear-gradient(135deg,var(--green-800),#144a24);color:#fff;border-radius:var(--r);padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
+      <div style="font-size:12px;color:rgba(255,255,255,.75);">Dernière publication : <b style="color:#fff;">${derniereLabel}</b> · ${nbPublies} produit${nbPublies>1?"s":""} publié${nbPublies>1?"s":""}</div>
+      <button class="btn" style="width:auto;margin:0;background:var(--orange);color:#fff;border-radius:999px;padding:10px 18px;font-weight:800;" onclick="publierCatalogueSite()" id="btnPublierSite">📤 Publier au catalogue</button>
+    </div>
+    <div id="listeSiteWeb"></div>
+  `;
+  renderListeSiteWeb();
+}
+
+function renderListeSiteWeb(){
+  const target = document.getElementById("listeSiteWeb");
+  if(!target) return;
+  if(!produits.length){
+    target.innerHTML = `<div style="text-align:center;padding:24px;color:var(--gray-420);font-size:12px;">Aucun produit. Ajoutez-en depuis l'onglet Catalogue.</div>`;
+    return;
+  }
+  target.innerHTML = produits.map(p=>{
+    const publie = !!p.site_publie;
+    return `
+    <div class="card" style="margin-bottom:12px;${publie?"":"opacity:.6;"}">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:${publie?"12px":"0"};padding-bottom:${publie?"10px":"0"};border-bottom:${publie?"1px solid var(--gray-150)":"none"};">
+        <div style="width:38px;height:38px;border-radius:10px;background:var(--green-pale2,var(--green-100));display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">${p.icone||"🌿"}</div>
+        <div style="flex:1;">
+          <div style="font-weight:800;font-size:14px;">${escapeHtml(p.nom)}</div>
+          <div style="font-size:11px;color:var(--gray-420);">Interne : ${escapeHtml(p.nom)}${p.actif===false?" — désactivé":""}</div>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <span style="font-size:11px;font-weight:700;color:var(--gray-500);">Publié</span>
+          <input type="checkbox" ${publie?"checked":""} onchange="toggleSitePublie('${p.id}', this.checked)" style="width:18px;height:18px;accent-color:var(--green-600);cursor:pointer;"/>
+        </label>
+      </div>
+      ${publie ? `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;">
+        <div>
+          <label style="font-size:9px;font-weight:700;color:var(--gray-420);text-transform:uppercase;">Prix public (F)</label>
+          <input type="number" id="sw_prix_${p.id}" value="${p.site_prix??""}" style="width:100%;border:1.5px solid var(--gray-200);border-radius:8px;padding:7px 9px;font-size:13px;font-weight:800;color:var(--green-800);"/>
+        </div>
+        <div>
+          <label style="font-size:9px;font-weight:700;color:var(--gray-420);text-transform:uppercase;">Prix promo (F)</label>
+          <input type="number" id="sw_promo_${p.id}" value="${p.site_prix_promo??""}" placeholder="—" style="width:100%;border:1.5px solid var(--gray-200);border-radius:8px;padding:7px 9px;font-size:13px;"/>
+        </div>
+        <div>
+          <label style="font-size:9px;font-weight:700;color:var(--gray-420);text-transform:uppercase;">Catégorie</label>
+          <select id="sw_cat_${p.id}" style="width:100%;border:1.5px solid var(--gray-200);border-radius:8px;padding:7px 9px;font-size:13px;">
+            ${SITE_CATEGORIES.map(c=>`<option value="${c}" ${p.site_categorie===c?"selected":""}>${c.charAt(0).toUpperCase()+c.slice(1)}</option>`).join("")}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:9px;font-weight:700;color:var(--gray-420);text-transform:uppercase;">Unité / conditionnement</label>
+          <input type="text" id="sw_unite_${p.id}" value="${escapeHtml(p.site_unite||"kg")}" style="width:100%;border:1.5px solid var(--gray-200);border-radius:8px;padding:7px 9px;font-size:13px;"/>
+        </div>
+        <div>
+          <label style="font-size:9px;font-weight:700;color:var(--gray-420);text-transform:uppercase;">Origine</label>
+          <input type="text" id="sw_origine_${p.id}" value="${escapeHtml(p.site_origine||"")}" style="width:100%;border:1.5px solid var(--gray-200);border-radius:8px;padding:7px 9px;font-size:13px;"/>
+        </div>
+        <div>
+          <label style="font-size:9px;font-weight:700;color:var(--gray-420);text-transform:uppercase;">Ordre d'affichage</label>
+          <input type="number" id="sw_ordre_${p.id}" value="${p.site_ordre??0}" style="width:100%;border:1.5px solid var(--gray-200);border-radius:8px;padding:7px 9px;font-size:13px;"/>
+        </div>
+        <div style="grid-column:1/-1;">
+          <label style="font-size:9px;font-weight:700;color:var(--gray-420);text-transform:uppercase;">Description (site public)</label>
+          <textarea id="sw_desc_${p.id}" rows="2" style="width:100%;border:1.5px solid var(--gray-200);border-radius:8px;padding:7px 9px;font-size:13px;resize:vertical;">${escapeHtml(p.site_description||"")}</textarea>
+        </div>
+        <div style="grid-column:1/-1;">
+          <label style="font-size:9px;font-weight:700;color:var(--gray-420);text-transform:uppercase;">URL image</label>
+          <input type="text" id="sw_img_${p.id}" value="${escapeHtml(p.site_image_url||"")}" placeholder="https://..." style="width:100%;border:1.5px solid var(--gray-200);border-radius:8px;padding:7px 9px;font-size:13px;"/>
+        </div>
+      </div>
+      <button class="btn btn-green" style="margin-top:10px;width:auto;padding:8px 16px;font-size:12px;" onclick="saveSiteChamps('${p.id}')">Enregistrer</button>
+      ` : ""}
+    </div>`;
+  }).join("");
+}
+
+async function toggleSitePublie(id, publie){
+  try{
+    await sbUpdate("produits", id, {site_publie: publie});
+    produits = produits.map(p=>p.id===id?{...p, site_publie: publie}:p);
+    saveLocal();
+    renderListeSiteWeb();
+    showToast(publie ? "Produit activé pour le site (pensez à Publier)" : "Produit retiré du site (pensez à Publier)");
+  }catch(e){ showToast("Erreur : "+e.message, "error"); }
+}
+
+async function saveSiteChamps(id){
+  const val = (suffix)=>document.getElementById(`sw_${suffix}_${id}`)?.value;
+  const payload = {
+    site_prix: val("prix") ? +val("prix") : null,
+    site_prix_promo: val("promo") ? +val("promo") : null,
+    site_categorie: val("cat") || "legumes",
+    site_unite: val("unite") || "kg",
+    site_origine: val("origine") || null,
+    site_description: val("desc") || null,
+    site_image_url: val("img") || null,
+    site_ordre: val("ordre") ? +val("ordre") : 0,
+  };
+  if(!payload.site_prix){ showToast("Le prix public est requis", "error"); return; }
+  try{
+    await sbUpdate("produits", id, payload);
+    produits = produits.map(p=>p.id===id?{...p, ...payload}:p);
+    saveLocal();
+    showToast("✓ Champs enregistrés — pensez à Publier au catalogue");
+  }catch(e){ showToast("Erreur : "+e.message, "error"); }
+}
+
+async function publierCatalogueSite(){
+  const btn = document.getElementById("btnPublierSite");
+  if(btn){ btn.disabled = true; btn.textContent = "Publication…"; }
+  try{
+    const r = await sbFetch("/functions/v1/publier-catalogue-site", { method:"POST" });
+    const data = await r.json().catch(()=>({}));
+    if(!r.ok || data.success===false) throw new Error(data.error || ("HTTP "+r.status));
+    showToast(`✓ Catalogue publié — ${data.publies} produit(s) en ligne`);
+    await syncAll();
+    renderSiteWeb();
+  }catch(e){
+    showToast("Échec de la publication : "+e.message, "error");
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = "📤 Publier au catalogue"; }
+  }
 }
 
 function voirCommissionAdmin() {
